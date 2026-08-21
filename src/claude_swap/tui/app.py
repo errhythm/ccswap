@@ -24,7 +24,7 @@ from claude_swap.snapshot_source import account_identity
 from claude_swap.settings import load_settings, load_ui_settings, set_setting
 from claude_swap.switcher import ClaudeAccountSwitcher
 from claude_swap.tui.autoview import AutoScreen
-from claude_swap.tui.dashboard import DashboardScreen, WatchScreen
+from claude_swap.tui.dashboard import AccountListScreen, DashboardScreen, WatchScreen
 from claude_swap.tui.data import (
     PROVIDERS,
     PROVIDER_LABELS,
@@ -35,6 +35,7 @@ from claude_swap.tui.data import (
 )
 from claude_swap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
 from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
+from claude_swap.tui.widgets import AccountsPanel
 
 
 class CswapApp(App):
@@ -105,15 +106,19 @@ class CswapApp(App):
         # The auto-switch threshold, drawn as a tick on the status strip's
         # bars everywhere. Missing/invalid settings fall back to the default.
         try:
-            self.threshold_pct: float | None = load_settings(
-                switcher.backup_dir
-            ).threshold
+            settings = load_settings(switcher.backup_dir)
+            self.threshold_pct: float | None = settings.threshold
+            self._strategy_name = settings.strategy
         except Exception:
             self.threshold_pct = None
+            self._strategy_name = "best"
         try:
-            self._theme_name = load_ui_settings(switcher.backup_dir).theme
+            ui_settings = load_ui_settings(switcher.backup_dir)
+            self._theme_name = ui_settings.theme
+            self._view = ui_settings.view
         except Exception:
             self._theme_name = "auto"
+            self._view = "combined"
 
     def switcher_for(self, provider: str):
         """Return a switcher only when its provider is explicit."""
@@ -546,3 +551,54 @@ class CswapApp(App):
         nxt = order[(order.index(self._theme_name) + 1) % len(order)]
         self.apply_theme(nxt)
         self.notify(f"Theme: {nxt}")
+
+    # -- settings -----------------------------------------------------------
+
+    def _refresh_accounts_panels(self) -> None:
+        """Refresh panels on every mounted screen, not just the top one."""
+        for screen in self.screen_stack:
+            for panel in screen.query(AccountsPanel):
+                panel.refresh(layout=True)
+
+    def apply_view(self, name: str) -> None:
+        """Apply the dashboard-only provider filter without refetching data."""
+        self._view = name
+        provider = None if name == "combined" else name
+        for screen in self.screen_stack:
+            if isinstance(screen, DashboardScreen):
+                panel = screen.query_one("#accounts-panel", AccountsPanel)
+                panel.provider = provider
+                panel.refresh(layout=True)
+            elif isinstance(screen, AccountListScreen):
+                # A view flip does not change `snapshots`, so its watcher would
+                # otherwise leave this stacked list stale until the next poll.
+                screen.call_after_refresh(screen._on_snapshot, self.snapshots)
+        try:
+            set_setting(self.switcher_for("claude").backup_dir, "ui.view", name)
+        except Exception as exc:  # persistence is best-effort; never crash the UI
+            self.notify(f"Could not save dashboard view: {exc}", severity="warning")
+
+    def apply_threshold(self, value: float) -> None:
+        """Update bar ticks immediately and persist the shared auto setting."""
+        self.threshold_pct = value
+        self._refresh_accounts_panels()
+        try:
+            set_setting(
+                self.switcher_for("claude").backup_dir,
+                "autoswitch.threshold",
+                str(value),
+            )
+        except Exception as exc:  # persistence is best-effort; never crash the UI
+            self.notify(f"Could not save auto-switch threshold: {exc}", severity="warning")
+
+    def apply_strategy(self, name: str) -> None:
+        """Persist the selection for the next AutoScreen engine."""
+        self._strategy_name = name
+        try:
+            set_setting(
+                self.switcher_for("claude").backup_dir,
+                "autoswitch.strategy",
+                name,
+            )
+        except Exception as exc:  # persistence is best-effort; never crash the UI
+            self.notify(f"Could not save auto-switch strategy: {exc}", severity="warning")

@@ -161,7 +161,7 @@ Subfolders inherit the nearest mapped ancestor. In an unmapped directory, `ccswa
 
 ### Interactive dashboard (TUI)
 
-Run `ccswap` on its own (or `ccswap tui`) for the full-screen dashboard: Claude Code and Codex appear together in labelled sections, with live usage, provider-correct switching, and auto-switching, all keyboard-driven. Arrow-key and Vim-style menu navigation wraps at both ends. `ccswap watch` opens straight into the combined live monitor. Works on macOS, Linux, and Windows.
+Run `ccswap` on its own (or `ccswap tui`) for the full-screen dashboard: Claude Code and Codex appear together in labelled sections, with live usage, provider-correct switching, and auto-switching, all keyboard-driven. Arrow-key and Vim-style menu navigation wraps at both ends. The menu's **Settings…** screen cycles the theme, dashboard view, auto-switch threshold, and strategy; its dashboard view can show both providers or only Claude Code / Codex without stopping background updates for the hidden provider. `ccswap watch` opens straight into the live monitor using the selected dashboard view. Works on macOS, Linux, and Windows.
 
 <img src="assets/tui-watch.png" width="760" alt="ccswap watch — live 5h/7d usage bars for every account, with reset times and the active account marked">
 
@@ -288,6 +288,7 @@ Tool preferences live in `settings.json` in the backup root; `ccswap config` rea
 ccswap config                              # list effective settings ("(default)" = not set)
 ccswap config get autoswitch.threshold
 ccswap config set autoswitch.threshold 80  # validated: rejects out-of-range values loudly
+ccswap config set ui.view codex             # combined (default), claude, or codex
 ccswap config set autoswitch.model Fable   # per-model switching (see "auto"); Fable,Opus for several
 ccswap config unset autoswitch.threshold   # back to the default
 ccswap config path                         # where settings.json lives

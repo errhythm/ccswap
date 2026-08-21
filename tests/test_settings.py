@@ -147,6 +147,18 @@ class TestUiSettings:
         assert unset_setting(tmp_path, "ui.theme") is True
         assert "ui" not in json.loads(settings_path(tmp_path).read_text())
 
+    def test_ui_view_round_trips(self, tmp_path: Path):
+        assert set_setting(tmp_path, "ui.view", "codex") == "codex"
+        assert load_ui_settings(tmp_path).view == "codex"
+
+    def test_invalid_theme_does_not_reset_view(self, tmp_path: Path):
+        settings_path(tmp_path).write_text(
+            json.dumps({"ui": {"theme": "chartreuse", "view": "codex"}})
+        )
+        loaded = load_ui_settings(tmp_path)
+        assert loaded.theme == "auto"
+        assert loaded.view == "codex"
+
     def test_set_rejects_bad_choice(self, tmp_path: Path):
         with pytest.raises(ConfigError, match="dark, light"):
             set_setting(tmp_path, "ui.theme", "purple")

@@ -16,6 +16,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -907,7 +908,7 @@ class TestDashboard:
                 "add-menu",
                 "disable-menu",
                 "remove-menu",
-                "theme-menu",
+                "settings-menu",
                 "quit",
             ]
             from textual.widgets import Static
@@ -923,6 +924,60 @@ class TestDashboard:
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
             assert ids[0] == "switch"
+
+    async def test_filtered_dashboard_shows_one_section_with_its_header(self, tmp_path):
+        (tmp_path / "settings.json").write_text(json.dumps({"ui": {"view": "codex"}}))
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(2, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            from claude_swap.tui.widgets import AccountsPanel
+
+            panel = app.screen.query_one(AccountsPanel).render().plain
+            assert "Codex" in panel
+            assert "Claude Code" not in panel
+
+    async def test_flipping_view_repaints_an_already_pushed_switch_screen(self, tmp_path):
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(2, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            await menu_select(pilot, "switch")
+            from claude_swap.tui.dashboard import SwitchScreen
+            from claude_swap.tui.widgets import AccountItem
+
+            assert isinstance(app.screen, SwitchScreen)
+            assert {item.provider for item in app.screen.query(AccountItem)} == {"claude", "codex"}
+            app.apply_view("claude")
+            await pilot.pause()
+            await pilot.pause()
+            assert {item.provider for item in app.screen.query(AccountItem)} == {"claude"}
+
+    async def test_cursor_never_lands_on_a_divider_when_filtered(self, tmp_path):
+        (tmp_path / "settings.json").write_text(json.dumps({"ui": {"view": "codex"}}))
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(2, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            await menu_select(pilot, "switch")
+            from textual.widgets import ListView
+            from claude_swap.tui.widgets import AccountItem
+
+            highlighted = app.screen.query_one("#accounts", ListView).highlighted_child
+            assert isinstance(highlighted, AccountItem)
+            assert highlighted.provider == "codex"
+
+    async def test_setting_the_view_persists_it(self, tmp_path):
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(2, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.apply_view("codex")
+            assert json.loads((tmp_path / "settings.json").read_text())["ui"]["view"] == "codex"
 
     async def test_remove_menu_shows_alias_before_email(self, tmp_path):
         fake = FakeSwitcher(
@@ -1625,6 +1680,27 @@ class TestWatchScreen:
                     if isinstance(item, AccountItem)
                 ] == [provider, provider]
 
+    async def test_filtered_watch_does_not_select_by_combined_indices(self, tmp_path):
+        (tmp_path / "settings.json").write_text(json.dumps({"ui": {"view": "codex"}}))
+        claude = FakeSwitcher(
+            [make_account(1), make_account(2), make_account(3)], tmp_path
+        )
+        codex = FakeSwitcher(
+            [make_account(10, active=True), make_account(11)], tmp_path
+        )
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            await pilot.press("w", "s")
+            await pilot.pause()
+            from textual.widgets import ListView
+
+            from claude_swap.tui.widgets import AccountItem
+
+            highlighted = app.screen.query_one("#accounts", ListView).highlighted_child
+            assert isinstance(highlighted, AccountItem)
+            assert (highlighted.provider, highlighted.number) == ("codex", "10")
+
     async def test_s_arms_selection_switch_stays_watching(self, tmp_path):
         fake = self._fake(tmp_path)
         app = make_app(fake)
@@ -2300,6 +2376,77 @@ class TestBareInvocation:
 
 
 @pytest.mark.asyncio
+class TestSettingsMenu:
+    async def test_threshold_cycles_up_from_an_off_ladder_value(self, tmp_path):
+        (tmp_path / "settings.json").write_text(
+            json.dumps({"autoswitch": {"threshold": 87.5}})
+        )
+        fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        app = make_app(fake)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            from textual.widgets import ListView, Static
+            from claude_swap.tui.widgets import MenuItem
+
+            await menu_select(pilot, "settings-menu")
+            menu = app.screen.query_one("#menu", ListView)
+            labels = [item.query_one(Static).render().plain for item in menu.query(MenuItem)]
+            assert "Auto-switch threshold: 87.5%" in labels
+            await menu_select(pilot, "setting:threshold")
+            assert app.threshold_pct == 90.0
+            assert json.loads((tmp_path / "settings.json").read_text())["autoswitch"]["threshold"] == 90.0
+
+    async def test_threshold_change_repaints_the_bar_tick_immediately(self, tmp_path):
+        fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        app = make_app(fake)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            from claude_swap.tui.widgets import AccountsPanel
+
+            panel = app.screen.query_one(AccountsPanel)
+            before = panel.render().plain
+            with patch.object(panel, "refresh", wraps=panel.refresh) as refresh:
+                app.apply_threshold(75.0)
+                assert refresh.called
+            after = panel.render().plain
+            assert after.index("┃") < before.index("┃")
+
+    async def test_cycling_row_stays_on_the_settings_menu(self, tmp_path):
+        fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        app = make_app(fake)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            from textual.widgets import ListView, Static
+            from claude_swap.tui.widgets import MenuItem
+
+            await menu_select(pilot, "settings-menu")
+            menu = app.screen.query_one("#menu", ListView)
+            menu.index = 1  # Dashboard view: a non-zero settings row.
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.screen.query_one("#menu-title", Static).render().plain == "menu › settings"
+            assert app._view == "claude"  # Combined → Claude Code
+            menu = app.screen.query_one("#menu", ListView)
+            assert menu.index == 1
+            assert list(menu.query(MenuItem))[menu.index].action_id == "setting:view"
+            labels = [
+                item.query_one(Static).render().plain
+                for item in menu.query(MenuItem)
+            ]
+            assert "Dashboard view: Claude Code" in labels
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._view == "codex"  # Combined → Claude Code → Codex
+            labels = [
+                item.query_one(Static).render().plain
+                for item in menu.query(MenuItem)
+            ]
+            assert "Dashboard view: Codex" in labels
+
+
+@pytest.mark.asyncio
 class TestThemeWiring:
     async def test_mount_selects_light_theme_from_settings(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "light"}}))
@@ -2350,13 +2497,12 @@ class TestThemeWiring:
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
             assert app._theme_name == "auto"  # default
-            await menu_select(pilot, "theme-menu")
+            await menu_select(pilot, "settings-menu")
             menu = app.screen.query_one("#menu", ListView)
             labels = [it.query_one(Static).render().plain for it in menu.query(MenuItem)]
-            assert any("dark" in lbl for lbl in labels)
-            assert any("light" in lbl for lbl in labels)
-            current = next(lbl for lbl in labels if "auto" in lbl)
-            assert "●" in current  # the current theme is marked
-            await menu_select(pilot, "theme:light")
+            assert "Theme: auto" in labels
+            await menu_select(pilot, "setting:theme")  # auto → dark
+            await menu_select(pilot, "setting:theme")  # dark → light
             assert app._theme_name == "light"
             assert app.theme == "cswap-light"
+            assert json.loads((tmp_path / "settings.json").read_text())["ui"]["theme"] == "light"

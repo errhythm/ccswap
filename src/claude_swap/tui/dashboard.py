@@ -17,6 +17,7 @@ No global command palette: actions live where their context is.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from functools import partial
 from typing import TYPE_CHECKING, Callable
 
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
     from claude_swap.tui.app import CswapApp
 
 FLASH_S = 1.5  # how long a just-refreshed row stays highlighted
+DEFAULT_THRESHOLD_PCT = 90.0
 
 MenuEntries = list[tuple[str, str]]  # (label, action_id)
 
@@ -66,7 +68,10 @@ class DashboardScreen(Screen):
         self._menu_stack: list[tuple[str, MenuEntries]] = []
 
     def compose(self) -> ComposeResult:
-        yield AccountsPanel(id="accounts-panel")
+        yield AccountsPanel(
+            provider=None if self.app._view == "combined" else self.app._view,
+            id="accounts-panel",
+        )
         yield Static("", id="menu-title")
         yield CyclingListView(id="menu")
         yield Footer()
@@ -87,7 +92,7 @@ class DashboardScreen(Screen):
             ("Add account…", "add-menu"),
             ("Disable / enable account…", "disable-menu"),
             ("Remove account…", "remove-menu"),
-            ("Theme…", "theme-menu"),
+            ("Settings…", "settings-menu"),
             ("Quit", "quit"),
         ]
 
@@ -110,6 +115,8 @@ class DashboardScreen(Screen):
         return entries
 
     def _remove_entries(self) -> MenuEntries:
+        # Deliberately unfiltered: ui.view is a dashboard display preference,
+        # not an account scope, so destructive menus must not hide accounts.
         entries: MenuEntries = [
             (
                 f"{PROVIDER_LABELS[provider]} — {acc.number}  "
@@ -125,6 +132,8 @@ class DashboardScreen(Screen):
     def _disable_entries(self) -> MenuEntries:
         """One row per account, labelled with its current state and the action
         selecting it will take (enable a disabled one, disable an active one)."""
+        # Deliberately unfiltered: ui.view is a dashboard display preference,
+        # not an account scope, so administrative menus must not hide accounts.
         entries: MenuEntries = []
         for provider, acc in iter_accounts(self.app.snapshots):
             name = f"{acc.alias} ({acc.email})" if acc.alias else acc.email
@@ -140,15 +149,25 @@ class DashboardScreen(Screen):
         entries.append(_BACK)
         return entries
 
-    def _theme_entries(self) -> MenuEntries:
-        """dark / light / auto, with the active setting marked."""
-        current = self.app._theme_name
-        entries: MenuEntries = [
-            (f"{'●' if name == current else ' '} {name}", f"theme:{name}")
-            for name in ("dark", "light", "auto")
+    def _settings_entries(self) -> MenuEntries:
+        """Inline preference cycles keep settings one level deep."""
+        view_labels = {
+            "combined": "Combined",
+            "claude": PROVIDER_LABELS["claude"],
+            "codex": PROVIDER_LABELS["codex"],
+        }
+        threshold = self.app.threshold_pct
+        threshold_value = (
+            threshold if threshold is not None else DEFAULT_THRESHOLD_PCT
+        )
+        threshold_label = f"{threshold_value:g}"
+        return [
+            (f"Theme: {self.app._theme_name}", "setting:theme"),
+            (f"Dashboard view: {view_labels[self.app._view]}", "setting:view"),
+            (f"Auto-switch threshold: {threshold_label}%", "setting:threshold"),
+            (f"Auto-switch strategy: {self.app._strategy_name}", "setting:strategy"),
+            _BACK,
         ]
-        entries.append(_BACK)
-        return entries
 
     async def _push_menu(self, title: str, entries: MenuEntries) -> None:
         self._menu_stack.append((title, entries))
@@ -210,13 +229,50 @@ class DashboardScreen(Screen):
                 "?",
             )
             app.confirm_remove(provider, number, email)
-        elif action_id == "theme-menu":
-            await self._push_menu("theme", self._theme_entries())
-        elif action_id.startswith("theme:"):
-            name = action_id.split(":", 1)[1]
-            app.apply_theme(name)
-            app.notify(f"Theme: {name}")
-            await self._pop_menu()
+        elif action_id == "settings-menu":
+            await self._push_menu("settings", self._settings_entries())
+        elif action_id.startswith("setting:"):
+            key = action_id.split(":", 1)[1]
+            if key == "theme":
+                order = ("dark", "light", "auto")
+                value = order[(order.index(app._theme_name) + 1) % len(order)]
+                app.apply_theme(value)
+                app.notify(f"Theme: {value}")
+            elif key == "view":
+                order = ("combined", "claude", "codex")
+                value = order[(order.index(app._view) + 1) % len(order)]
+                app.apply_view(value)
+            elif key == "threshold":
+                # ponytail: 95% is this compact TUI ladder's ceiling; use
+                # `ccswap config set autoswitch.threshold` for exact values.
+                ladder = (75.0, 80.0, 85.0, 90.0, 95.0)
+                current = (
+                    app.threshold_pct
+                    if app.threshold_pct is not None
+                    else DEFAULT_THRESHOLD_PCT
+                )
+                index = bisect_left(ladder, current)
+                if index < len(ladder) and ladder[index] == current:
+                    index += 1
+                app.apply_threshold(ladder[index % len(ladder)])
+            elif key == "strategy":
+                order = ("best", "consume-first")
+                value = order[(order.index(app._strategy_name) + 1) % len(order)]
+                # AutoScreen owns a running engine for its whole lifetime.
+                # Reaching Settings first unmounts it and stops that engine,
+                # and the next AutoScreen re-reads this file: no live strategy
+                # reach-in or misleading warning is needed. Its on_unmount
+                # threshold restore cannot strand a Settings change either,
+                # because Settings is unreachable until that unmount. This
+                # depends on AutoScreen staying top for its engine's whole
+                # lifetime; if the screen model changes, guards belong here.
+                app.apply_strategy(value)
+            menu = self.query_one("#menu", ListView)
+            index = menu.index
+            self._menu_stack[-1] = ("settings", self._settings_entries())
+            await self._render_menu()
+            # Unlike a new menu, cycling refreshes this menu in place: keep its row.
+            menu.index = index
         elif action_id == "disable-menu":
             await self._push_menu("disable / enable", self._disable_entries())
         elif action_id.startswith("disable:"):
@@ -255,6 +311,7 @@ class AccountListScreen(Screen):
     def __init__(self) -> None:
         super().__init__()
         self._keys: list[tuple[str, str | None]] = []
+        self._rows: list[tuple[str, AccountSnapshot]] = []
         self._stamps: dict[tuple[str, str], float | None] = {}
 
     def compose(self) -> ComposeResult:
@@ -268,7 +325,11 @@ class AccountListScreen(Screen):
     async def _on_snapshot(
         self, snapshots: dict[str, AccountsSnapshot | None]
     ) -> None:
-        rows = iter_accounts(snapshots)
+        rows = iter_accounts(
+            snapshots,
+            None if self.app._view == "combined" else self.app._view,
+        )
+        self._rows = rows
         listview = self.query_one("#accounts", ListView)
         children = []
         keys: list[tuple[str, str | None]] = []
@@ -467,9 +528,8 @@ class WatchScreen(AccountListScreen):
         listview = self.query_one("#accounts", ListView)
         title = self.query_one("#list-title", Static)
         if on:
-            rows = iter_accounts(self.app.snapshots)
-            if rows:
-                listview.index = self._active_index(rows)
+            if self._rows:
+                listview.index = self._active_index(self._rows)
             listview.focus()
             title.update(self._SELECT_TITLE)
         else:

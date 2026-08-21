@@ -33,12 +33,13 @@ PROVIDER_LABELS = {"claude": "Claude Code", "codex": "Codex"}
 
 def iter_accounts(
     snapshots: dict[str, AccountsSnapshot | None],
+    provider: str | None = None,
 ) -> list[tuple[str, AccountSnapshot]]:
-    """Flatten both provider sections without discarding row identity."""
+    """Flatten provider sections without discarding row identity."""
     return [
-        (provider, account)
-        for provider in PROVIDERS
-        if (snapshot := snapshots.get(provider)) is not None
+        (provider_name, account)
+        for provider_name in ((provider,) if provider is not None else PROVIDERS)
+        if (snapshot := snapshots.get(provider_name)) is not None
         for account in snapshot.accounts
     ]
 
