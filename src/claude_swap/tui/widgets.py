@@ -20,6 +20,7 @@ from claude_swap.models import AccountSnapshot
 from claude_swap.switcher import ERROR_NOTES
 from claude_swap.usage_store import STALE_OK_S
 from claude_swap.tui import data
+from claude_swap.tui.data import PROVIDERS, PROVIDER_LABELS
 from claude_swap.tui.theme import Palette
 
 if TYPE_CHECKING:
@@ -184,6 +185,7 @@ def account_card_text(
     width: int,
     *,
     threshold: float | None = None,
+    tag: str | None = None,
     now: float | None = None,
     palette: Palette = Palette.DARK,
 ) -> Text:
@@ -198,6 +200,8 @@ def account_card_text(
     else:
         text.append(acc.email, style=palette.foreground)
     text.append(f"  [{acc.display_tag}]", style=palette.muted)
+    if tag:
+        text.append(f"  {tag}", style=palette.muted)
     if acc.is_active:
         text.append("   ● active", style=f"bold {palette.accent}")
     if acc.disabled:
@@ -340,67 +344,113 @@ def mini_account_text(
     return text
 
 
+def section_header_text(label: str, width: int, *, palette: Palette) -> Text:
+    """Muted provider label followed by a width-clamped horizontal rule."""
+    text = Text()
+    text.append(label, style=palette.muted)
+    rule_width = max(0, width - len(label) - 1)
+    if rule_width:
+        text.append(" ")
+        text.append("─" * rule_width, style=palette.track)
+    return text
+
+
 class AccountsPanel(Static):
     """Static account overview: the active account full-size, others as
     one-line minis (in slot order, expanded in place). The dashboard's — and
     with ``show_minis=False`` the auto screen's — always-visible monitor."""
 
-    def __init__(self, *, show_minis: bool = True, id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        show_minis: bool = True,
+        provider: str | None = None,
+        id: str | None = None,
+    ) -> None:
         super().__init__(id=id)
         self._show_minis = show_minis
+        self.provider = provider
 
     def on_mount(self) -> None:
-        self.watch(self.app, "snapshot", lambda _snap: self.refresh(layout=True))
+        self.watch(self.app, "snapshots", lambda _snap: self.refresh(layout=True))
         self.watch(self.app, "theme", lambda _t: self.refresh(layout=True))
 
     def render(self) -> Text:
         app: "CswapApp" = self.app  # type: ignore[assignment]
         palette = Palette.from_theme(app.current_theme)
-        snap = app.snapshot
-        if snap is None:
-            return Text("loading…", style=palette.muted)
-        if not snap.accounts:
+        providers = (self.provider,) if self.provider is not None else PROVIDERS
+        if all(
+            app.snapshots[provider] is not None
+            and not app.snapshots[provider].accounts
+            for provider in providers
+        ):
             return Text(
                 "No managed accounts yet.\n"
-                "Use the menu below: Add account — from your current "
-                f"{app.provider_label} login"
-                + (", or from a setup-token / API key." if app.provider == "claude" else "."),
+                "Use the menu below to add a Claude Code or Codex login.",
                 style=palette.muted,
             )
         now = time.time()
         width = (self.size.width or 80) - 2
-        blocks: list[Text] = []
-        for acc in snap.accounts:
-            if acc.is_active:
-                blocks.append(
-                    account_card_text(
-                        acc, width, threshold=app.threshold_pct, now=now,
-                        palette=palette,
-                    )
-                )
-            elif self._show_minis:
-                blocks.append(mini_account_text(acc, now, palette=palette))
-        if not blocks:
-            return Text("no active managed login", style=palette.muted)
         text = Text()
-        previous_multiline = False
-        for i, block in enumerate(blocks):
-            multiline = "\n" in block.plain
-            if i:
-                # breathe around the expanded active card
-                text.append("\n\n" if (multiline or previous_multiline) else "\n")
-            text.append(block)
-            previous_multiline = multiline
+        rendered_sections = 0
+        for provider in providers:
+            snap = app.snapshots[provider]
+            error = app._last_refresh_error[provider]
+            # A configured provider with zero accounts stays out of the way;
+            # the Add-account menu remains the discovery path.
+            if snap is not None and not snap.accounts:
+                continue
+            if rendered_sections:
+                text.append("\n\n")
+            label = PROVIDER_LABELS[provider]
+            text.append(section_header_text(label, width, palette=palette))
+            text.append("\n")
+            if snap is None:
+                text.append(error or "loading…", style=palette.muted)
+                rendered_sections += 1
+                continue
+
+            blocks: list[Text] = []
+            for acc in snap.accounts:
+                if acc.is_active:
+                    blocks.append(
+                        account_card_text(
+                            acc,
+                            width,
+                            threshold=app.threshold_pct,
+                            now=now,
+                            palette=palette,
+                        )
+                    )
+                elif self._show_minis:
+                    blocks.append(mini_account_text(acc, now, palette=palette))
+            if not blocks:
+                text.append("no active managed login", style=palette.muted)
+            previous_multiline = False
+            for i, block in enumerate(blocks):
+                multiline = "\n" in block.plain
+                if i:
+                    text.append("\n\n" if (multiline or previous_multiline) else "\n")
+                text.append(block)
+                previous_multiline = multiline
+            rendered_sections += 1
         return text
 
 
 class AccountCard(Static):
     """One account rendered full-size (used by the switch screen's list)."""
 
-    def __init__(self, acc: AccountSnapshot, *, threshold: float | None = None) -> None:
+    def __init__(
+        self,
+        acc: AccountSnapshot,
+        *,
+        threshold: float | None = None,
+        tag: str | None = None,
+    ) -> None:
         super().__init__()
         self._acc = acc
         self._threshold = threshold
+        self._tag = tag
 
     def set_account(self, acc: AccountSnapshot) -> None:
         self._acc = acc
@@ -408,7 +458,7 @@ class AccountCard(Static):
 
     def render(self) -> Text:
         return account_card_text(
-            self._acc, self.size.width or 80, threshold=self._threshold,
+            self._acc, self.size.width or 80, threshold=self._threshold, tag=self._tag,
             palette=Palette.from_theme(self.app.current_theme),
         )
 
@@ -416,8 +466,9 @@ class AccountCard(Static):
 class AccountItem(ListItem):
     """ListView row wrapping an :class:`AccountCard`; remembers its slot."""
 
-    def __init__(self, acc: AccountSnapshot) -> None:
-        super().__init__(AccountCard(acc))
+    def __init__(self, acc: AccountSnapshot, provider: str) -> None:
+        super().__init__(AccountCard(acc, tag=PROVIDER_LABELS[provider]))
+        self.provider = provider
         self.number = acc.number
         self.email = acc.email
 
@@ -427,27 +478,45 @@ class AccountItem(ListItem):
         self.query_one(AccountCard).set_account(acc)
 
 
+class ProviderDivider(ListItem):
+    """A non-selectable provider heading inside an account list."""
+
+    def __init__(self, provider: str) -> None:
+        super().__init__(disabled=True)
+        self.provider = provider
+
+    def render(self) -> Text:
+        return section_header_text(
+            PROVIDER_LABELS[self.provider],
+            self.size.width or 80,
+            palette=Palette.from_theme(self.app.current_theme),
+        )
+
+
 class CyclingListView(ListView):
     """A ListView whose cursor wraps at both ends."""
+
+    def _selectable_from(self, start: int, step: int) -> int | None:
+        """Find the next enabled child while walking circularly from ``start``."""
+        for offset in range(len(self.children)):
+            index = (start + offset * step) % len(self.children)
+            if not self.children[index].disabled:
+                return index
+        return None
 
     def action_cursor_up(self) -> None:
         if not self.children:
             return
-        if self.index is None or self.index <= 0:
-            self.index = len(self.children) - 1
-            return
-        super().action_cursor_up()
+        start = len(self.children) - 1 if self.index is None else self.index - 1
+        # ListView's stock one-way movement skips disabled rows, but wrapping
+        # here bypasses it; provider headings must never become a cursor stop.
+        self.index = self._selectable_from(start, -1)
 
     def action_cursor_down(self) -> None:
         if not self.children:
             return
-        if self.index is None:
-            self.index = 0
-            return
-        if self.index >= len(self.children) - 1:
-            self.index = 0
-            return
-        super().action_cursor_down()
+        start = 0 if self.index is None else self.index + 1
+        self.index = self._selectable_from(start, 1)
 
 
 class MenuItem(ListItem):

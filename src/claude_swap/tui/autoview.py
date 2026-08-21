@@ -75,8 +75,9 @@ class AutoScreen(Screen):
 
     app: "CswapApp"
 
-    def __init__(self) -> None:
+    def __init__(self, provider: str) -> None:
         super().__init__()
+        self.provider = provider
         self._engine: AutoSwitchEngine | CodexAutoSwitchEngine | None = None
         self._settings = None
         # Session-only threshold adjustment (t, then arrows). Never written
@@ -89,7 +90,11 @@ class AutoScreen(Screen):
         self._entry_threshold: float | None = None
 
     def compose(self) -> ComposeResult:
-        yield AccountsPanel(show_minis=False, id="auto-active-panel")
+        yield AccountsPanel(
+            show_minis=False,
+            provider=self.provider,
+            id="auto-active-panel",
+        )
         with Vertical(id="auto-top"):
             with Horizontal(id="auto-title-row"):
                 yield Static(" DRY-RUN ", id="mode-badge", classes="dry")
@@ -101,8 +106,9 @@ class AutoScreen(Screen):
     # -- lifecycle ----------------------------------------------------------
 
     def on_mount(self) -> None:
-        self.app.set_store_only(True)
-        self._settings = load_settings(self.app.switcher.backup_dir)
+        self.app.set_store_only(self.provider, True)
+        switcher = self.app.switcher_for(self.provider)
+        self._settings = load_settings(switcher.backup_dir)
         # The bar tick everywhere reads app.threshold_pct, loaded once at app
         # startup — sync it to the fresh file value so bars and engine agree,
         # and remember that value: unmount restores it (only the session
@@ -110,7 +116,7 @@ class AutoScreen(Screen):
         self._configured_threshold = self._settings.threshold
         self.app.threshold_pct = self._settings.threshold
         self._update_summary()
-        self.watch(self.app, "snapshot", self._on_snapshot)
+        self.watch(self.app, "snapshots", self._on_snapshots)
         self.watch(self.app, "theme", self._on_theme_change)
         self._start_engine(dry_run=True)
 
@@ -119,15 +125,15 @@ class AutoScreen(Screen):
             self._engine.stop()
         # A session threshold must not outlive the engine it steered: unpin
         # the poll planner and put the bar tick back on the file value.
-        self.app.switcher.clear_poll_policy_inputs()
+        self.app.switcher_for(self.provider).clear_poll_policy_inputs()
         if self._configured_threshold is not None:
             self.app.threshold_pct = self._configured_threshold
-        self.app.set_store_only(False)
+        self.app.set_store_only(self.provider, False)
 
     def _on_theme_change(self, _theme: str) -> None:
         self._update_summary()
         self._update_badge()
-        snap = self.app.snapshot
+        snap = self.app.snapshots[self.provider]
         if snap is not None:
             self._on_snapshot(snap)
 
@@ -208,13 +214,9 @@ class AutoScreen(Screen):
     # -- engine -------------------------------------------------------------
 
     def _start_engine(self, *, dry_run: bool) -> None:
-        engine_type = (
-            AutoSwitchEngine
-            if self.app.provider == "claude"
-            else CodexAutoSwitchEngine
-        )
+        engine_type = AutoSwitchEngine if self.provider == "claude" else CodexAutoSwitchEngine
         engine = engine_type(
-            self.app.switcher,
+            self.app.switcher_for(self.provider),
             self._settings,
             self._emit_from_thread,
             dry_run=dry_run,
@@ -251,7 +253,7 @@ class AutoScreen(Screen):
         palette = Palette.from_theme(self.app.current_theme)
         self.query_one("#event-log", RichLog).write(event_text(event, palette=palette))
         if event.kind == "switch":
-            self.app.request_refresh()
+            self.app.request_refresh(self.provider)
 
     def action_toggle_live(self) -> None:
         if self._engine is None:
@@ -296,6 +298,11 @@ class AutoScreen(Screen):
         self.query_one("#candidates", Static).update(
             self._candidates_text(snap, active_number=snap.active_number)
         )
+
+    def _on_snapshots(
+        self, snapshots: dict[str, AccountsSnapshot | None]
+    ) -> None:
+        self._on_snapshot(snapshots[self.provider])
 
     def _candidates_text(
         self, snap: AccountsSnapshot, active_number: str | None

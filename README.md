@@ -161,7 +161,7 @@ Subfolders inherit the nearest mapped ancestor. In an unmapped directory, `ccswa
 
 ### Interactive dashboard (TUI)
 
-Run `ccswap` on its own (or `ccswap tui`) for the full-screen dashboard: live usage, switching, and auto-switching for Claude Code and Codex, all keyboard-driven. Use **Provider: Claude Code…** in the menu to change providers. Arrow-key and Vim-style menu navigation wraps at both ends. `ccswap watch` opens straight into the live monitor. Works on macOS, Linux, and Windows.
+Run `ccswap` on its own (or `ccswap tui`) for the full-screen dashboard: Claude Code and Codex appear together in labelled sections, with live usage, provider-correct switching, and auto-switching, all keyboard-driven. Arrow-key and Vim-style menu navigation wraps at both ends. `ccswap watch` opens straight into the combined live monitor. Works on macOS, Linux, and Windows.
 
 <img src="assets/tui-watch.png" width="760" alt="ccswap watch — live 5h/7d usage bars for every account, with reset times and the active account marked">
 

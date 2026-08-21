@@ -22,8 +22,25 @@ from typing import Callable
 
 from claude_swap import oauth, printer, usage_store
 from claude_swap.exceptions import ClaudeSwitchError
+from claude_swap.models import AccountSnapshot, AccountsSnapshot
 from claude_swap.snapshot_source import SnapshotSource
 from claude_swap.switcher import SENTINEL_NOTES, last_seen_note
+
+
+PROVIDERS = ("claude", "codex")
+PROVIDER_LABELS = {"claude": "Claude Code", "codex": "Codex"}
+
+
+def iter_accounts(
+    snapshots: dict[str, AccountsSnapshot | None],
+) -> list[tuple[str, AccountSnapshot]]:
+    """Flatten both provider sections without discarding row identity."""
+    return [
+        (provider, account)
+        for provider in PROVIDERS
+        if (snapshot := snapshots.get(provider)) is not None
+        for account in snapshot.accounts
+    ]
 
 
 # ---------------------------------------------------------------------------

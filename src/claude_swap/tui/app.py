@@ -25,7 +25,14 @@ from claude_swap.settings import load_settings, load_ui_settings, set_setting
 from claude_swap.switcher import ClaudeAccountSwitcher
 from claude_swap.tui.autoview import AutoScreen
 from claude_swap.tui.dashboard import DashboardScreen, WatchScreen
-from claude_swap.tui.data import ActionResult, SnapshotSource, format_duration, run_action
+from claude_swap.tui.data import (
+    PROVIDERS,
+    PROVIDER_LABELS,
+    ActionResult,
+    SnapshotSource,
+    format_duration,
+    run_action,
+)
 from claude_swap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
 from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
 
@@ -47,32 +54,54 @@ class CswapApp(App):
     # second.
     SNAPSHOT_AGE_NOTE_S = 60.0
 
-    snapshot: reactive[AccountsSnapshot | None] = reactive(None)
+    # Errors live beside snapshots, so an error-only publication can carry an
+    # equal snapshot mapping. Always update ensures its fresh-dict assignment
+    # still wakes mounted panels to replace "loading…" with the error line.
+    snapshots: reactive[dict[str, AccountsSnapshot | None]] = reactive(
+        dict, always_update=True
+    )
     refresh_status: reactive[str] = reactive("")
+    # Deliberately global: both provider switchers acquire the same lock file.
+    # Separate busy flags could start two same-process actions whose distinct
+    # file descriptors contend, recreating the lock-timeout/deadlock class the
+    # app-level single-flight is meant to prevent.
     busy: reactive[bool] = reactive(False)
 
     def __init__(
         self,
         switcher: ClaudeAccountSwitcher,
         *,
+        codex_switcher: CodexAccountSwitcher | None = None,
         start: str = "dashboard",
         detected: str | None = None,
     ) -> None:
         super().__init__()
-        self._claude_switcher = switcher
-        self._codex_switcher: CodexAccountSwitcher | None = None
-        self.provider = "claude"
+        codex = codex_switcher if codex_switcher is not None else CodexAccountSwitcher()
+        self.switchers = {"claude": switcher, "codex": codex}
+        # Both sources live for the app's lifetime. In particular, Codex keeps
+        # its usage cache in memory, so rebuilding it on a view change would
+        # discard measurements.
+        self.sources = {
+            provider: SnapshotSource(provider_switcher)
+            for provider, provider_switcher in self.switchers.items()
+        }
         self._start = start  # "dashboard" | "watch" (`cswap watch`)
         self._detected = detected  # terminal background sensed pre-driver, or None
-        self.source = SnapshotSource(switcher)
-        self._store_only = False
-        self._full_next = False
-        self._normal_refreshing = False
-        self._store_refreshing = False
-        self._normal_started_at: float | None = None
-        self._refresh_generation = 0
-        self._applied_generation = 0
-        self._last_refresh_error = ""
+        self.snapshots = {provider: None for provider in PROVIDERS}
+        self._store_only = {provider: False for provider in PROVIDERS}
+        self._full_next = {provider: False for provider in PROVIDERS}
+        # Refresh lanes and generations are provider-scoped: a slow Codex
+        # request must neither suppress Claude fetching nor make one provider's
+        # result eligible for the other's stale-result merge.
+        self._normal_refreshing = {provider: False for provider in PROVIDERS}
+        self._store_refreshing = {provider: False for provider in PROVIDERS}
+        self._normal_started_at: dict[str, float | None] = {
+            provider: None for provider in PROVIDERS
+        }
+        self._refresh_generation = {provider: 0 for provider in PROVIDERS}
+        self._applied_generation = {provider: 0 for provider in PROVIDERS}
+        self._last_refresh_error = {provider: "" for provider in PROVIDERS}
+        self._last_auto_provider = "claude"
         # The auto-switch threshold, drawn as a tick on the status strip's
         # bars everywhere. Missing/invalid settings fall back to the default.
         try:
@@ -86,30 +115,12 @@ class CswapApp(App):
         except Exception:
             self._theme_name = "auto"
 
-    @property
-    def switcher(self):
-        if self.provider == "claude":
-            return self._claude_switcher
-        if self._codex_switcher is None:
-            self._codex_switcher = CodexAccountSwitcher()
-        return self._codex_switcher
-
-    @property
-    def provider_label(self) -> str:
-        return "Claude Code" if self.provider == "claude" else "Codex"
-
-    def set_provider(self, provider: str) -> None:
-        if provider not in {"claude", "codex"}:
-            raise ValueError(f"Unknown provider: {provider}")
-        if provider == self.provider:
-            return
-        self.provider = provider
-        self.source = SnapshotSource(self.switcher)
-        self._store_only = False
-        self._full_next = True
-        self.snapshot = None
-        self.request_refresh(full=True)
-        self.notify(f"Showing {self.provider_label} accounts")
+    def switcher_for(self, provider: str):
+        """Return a switcher only when its provider is explicit."""
+        try:
+            return self.switchers[provider]
+        except KeyError:
+            raise ValueError(f"Unknown provider: {provider}") from None
 
     def on_mount(self) -> None:
         self.register_theme(CSWAP_DARK)
@@ -129,91 +140,102 @@ class CswapApp(App):
     # -- snapshot poll loop ---------------------------------------------------
 
     def _tick(self) -> None:
-        """Start one eligible refresh lane.
+        """Start one eligible refresh lane per provider.
 
         Normal mode prefers the fetch-enabled lane. When that lane is blocked,
         the poll tick may still observe another process's store update through
         one store-only lane. Auto mode already has an engine fetching, so it
         launches only store-only snapshots.
         """
-        if self._store_only:
-            self._start_store_refresh()
-        elif not self._normal_refreshing:
-            full, self._full_next = self._full_next, False
-            self._start_normal_refresh(full=full)
-        else:
-            self._start_store_refresh()
+        for provider in PROVIDERS:
+            if self._store_only[provider]:
+                self._start_store_refresh(provider)
+            elif not self._normal_refreshing[provider]:
+                full = self._full_next[provider]
+                self._full_next[provider] = False
+                self._start_normal_refresh(provider, full=full)
+            else:
+                self._start_store_refresh(provider)
 
-    def _start_normal_refresh(self, *, full: bool) -> None:
-        if self._normal_refreshing:
+    def _start_normal_refresh(self, provider: str, *, full: bool) -> None:
+        if self._normal_refreshing[provider]:
             return
-        self._normal_refreshing = True
-        self._normal_started_at = time.time()
-        generation = self._next_refresh_generation()
+        self._normal_refreshing[provider] = True
+        self._normal_started_at[provider] = time.time()
+        generation = self._next_refresh_generation(provider)
         self._update_refresh_status()
         self.run_worker(
-            partial(self._refresh_blocking, self.source, generation, "normal", full, False),
+            partial(
+                self._refresh_blocking,
+                provider,
+                self.sources[provider],
+                generation,
+                "normal",
+                full,
+                False,
+            ),
             thread=True,
-            group="refresh-normal",
+            group=f"refresh-normal:{provider}",
             exit_on_error=False,
-            name="snapshot-refresh",
+            name=f"{provider}-snapshot-refresh",
         )
 
-    def _start_store_refresh(self) -> None:
-        if self._store_refreshing:
+    def _start_store_refresh(self, provider: str) -> None:
+        if self._store_refreshing[provider]:
             return
-        self._store_refreshing = True
-        generation = self._next_refresh_generation()
+        self._store_refreshing[provider] = True
+        generation = self._next_refresh_generation(provider)
         self._update_refresh_status()
         self.run_worker(
-            partial(self._refresh_blocking, self.source, generation, "store", False, True),
+            partial(
+                self._refresh_blocking,
+                provider,
+                self.sources[provider],
+                generation,
+                "store",
+                False,
+                True,
+            ),
             thread=True,
-            group="refresh-store",
+            group=f"refresh-store:{provider}",
             exit_on_error=False,
-            name="snapshot-store-refresh",
+            name=f"{provider}-snapshot-store-refresh",
         )
 
-    def _next_refresh_generation(self) -> int:
-        self._refresh_generation += 1
-        return self._refresh_generation
+    def _next_refresh_generation(self, provider: str) -> int:
+        self._refresh_generation[provider] += 1
+        return self._refresh_generation[provider]
 
     def _refresh_blocking(
         self,
+        provider: str,
         source: SnapshotSource,
         generation: int,
         lane: str,
         full: bool,
         store_only: bool,
     ) -> None:
-        # The source is captured at launch, not read here: set_provider swaps
-        # self.source, and a worker already in flight must keep reading the
-        # provider it started on so _apply_snapshot can recognise it as stale.
         snap = source.take(full=full, store_only=store_only)
-        self.call_from_thread(self._apply_snapshot, source, generation, lane, snap)
+        self.call_from_thread(self._apply_snapshot, provider, generation, lane, snap)
 
     def _apply_snapshot(
-        self, source: SnapshotSource, generation: int, lane: str, snap: AccountsSnapshot
+        self, provider: str, generation: int, lane: str, snap: AccountsSnapshot
     ) -> None:
         if lane == "normal":
-            self._normal_refreshing = False
-            self._normal_started_at = None
+            self._normal_refreshing[provider] = False
+            self._normal_started_at[provider] = None
         else:
-            self._store_refreshing = False
-        if source is not self.source:
-            # Provider changed while this worker ran; the accounts it carries
-            # belong to the other provider. Drop it and start a fresh lane.
-            self._tick()
-            return
-        self._last_refresh_error = ""
-        if generation >= self._applied_generation:
-            self._applied_generation = generation
-            self.snapshot = snap
-        elif self.snapshot is not None:
+            self._store_refreshing[provider] = False
+        self._last_refresh_error[provider] = ""
+        current = self.snapshots[provider]
+        updated = snap
+        if generation >= self._applied_generation[provider]:
+            self._applied_generation[provider] = generation
+        elif current is not None:
             # A later-started store repaint owns account metadata, but the
             # older worker may have completed a genuinely newer provider fetch.
             # SnapshotSource has already rejected per-account regressions, so
             # merge its canonical usage rows without restoring stale metadata.
-            current = self.snapshot
             incoming = {acc.number: acc for acc in snap.accounts}
             accounts = tuple(
                 replace(acc, usage=other.usage)
@@ -224,57 +246,73 @@ class CswapApp(App):
                 else acc
                 for acc in current.accounts
             )
-            self.snapshot = replace(
+            updated = replace(
                 current,
                 accounts=accounts,
                 taken_at=max(current.taken_at, snap.taken_at),
             )
+        # Textual cannot observe an in-place dict mutation. Always publish a
+        # fresh mapping so every panel/list watcher fires.
+        self.snapshots = {**self.snapshots, provider: updated}
         self._update_refresh_status()
 
     def _update_refresh_status(self) -> None:
         parts: list[str] = []
         now = time.time()
-        if self.snapshot is not None:
-            age = max(0.0, now - self.snapshot.taken_at)
+        for provider in PROVIDERS:
+            snapshot = self.snapshots[provider]
+            label = PROVIDER_LABELS[provider]
+            if snapshot is not None:
+                age = max(0.0, now - snapshot.taken_at)
+            else:
+                age = 0.0
             if age >= self.SNAPSHOT_AGE_NOTE_S:
-                parts.append(f"snapshot {format_duration(age)} ago")
-        if self._normal_refreshing and self._normal_started_at is not None:
-            elapsed = now - self._normal_started_at
-            if elapsed >= self.POLL_INTERVAL_S:
-                parts.append(f"refreshing {format_duration(elapsed)}")
+                parts.append(f"{label} snapshot {format_duration(age)} ago")
+            started_at = self._normal_started_at[provider]
+            if self._normal_refreshing[provider] and started_at is not None:
+                elapsed = now - started_at
+                if elapsed >= self.POLL_INTERVAL_S:
+                    parts.append(f"{label} refreshing {format_duration(elapsed)}")
         self.refresh_status = " · ".join(parts)
 
-    def request_refresh(self, *, full: bool = False) -> None:
+    def request_refresh(self, provider: str | None = None, *, full: bool = False) -> None:
         if full:
-            self._full_next = True
+            for key in (PROVIDERS if provider is None else (provider,)):
+                self._full_next[key] = True
         self._tick()
 
-    def set_store_only(self, value: bool) -> None:
+    def set_store_only(self, provider: str, value: bool) -> None:
         """Auto screen: the engine fetches, the poller only reads the store."""
-        self._store_only = value
-        self.request_refresh()
+        self._store_only[provider] = value
+        self.request_refresh(provider)
 
     def on_worker_state_changed(self, event) -> None:
         if event.state is not WorkerState.ERROR:
             return
-        if event.worker.group in {"refresh-normal", "refresh-store"}:
-            if event.worker.group == "refresh-normal":
-                self._normal_refreshing = False
-                self._normal_started_at = None
+        group = event.worker.group
+        if group.startswith("refresh-normal:") or group.startswith("refresh-store:"):
+            lane, provider = group.split(":", 1)
+            if lane == "refresh-normal":
+                self._normal_refreshing[provider] = False
+                self._normal_started_at[provider] = None
             else:
-                self._store_refreshing = False
+                self._store_refreshing[provider] = False
             self._update_refresh_status()
             msg = str(event.worker.error)
-            if msg != self._last_refresh_error:
-                self._last_refresh_error = msg
-                lane = "store refresh" if event.worker.group == "refresh-store" else "refresh"
+            if msg != self._last_refresh_error[provider]:
+                self._last_refresh_error[provider] = msg
+                # Error text is part of the reactive panel state too.
+                self.snapshots = dict(self.snapshots)
+                lane_label = "store refresh" if lane == "refresh-store" else "refresh"
                 self.notify(
-                    f"{lane.capitalize()} failed: {msg}", severity="warning", timeout=6
+                    f"{PROVIDER_LABELS[provider]} {lane_label} failed: {msg}",
+                    severity="warning",
+                    timeout=6,
                 )
-        elif event.worker.group == "action":
+        elif group == "action":
             self.busy = False
             self.notify(f"Action failed: {event.worker.error}", severity="error")
-        elif event.worker.group == "engine":
+        elif group == "engine":
             self.notify(
                 f"Auto-switch engine stopped: {event.worker.error}",
                 severity="error",
@@ -324,22 +362,26 @@ class CswapApp(App):
 
     # -- account operations ----------------------------------------------------
 
-    def do_switch(self, number: str) -> None:
+    def do_switch(self, provider: str, number: str) -> None:
         self._start_action(
-            f"Switch to account {number}",
-            partial(self.switcher.switch_to, number, json_output=True),
+            f"Switch {PROVIDER_LABELS[provider]} to account {number}",
+            partial(self.switcher_for(provider).switch_to, number, json_output=True),
         )
 
-    def action_switch_best(self) -> None:
+    def do_switch_best(self, provider: str) -> None:
         self._start_action(
-            "Switch (best)" if self.provider == "claude" else "Switch (next)",
-            partial(self.switcher.switch, strategy="best", json_output=True),
+            "Switch (best)" if provider == "claude" else "Switch (next)",
+            partial(
+                self.switcher_for(provider).switch,
+                strategy="best",
+                json_output=True,
+            ),
         )
 
-    def do_toggle_disabled(self, number: str) -> None:
+    def do_toggle_disabled(self, provider: str, number: str) -> None:
         """Hold the account out of auto-rotation, or return it — reads its
         current state from the live snapshot to pick the direction."""
-        snap = self.snapshot
+        snap = self.snapshots[provider]
         acc = next(
             (a for a in (snap.accounts if snap else ()) if a.number == number), None
         )
@@ -349,10 +391,10 @@ class CswapApp(App):
         verb = "Disable" if target else "Enable"
         self._start_action(
             f"{verb} account {number}",
-            partial(self.switcher.set_account_disabled, number, target),
+            partial(self.switcher_for(provider).set_account_disabled, number, target),
         )
 
-    def confirm_remove(self, number: str, email: str) -> None:
+    def confirm_remove(self, provider: str, number: str, email: str) -> None:
         self.push_screen(
             ConfirmModal(
                 f"Remove account {number} ({email})?\n\n"
@@ -360,38 +402,44 @@ class CswapApp(App):
                 title="Remove account",
                 yes_label="Remove",
             ),
-            partial(self._on_remove_confirm, number),
+            partial(self._on_remove_confirm, provider, number),
         )
 
-    def _on_remove_confirm(self, number: str, confirmed: bool | None) -> None:
+    def _on_remove_confirm(
+        self, provider: str, number: str, confirmed: bool | None
+    ) -> None:
         if confirmed:
             self._start_action(
                 f"Remove account {number}",
-                partial(self.switcher.remove_account, number, assume_yes=True),
+                partial(
+                    self.switcher_for(provider).remove_account,
+                    number,
+                    assume_yes=True,
+                ),
             )
 
-    def action_add_current(self) -> None:
+    def do_add_current(self, provider: str) -> None:
         self.push_screen(
             ConfirmModal(
-                f"Back up the current {self.provider_label} login as a managed account?\n\n"
+                f"Back up the current {PROVIDER_LABELS[provider]} login as a managed account?\n\n"
                 "If this account is already managed, its stored credentials "
                 "are refreshed in place.",
                 title="Add account",
                 yes_label="Add",
             ),
-            self._on_add_confirm,
+            partial(self._on_add_confirm, provider),
         )
 
-    def _on_add_confirm(self, confirmed: bool | None) -> None:
+    def _on_add_confirm(self, provider: str, confirmed: bool | None) -> None:
         if confirmed:
             self._start_action(
                 "Add current login",
-                partial(self.switcher.add_account),
+                partial(self.switcher_for(provider).add_account),
                 show_output=True,
             )
 
-    def action_add_token(self) -> None:
-        if self.provider != "claude":
+    def action_add_token(self, provider: str = "claude") -> None:
+        if provider != "claude":
             self.notify(
                 "Codex accounts are added from the current 'codex login' session",
                 severity="warning",
@@ -406,7 +454,7 @@ class CswapApp(App):
             self._start_action,
             "Add account from token",
             partial(
-                self.switcher.add_account_from_token,
+                self.switcher_for("claude").add_account_from_token,
                 token=form.token,
                 email=form.email,
                 slot=form.slot,
@@ -428,9 +476,12 @@ class CswapApp(App):
             run()
 
     def _slot_occupant(self, slot: int | None) -> str | None:
-        if slot is None or self.snapshot is None:
+        snapshot = self.snapshots["claude"]
+        if slot is None or snapshot is None:
             return None
-        for acc in self.snapshot.accounts:
+        # Setup-token slots are Claude slots; overlapping Codex numbers must
+        # never trigger an overwrite warning here.
+        for acc in snapshot.accounts:
             if acc.number == str(slot):
                 return acc.email
         return None
@@ -444,7 +495,24 @@ class CswapApp(App):
     def action_open_auto(self) -> None:
         if isinstance(self.screen, AutoScreen):
             return
-        self.push_screen(AutoScreen())
+        eligible = [
+            provider
+            for provider in PROVIDERS
+            if (snapshot := self.snapshots[provider]) is not None
+            and snapshot.accounts
+        ]
+        provider = (
+            self._last_auto_provider
+            if self._last_auto_provider in eligible
+            else (eligible[0] if eligible else self._last_auto_provider)
+        )
+        self.open_auto(provider)
+
+    def open_auto(self, provider: str) -> None:
+        if isinstance(self.screen, AutoScreen):
+            return
+        self._last_auto_provider = provider
+        self.push_screen(AutoScreen(provider))
 
     def action_open_watch(self) -> None:
         if isinstance(self.screen, WatchScreen):
@@ -469,7 +537,7 @@ class CswapApp(App):
         self.theme = f"cswap-{resolved}"
         printer.set_theme(resolved)
         try:
-            set_setting(self.switcher.backup_dir, "ui.theme", name)
+            set_setting(self.switcher_for("claude").backup_dir, "ui.theme", name)
         except Exception as exc:  # persistence is best-effort; never crash the UI
             self.notify(f"Could not save theme: {exc}", severity="warning")
 

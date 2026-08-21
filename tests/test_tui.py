@@ -238,10 +238,61 @@ class BlockingSnapshotSwitcher(FakeSwitcher):
         )
 
 
-def make_app(fake: FakeSwitcher):
+class ErrorSnapshotSwitcher(FakeSwitcher):
+    def accounts_snapshot(self, fetch: set[str] | None = None) -> AccountsSnapshot:
+        from claude_swap.exceptions import ConfigError
+
+        raise ConfigError("malformed Codex sequence.json")
+
+
+class BlockingErrorSnapshotSwitcher(ErrorSnapshotSwitcher):
+    def __init__(self, accounts: list[AccountSnapshot], backup_dir: Path):
+        super().__init__(accounts, backup_dir)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def accounts_snapshot(self, fetch: set[str] | None = None) -> AccountsSnapshot:
+        self.started.set()
+        self.release.wait(timeout=2)
+        return super().accounts_snapshot(fetch)
+
+
+class BlockingActionSwitcher(FakeSwitcher):
+    def __init__(self, accounts: list[AccountSnapshot], backup_dir: Path):
+        super().__init__(accounts, backup_dir)
+        self.switch_started = threading.Event()
+        self.switch_release = threading.Event()
+
+    def switch_to(
+        self, identifier: str, json_output: bool = False, force: bool = False
+    ) -> dict:
+        self.switch_started.set()
+        self.switch_release.wait(timeout=2)
+        return super().switch_to(identifier, json_output=json_output, force=force)
+
+
+def make_app(
+    fake: FakeSwitcher,
+    codex: FakeSwitcher | None = None,
+    *,
+    start: str = "dashboard",
+    detected: str | None = None,
+):
     from claude_swap.tui.app import CswapApp
 
-    return CswapApp(fake)
+    # Existing Claude-focused Pilot tests should not instantiate the real
+    # Codex switcher (and thereby consult real credentials). Combined-view
+    # tests inject the provider fake they need explicitly.
+    return CswapApp(
+        fake,
+        codex_switcher=codex or FakeSwitcher([], fake.backup_dir),
+        start=start,
+        detected=detected,
+    )
+
+
+def snap_of(app, provider: str = "claude") -> AccountsSnapshot | None:
+    return app.snapshots[provider]
 
 
 async def settle(pilot) -> None:
@@ -847,7 +898,8 @@ class TestDashboard:
             from claude_swap.tui.widgets import MenuItem
 
             menu = app.screen.query_one("#menu", ListView)
-            ids = [item.action_id for item in menu.query(MenuItem)]
+            root_items = list(menu.query(MenuItem))
+            ids = [item.action_id for item in root_items]
             assert ids == [
                 "switch",
                 "watch",
@@ -855,15 +907,18 @@ class TestDashboard:
                 "add-menu",
                 "disable-menu",
                 "remove-menu",
-                "provider-menu",
                 "theme-menu",
                 "quit",
             ]
+            from textual.widgets import Static
+
+            auto_item = next(item for item in root_items if item.action_id == "auto")
+            assert auto_item.query_one(Static).render().plain == "Auto-switch view…"
             # nest into Add (index 3), then back out with escape
             await pilot.press("down", "down", "down", "enter")
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
-            assert ids == ["add-login", "add-token", "back"]
+            assert ids == ["add-login:claude", "add-token", "add-login:codex", "back"]
             await pilot.press("escape")
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
@@ -933,22 +988,352 @@ class TestDashboard:
             ids = [item.action_id for item in menu.query(MenuItem)]
             assert ids[0] == "switch"
 
-    async def test_provider_menu_swaps_the_dashboard_source(self, tmp_path):
-        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+    async def test_both_sections_render_at_once_with_overlapping_slots(self, tmp_path):
+        claude = FakeSwitcher(
+            [
+                make_account(1, active=True, email="claude-active@example.com"),
+                make_account(2, email="claude-mini@example.com"),
+            ],
+            tmp_path,
+        )
+        codex = FakeSwitcher(
+            [
+                make_account(1, active=True, email="codex-active@example.com"),
+                make_account(2, email="codex-mini@example.com"),
+            ],
+            tmp_path,
+        )
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            from claude_swap.tui.widgets import AccountsPanel
+
+            panel = app.screen.query_one(AccountsPanel).render().plain
+            assert panel.index("Claude Code") < panel.index("Codex")
+            claude_section, codex_section = panel.split("Codex", 1)
+            assert "claude-active@example.com" in claude_section
+            assert "claude-mini@example.com" in claude_section
+            assert "codex-active@example.com" not in claude_section
+            assert "codex-active@example.com" in codex_section
+            assert "codex-mini@example.com" in codex_section
+            assert "claude-active@example.com" not in codex_section
+
+            # In each provider section the active overlapping slot 1 is the
+            # expanded card (marker + bar); slot 2 is the bar-free mini row.
+            for section, active_email, mini_email in (
+                (claude_section, "claude-active@example.com", "claude-mini@example.com"),
+                (codex_section, "codex-active@example.com", "codex-mini@example.com"),
+            ):
+                active_part, mini_part = section.split(mini_email, 1)
+                active_part = active_part.split(active_email, 1)[1]
+                assert "● active" in active_part and "━" in active_part
+                assert "● active" not in mini_part and "━" not in mini_part
+
+    async def test_dashboard_collects_both_provider_sources_without_mode_toggle(
+        self, tmp_path
+    ):
+        """Rewrite of the removed provider-menu test: its source-selection
+        intent is now stronger because both injected sources stay live."""
+        claude = FakeSwitcher(
+            [make_account(1, active=True, email="claude@example.com")], tmp_path
+        )
         codex = FakeSwitcher(
             [make_account(7, active=True, email="codex@example.com")], tmp_path
         )
-        app = make_app(claude)
-        app._codex_switcher = codex
+        app = make_app(claude, codex)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            await menu_select(pilot, "provider-menu")
-            await menu_select(pilot, "provider:codex")
-            await settle(pilot)
+            assert snap_of(app, "claude").accounts[0].email == "claude@example.com"
+            assert snap_of(app, "codex").accounts[0].email == "codex@example.com"
+            assert claude.fetch_sets == [None]
+            assert codex.fetch_sets == [None]
 
-            assert app.provider == "codex"
-            assert app.snapshot is not None
-            assert app.snapshot.accounts[0].email == "codex@example.com"
+    async def test_switch_routes_to_the_right_provider(self, tmp_path):
+        claude = FakeSwitcher(
+            [make_account(1, active=True), make_account(2)], tmp_path
+        )
+        codex = FakeSwitcher(
+            [make_account(1, active=True), make_account(2)], tmp_path
+        )
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 48)) as pilot:
+            await settle(pilot)
+            await pilot.press("s")
+            await pilot.pause()
+            from textual.widgets import ListView
+
+            from claude_swap.tui.widgets import AccountItem
+
+            listview = app.screen.query_one("#accounts", ListView)
+            items = list(listview.query(AccountItem))
+            assert [(item.provider, item.number) for item in items] == [
+                ("claude", "1"),
+                ("claude", "2"),
+                ("codex", "1"),
+                ("codex", "2"),
+            ]
+            listview.index = next(
+                index
+                for index, item in enumerate(listview.children)
+                if isinstance(item, AccountItem)
+                and (item.provider, item.number) == ("codex", "2")
+            )
+            await pilot.press("enter")
+            await settle(pilot)
+            assert codex.calls == [("switch_to", "2")]
+            assert claude.calls == []
+
+    async def test_switch_screen_groups_rows_under_provider_dividers(self, tmp_path):
+        claude = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+        codex = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 48)) as pilot:
+            await settle(pilot)
+            await pilot.press("s")
+            await pilot.pause()
+            from textual.widgets import ListView
+
+            from claude_swap.tui.widgets import AccountItem, ProviderDivider
+
+            listview = app.screen.query_one("#accounts", ListView)
+            children = list(listview.children)
+            dividers = [
+                (index, item.provider)
+                for index, item in enumerate(children)
+                if isinstance(item, ProviderDivider)
+            ]
+            assert [provider for _index, provider in dividers] == ["claude", "codex"]
+            for position, (index, provider) in enumerate(dividers):
+                next_divider = (
+                    dividers[position + 1][0]
+                    if position + 1 < len(dividers)
+                    else len(children)
+                )
+                assert [
+                    item.provider
+                    for item in children[index + 1 : next_divider]
+                    if isinstance(item, AccountItem)
+                ] == [provider, provider]
+
+    async def test_account_cursor_wrap_skips_provider_dividers(self, tmp_path):
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 48)) as pilot:
+            await settle(pilot)
+            await pilot.press("s")
+            await pilot.pause()
+            from textual.widgets import ListView
+
+            from claude_swap.tui.widgets import AccountItem
+
+            listview = app.screen.query_one("#accounts", ListView)
+            listview.index = next(
+                index
+                for index, item in enumerate(listview.children)
+                if isinstance(item, AccountItem)
+            )
+            await pilot.press("up")
+            assert isinstance(listview.children[listview.index], AccountItem)
+            await pilot.press("down")
+            assert isinstance(listview.children[listview.index], AccountItem)
+
+    async def test_switch_first_build_places_cursor_on_active_account_row(self, tmp_path):
+        claude = FakeSwitcher([make_account(1)], tmp_path)
+        codex = FakeSwitcher([make_account(7, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 48)) as pilot:
+            await settle(pilot)
+            await pilot.press("s")
+            await pilot.pause()
+            from textual.widgets import ListView
+
+            from claude_swap.tui.widgets import AccountItem
+
+            listview = app.screen.query_one("#accounts", ListView)
+            item = listview.children[listview.index]
+            assert isinstance(item, AccountItem)
+            assert (item.provider, item.number) == ("codex", "7")
+
+    async def test_empty_provider_contributes_no_list_divider(self, tmp_path):
+        app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+        async with app.run_test(size=(100, 48)) as pilot:
+            await settle(pilot)
+            await pilot.press("s")
+            await pilot.pause()
+            from textual.widgets import ListView
+
+            from claude_swap.tui.widgets import ProviderDivider
+
+            listview = app.screen.query_one("#accounts", ListView)
+            assert [
+                item.provider
+                for item in listview.children
+                if isinstance(item, ProviderDivider)
+            ] == ["claude"]
+
+    async def test_same_email_in_both_providers_stays_two_rows(self, tmp_path):
+        shared = "same@example.com"
+        claude_acc = dataclasses.replace(
+            make_account(
+                1,
+                active=True,
+                email=shared,
+                entry=make_usage_at(100.0, pct=11.0),
+            ),
+            org_name="Claude Org",
+            alias="claude-alias",
+        )
+        codex_acc = dataclasses.replace(
+            make_account(
+                1,
+                active=True,
+                email=shared,
+                entry=make_usage_at(200.0, pct=77.0),
+            ),
+            org_name="Codex Org",
+            alias="codex-alias",
+        )
+        app = make_app(
+            FakeSwitcher([claude_acc], tmp_path),
+            FakeSwitcher([codex_acc], tmp_path),
+        )
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            # Exercise the older-normal-after-newer-store merge branch with
+            # an identity shared across providers. Only Claude's canonical
+            # usage may advance; Codex must retain its independent row.
+            claude_current = snap_of(app, "claude")
+            claude_advanced = dataclasses.replace(
+                claude_current,
+                accounts=(
+                    dataclasses.replace(
+                        claude_current.accounts[0], usage=make_usage_at(300.0, pct=33.0)
+                    ),
+                ),
+            )
+            app._apply_snapshot(
+                "claude",
+                app._applied_generation["claude"] - 1,
+                "normal",
+                claude_advanced,
+            )
+            await pilot.pause()
+
+            claude_row = snap_of(app, "claude").accounts[0]
+            codex_row = snap_of(app, "codex").accounts[0]
+            assert (claude_row.usage.fetched_at, codex_row.usage.fetched_at) == (
+                300.0,
+                200.0,
+            )
+            assert (
+                claude_row.org_uuid,
+                claude_row.org_name,
+                claude_row.alias,
+                claude_row.usage.last_good["five_hour"]["pct"],
+            ) == ("", "Claude Org", "claude-alias", 33.0)
+            assert (
+                codex_row.org_uuid,
+                codex_row.org_name,
+                codex_row.alias,
+                codex_row.usage.last_good["five_hour"]["pct"],
+            ) == ("", "Codex Org", "codex-alias", 77.0)
+            from claude_swap.tui.widgets import AccountsPanel
+
+            panel = app.screen.query_one(AccountsPanel).render().plain
+            claude_section, codex_section = panel.split("Codex", 1)
+            assert (
+                claude_section.count(shared) == 1
+                and "claude-alias" in claude_section
+                and "Claude Org" in claude_section
+                and "33%" in claude_section
+            )
+            assert (
+                codex_section.count(shared) == 1
+                and "codex-alias" in codex_section
+                and "Codex Org" in codex_section
+                and "77%" in codex_section
+            )
+
+    async def test_codex_config_error_does_not_blank_claude(
+        self, tmp_path, monkeypatch
+    ):
+        claude = FakeSwitcher(
+            [make_account(1, active=True, email="safe@example.com")], tmp_path
+        )
+        codex = BlockingErrorSnapshotSwitcher([], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await wait_event(codex.started)
+            await pilot.pause()
+            from claude_swap.tui.dashboard import DashboardScreen
+            for _ in range(20):
+                if snap_of(app, "claude") is not None:
+                    break
+                await pilot.pause()
+            from claude_swap.tui.widgets import AccountsPanel
+
+            widget = app.screen.query_one(AccountsPanel)
+            refresh_errors: list[str] = []
+            original_refresh = widget.refresh
+
+            def tracked_refresh(*args, **kwargs):
+                refresh_errors.append(app._last_refresh_error["codex"])
+                return original_refresh(*args, **kwargs)
+
+            monkeypatch.setattr(widget, "refresh", tracked_refresh)
+            codex.release.set()
+            for _ in range(20):
+                if app._last_refresh_error["codex"]:
+                    break
+                await pilot.pause()
+            await pilot.pause()
+
+            assert isinstance(app.screen, DashboardScreen) and widget.is_mounted
+            assert refresh_errors == ["malformed Codex sequence.json"]
+            mounted_panel = widget.render().plain
+            assert "safe@example.com" in mounted_panel
+            assert "Codex" in mounted_panel
+            assert "malformed Codex sequence.json" in mounted_panel
+            assert mounted_panel.rsplit("Codex", 1)[1].strip() != "loading…"
+
+    async def test_zero_codex_accounts_keeps_claude_and_hides_empty_section(
+        self, tmp_path
+    ):
+        app = make_app(
+            FakeSwitcher(
+                [make_account(1, active=True, email="only-claude@example.com")],
+                tmp_path,
+            )
+        )
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            from claude_swap.tui.widgets import AccountsPanel
+
+            panel = app.screen.query_one(AccountsPanel).render().plain
+            assert "only-claude@example.com" in panel
+            assert "Claude Code" in panel
+            assert "Codex" not in panel
+
+    async def test_second_action_while_busy_is_refused(self, tmp_path):
+        claude = BlockingActionSwitcher(
+            [make_account(1, active=True), make_account(2)], tmp_path
+        )
+        codex = FakeSwitcher(
+            [make_account(1, active=True), make_account(2)], tmp_path
+        )
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            app.do_switch("claude", "2")
+            await wait_event(claude.switch_started)
+            assert app.busy is True
+            app.do_switch("codex", "2")
+            assert codex.calls == []
+            claude.switch_release.set()
+            await settle(pilot)
+            assert claude.calls == [("switch_to", "2")]
+            assert codex.calls == []
 
     async def test_vim_keys_move_menu_cursor(self, tmp_path):
         fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
@@ -1001,12 +1386,13 @@ class TestDashboard:
             listview = app.screen.query_one("#accounts", ListView)
             items = list(listview.query(AccountItem))
             assert [item.number for item in items] == ["1", "2"]
-            assert listview.index == 0  # starts on the active account
+            assert isinstance(listview.children[listview.index], AccountItem)
+            assert listview.children[listview.index].number == "1"  # active account
             await pilot.press("down", "enter")
             await settle(pilot)
             assert ("switch_to", "2") in fake.calls
             assert isinstance(app.screen, DashboardScreen)  # popped back
-            assert app.snapshot.active_number == "2"
+            assert snap_of(app).active_number == "2"
 
     async def test_switch_screen_escape_backs_out(self, tmp_path):
         fake = FakeSwitcher(
@@ -1033,7 +1419,7 @@ class TestDashboard:
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
             await menu_select(pilot, "remove-menu")
-            await menu_select(pilot, "remove:2")
+            await menu_select(pilot, "remove:claude:2")
             from claude_swap.tui.modals import ConfirmModal
 
             assert isinstance(app.screen, ConfirmModal)
@@ -1049,7 +1435,7 @@ class TestDashboard:
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
             await menu_select(pilot, "remove-menu")
-            await menu_select(pilot, "remove:1")
+            await menu_select(pilot, "remove:claude:1")
             await pilot.press("n")
             await settle(pilot)
             assert not any(call[0] == "remove" for call in fake.calls)
@@ -1062,7 +1448,7 @@ class TestDashboard:
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
             await menu_select(pilot, "disable-menu")
-            await menu_select(pilot, "disable:2")  # no modal — direct action
+            await menu_select(pilot, "disable:claude:2")  # no modal — direct action
             await settle(pilot)
             assert ("set_disabled", "2", True) in fake.calls
             # the submenu pops back to root after the toggle
@@ -1095,7 +1481,7 @@ class TestDashboard:
             assert any("(disabled)" in label and "enable" in label for label in labels)
             assert any("disable" in label and "(disabled)" not in label for label in labels)
             # selecting the disabled account flips it back on
-            await menu_select(pilot, "disable:2")
+            await menu_select(pilot, "disable:claude:2")
             await settle(pilot)
             assert ("set_disabled", "2", False) in fake.calls
 
@@ -1107,7 +1493,7 @@ class TestDashboard:
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
             await menu_select(pilot, "remove-menu")
-            await menu_select(pilot, "remove:2")  # → confirm modal
+            await menu_select(pilot, "remove:claude:2")  # → confirm modal
             # focus starts on the confirm button; → moves to Cancel, enter presses it
             await pilot.press("right", "enter")
             await settle(pilot)
@@ -1207,6 +1593,38 @@ class TestWatchScreen:
             await settle(pilot)
             assert not any(call[0] == "switch_to" for call in fake_calls(app))
 
+    async def test_watch_screen_groups_rows_under_provider_dividers(self, tmp_path):
+        claude = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+        codex = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 48)) as pilot:
+            await settle(pilot)
+            await pilot.press("w")
+            await pilot.pause()
+            from textual.widgets import ListView
+
+            from claude_swap.tui.widgets import AccountItem, ProviderDivider
+
+            listview = app.screen.query_one("#accounts", ListView)
+            children = list(listview.children)
+            dividers = [
+                (index, item.provider)
+                for index, item in enumerate(children)
+                if isinstance(item, ProviderDivider)
+            ]
+            assert [provider for _index, provider in dividers] == ["claude", "codex"]
+            for position, (index, provider) in enumerate(dividers):
+                next_divider = (
+                    dividers[position + 1][0]
+                    if position + 1 < len(dividers)
+                    else len(children)
+                )
+                assert [
+                    item.provider
+                    for item in children[index + 1 : next_divider]
+                    if isinstance(item, AccountItem)
+                ] == [provider, provider]
+
     async def test_s_arms_selection_switch_stays_watching(self, tmp_path):
         fake = self._fake(tmp_path)
         app = make_app(fake)
@@ -1219,15 +1637,17 @@ class TestWatchScreen:
             from textual.widgets import ListView
 
             from claude_swap.tui.dashboard import WatchScreen
+            from claude_swap.tui.widgets import AccountItem
 
             listview = app.screen.query_one("#accounts", ListView)
-            assert listview.index == 0  # cursor armed, on the active account
+            assert isinstance(listview.children[listview.index], AccountItem)
+            assert listview.children[listview.index].number == "1"  # active account
             await pilot.press("down", "enter")
             await settle(pilot)
             assert ("switch_to", "2") in fake.calls
             assert isinstance(app.screen, WatchScreen)  # stayed watching
             assert app.screen.query_one("#accounts", ListView).index is None
-            assert app.snapshot.active_number == "2"
+            assert snap_of(app).active_number == "2"
 
     async def test_escape_disarms_then_leaves(self, tmp_path):
         fake = self._fake(tmp_path)
@@ -1261,9 +1681,7 @@ class TestWatchScreen:
             assert isinstance(app.screen, WatchScreen)
 
     async def test_app_start_watch_stacks_over_dashboard(self, tmp_path):
-        from claude_swap.tui.app import CswapApp
-
-        app = CswapApp(self._fake(tmp_path), start="watch")
+        app = make_app(self._fake(tmp_path), start="watch")
         async with app.run_test(size=(100, 40)) as pilot:
             await settle(pilot)
             from claude_swap.tui.dashboard import DashboardScreen, WatchScreen
@@ -1286,13 +1704,119 @@ class TestWatchScreen:
             app._tick()
             await wait_event(fake.store_done)
             await pilot.pause()
-            assert app.snapshot.accounts[0].usage.last_good["five_hour"]["pct"] == 80.0
+            assert snap_of(app).accounts[0].usage.last_good["five_hour"]["pct"] == 80.0
 
             fake.normal_release.set()
             await wait_event(fake.normal_done)
             await pilot.pause()
-            assert app.snapshot.accounts[0].usage.last_good["five_hour"]["pct"] == 80.0
+            assert snap_of(app).accounts[0].usage.last_good["five_hour"]["pct"] == 80.0
             assert fake.fetch_sets == [None, set()]
+
+    async def test_out_of_order_per_provider_application_stays_isolated(
+        self, tmp_path
+    ):
+        claude_seed = make_account(
+            1, active=True, email="claude-seed@example.com", entry=make_usage_at(100.0, 13.0)
+        )
+        codex_seed = make_account(
+            1, active=True, email="codex-seed@example.com", entry=make_usage_at(200.0, 21.0)
+        )
+        claude = BlockingSnapshotSwitcher(claude_seed, claude_seed, tmp_path)
+        codex = BlockingSnapshotSwitcher(codex_seed, codex_seed, tmp_path)
+        # Let the mount-time pass seed both current snapshots before starting
+        # the deliberately out-of-order overlapping second pass.
+        claude.normal_release.set()
+        codex.normal_release.set()
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            assert snap_of(app, "claude").accounts[0].email == "claude-seed@example.com"
+            assert snap_of(app, "codex").accounts[0].email == "codex-seed@example.com"
+
+            claude.normal_account = make_account(
+                1,
+                active=True,
+                email="claude-late@example.com",
+                entry=make_usage_at(300.0, 63.0),
+            )
+            codex.normal_account = make_account(
+                1,
+                active=True,
+                email="codex-first@example.com",
+                entry=make_usage_at(400.0, 81.0),
+            )
+            for fake in (claude, codex):
+                fake.normal_started.clear()
+                fake.normal_release.clear()
+                fake.normal_done.clear()
+
+            app._tick()
+            await wait_event(claude.normal_started)
+            await wait_event(codex.normal_started)
+            codex.normal_release.set()
+            await wait_event(codex.normal_done)
+            await pilot.pause()
+            assert snap_of(app, "codex").accounts[0].email == "codex-first@example.com"
+            assert snap_of(app, "claude").accounts[0].email == "claude-seed@example.com"
+
+            claude.normal_release.set()
+            await wait_event(claude.normal_done)
+            await pilot.pause()
+            assert snap_of(app, "claude").accounts[0].email == "claude-late@example.com"
+            assert snap_of(app, "claude").accounts[0].usage.last_good["five_hour"]["pct"] == 63.0
+            assert snap_of(app, "codex").accounts[0].usage.last_good["five_hour"]["pct"] == 81.0
+
+    async def test_codex_hang_does_not_stall_claude_repaint(self, tmp_path):
+        claude_acc = make_account(
+            1, active=True, email="repainted@example.com"
+        )
+        codex_acc = make_account(1, active=True, email="hung@example.com")
+        claude = BlockingSnapshotSwitcher(claude_acc, claude_acc, tmp_path)
+        codex = BlockingSnapshotSwitcher(codex_acc, codex_acc, tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await wait_event(claude.normal_started)
+            await wait_event(codex.normal_started)
+            claude.normal_release.set()
+            await wait_event(claude.normal_done)
+            await pilot.pause()
+            assert snap_of(app, "claude").accounts[0].email == "repainted@example.com"
+            assert snap_of(app, "codex") is None
+            codex.normal_release.set()
+            await wait_event(codex.normal_done)
+
+    async def test_flash_is_per_provider_and_number(self, tmp_path):
+        old = make_usage_at(100.0, pct=20.0)
+        claude = FakeSwitcher([make_account(1, active=True, entry=old)], tmp_path)
+        codex = FakeSwitcher([make_account(1, active=True, entry=old)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            await pilot.press("w")
+            await pilot.pause()
+            current = snap_of(app, "claude")
+            advanced = dataclasses.replace(
+                current,
+                accounts=(
+                    dataclasses.replace(
+                        current.accounts[0], usage=make_usage_at(200.0, pct=90.0)
+                    ),
+                ),
+            )
+            app._apply_snapshot(
+                "claude",
+                app._applied_generation["claude"] + 1,
+                "normal",
+                advanced,
+            )
+            await pilot.pause()
+            from claude_swap.tui.widgets import AccountItem
+
+            flashed = {
+                (item.provider, item.number): item.has_class("flash")
+                for item in app.screen.query(AccountItem)
+            }
+            assert flashed == {("claude", "1"): True, ("codex", "1"): False}
 
     async def test_late_normal_can_advance_usage_after_store_repaint(self, tmp_path):
         normal = make_account(1, active=True, entry=make_usage_at(200.0, pct=80.0))
@@ -1305,12 +1829,12 @@ class TestWatchScreen:
             app._tick()
             await wait_event(fake.store_done)
             await pilot.pause()
-            assert app.snapshot.accounts[0].usage.last_good["five_hour"]["pct"] == 10.0
+            assert snap_of(app).accounts[0].usage.last_good["five_hour"]["pct"] == 10.0
 
             fake.normal_release.set()
             await wait_event(fake.normal_done)
             await pilot.pause()
-            assert app.snapshot.accounts[0].usage.last_good["five_hour"]["pct"] == 80.0
+            assert snap_of(app).accounts[0].usage.last_good["five_hour"]["pct"] == 80.0
 
     async def test_repeated_ticks_keep_store_lane_single_flight(self, tmp_path):
         normal = make_account(1, active=True, entry=make_usage_at(100.0, pct=10.0))
@@ -1337,7 +1861,7 @@ class TestWatchScreen:
         async with app.run_test(size=(100, 40)) as pilot:
             await settle(pilot)
             fake.fetch_sets.clear()
-            app.set_store_only(True)
+            app.set_store_only("claude", True)
             await settle(pilot)
             assert fake.fetch_sets == [set()]
 
@@ -1352,21 +1876,25 @@ class TestWatchScreen:
             title = app.screen.query_one("#list-title", Static)
             # Fresh snapshots stay quiet; the age note is a staleness alarm.
             assert "snapshot" not in title.render().plain
-            app.snapshot = dataclasses.replace(
-                app.snapshot, taken_at=time.time() - app.SNAPSHOT_AGE_NOTE_S - 1.0
-            )
+            app.snapshots = {
+                **app.snapshots,
+                "claude": dataclasses.replace(
+                    snap_of(app),
+                    taken_at=time.time() - app.SNAPSHOT_AGE_NOTE_S - 1.0,
+                ),
+            }
             app._update_refresh_status()
             await pilot.pause()
             assert "snapshot 1m ago" in title.render().plain
-            app._normal_refreshing = True
-            app._normal_started_at = time.time() - app.POLL_INTERVAL_S - 1.0
+            app._normal_refreshing["claude"] = True
+            app._normal_started_at["claude"] = time.time() - app.POLL_INTERVAL_S - 1.0
             app._update_refresh_status()
             await pilot.pause()
             assert "refreshing" in title.render().plain
 
 
 def fake_calls(app) -> list[tuple]:
-    return app.switcher.calls
+    return app.switcher_for("claude").calls
 
 
 
@@ -1434,26 +1962,41 @@ class TestAutoScreen:
             assert isinstance(app.screen, AutoScreen)
             assert len(fake_engine.instances) == 1
             assert fake_engine.instances[0].dry_run is True
-            assert app._store_only is True
+            assert app._store_only["claude"] is True
             await settle(pilot)
             # engine event reached the log via call_from_thread
             from textual.widgets import RichLog
 
             assert len(app.screen.query_one("#event-log", RichLog).lines) > 0
 
+    async def test_auto_view_store_only_is_scoped(self, tmp_path, fake_engine):
+        claude = FakeSwitcher(
+            [make_account(1, active=True), make_account(2)], tmp_path
+        )
+        codex = FakeSwitcher(
+            [make_account(1, active=True), make_account(2)], tmp_path
+        )
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            claude.fetch_sets.clear()
+            codex.fetch_sets.clear()
+            await pilot.press("g")  # hidden binding uses remembered Claude default
+            await settle(pilot)
+            assert app._store_only == {"claude": True, "codex": False}
+            assert claude.fetch_sets and claude.fetch_sets[-1] == set()
+            assert codex.fetch_sets and codex.fetch_sets[-1] is None
+
     async def test_codex_provider_opens_its_auto_switch_engine(
         self, tmp_path, fake_engine
     ):
         claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
         codex = FakeSwitcher([make_account(7, active=True)], tmp_path)
-        app = make_app(claude)
-        app._codex_switcher = codex
+        app = make_app(claude, codex)
         async with app.run_test(size=(100, 40)) as pilot:
             await settle(pilot)
-            await menu_select(pilot, "provider-menu")
-            await menu_select(pilot, "provider:codex")
-            await settle(pilot)
             await menu_select(pilot, "auto")
+            await menu_select(pilot, "auto:codex")
             await pilot.pause()
 
             from claude_swap.tui.autoview import AutoScreen
@@ -1494,7 +2037,7 @@ class TestAutoScreen:
 
             assert isinstance(app.screen, DashboardScreen)
             assert fake_engine.instances[0].stopped is True
-            assert app._store_only is False
+            assert app._store_only["claude"] is False
 
     async def test_threshold_adjust_is_session_only(self, tmp_path, fake_engine):
         fake = FakeSwitcher(
@@ -1769,8 +2312,7 @@ class TestThemeWiring:
     async def test_auto_setting_uses_detected_light(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "auto"}}))
         fake = FakeSwitcher([make_account("1", active=True)], tmp_path)
-        from claude_swap.tui.app import CswapApp
-        app = CswapApp(fake, detected="light")
+        app = make_app(fake, detected="light")
         async with app.run_test() as pilot:
             await settle(pilot)
             assert app.theme == "cswap-light"
@@ -1778,8 +2320,7 @@ class TestThemeWiring:
     async def test_auto_setting_no_detection_falls_back_to_dark(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "auto"}}))
         fake = FakeSwitcher([make_account("1", active=True)], tmp_path)
-        from claude_swap.tui.app import CswapApp
-        app = CswapApp(fake, detected=None)
+        app = make_app(fake, detected=None)
         async with app.run_test() as pilot:
             await settle(pilot)
             assert app.theme == "cswap-dark"
@@ -1787,8 +2328,7 @@ class TestThemeWiring:
     async def test_toggle_cycles_dark_light_auto(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "dark"}}))
         fake = FakeSwitcher([make_account("1", active=True)], tmp_path)
-        from claude_swap.tui.app import CswapApp
-        app = CswapApp(fake, detected="light")
+        app = make_app(fake, detected="light")
         async with app.run_test() as pilot:
             await settle(pilot)
             assert app.theme == "cswap-dark"          # setting dark
@@ -1820,4 +2360,3 @@ class TestThemeWiring:
             await menu_select(pilot, "theme:light")
             assert app._theme_name == "light"
             assert app.theme == "cswap-light"
-
