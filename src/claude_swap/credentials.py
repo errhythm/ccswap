@@ -38,10 +38,74 @@ from claude_swap.models import Platform
 from claude_swap.paths import (
     get_claude_config_home,
     get_credentials_path,
+    get_default_claude_config_home,
     get_global_config_path,
 )
 
 _logger = logging.getLogger("claude-swap")
+
+
+def _active_profile_is_default() -> bool:
+    """Whether the active config home is the default profile's.
+
+    ``CLAUDE_CONFIG_DIR`` pointed at the default profile is still the default
+    profile, so this keys on where the path resolves rather than on the
+    variable being set. Resolution also collapses symlinks, which is how a
+    profile reached through one shows up as itself.
+
+    Unresolvable paths answer False: treating an unknown profile as the default
+    is what licenses reading another account's credential, and that is the
+    failure this guards.
+    """
+    try:
+        return (
+            get_claude_config_home().resolve()
+            == get_default_claude_config_home().resolve()
+        )
+    except Exception:
+        return False
+
+
+def _active_oauth_keychain_services() -> list[str]:
+    """Keychain services holding the OAuth credential for the active environment.
+
+    Resolved exactly the way :meth:`ClaudeAccountSwitcher._read_capture_credentials`
+    resolves it, so the active read and the capture read agree about which
+    profile's store they are looking at. Claude (2.1.220
+    ``getMacOsKeychainStorageServiceName``) sources secure storage from
+    ``CLAUDE_SECURESTORAGE_CONFIG_DIR`` when that is *defined*, else
+    ``CLAUDE_CONFIG_DIR``; defined-but-empty selects the *default* secure store,
+    whose item is the unsuffixed one.
+
+    Returned in try-order rather than as a single name for one case: an explicit
+    ``CLAUDE_CONFIG_DIR`` naming the default profile. Claude hashes the exported
+    string, so it would write a *suffixed* item there, but a user who has always
+    used the default profile may only have the unsuffixed one. Capture handles
+    that with the same fallback (``_same_directory`` → ``_read_credentials``).
+    A defined ``CLAUDE_SECURESTORAGE_CONFIG_DIR`` gets no fallback: it names the
+    only store claude will read for this environment, so a miss means claude
+    sees a logged-out profile and reaching into another store would report a
+    credential claude is not using.
+    """
+    # Local import: session imports from this module, so a top-level import
+    # would close the cycle. _read_capture_credentials does the same.
+    from claude_swap.session import keychain_service_name
+
+    secure_env = os.environ.get("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+    if secure_env is not None:
+        if not secure_env:
+            return [CLAUDE_CODE_KEYCHAIN_SERVICE]
+        return [keychain_service_name(secure_env)]
+
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not config_dir:
+        return [CLAUDE_CODE_KEYCHAIN_SERVICE]
+
+    services = [keychain_service_name(config_dir)]
+    if _active_profile_is_default():
+        services.append(CLAUDE_CODE_KEYCHAIN_SERVICE)
+    return services
+
 
 # Service name for per-account backup credentials now managed via the ``security``
 # CLI on macOS. Deliberately distinct from KEYRING_SERVICE so old keyring items and
@@ -446,7 +510,31 @@ class CredentialStore:
         return self._read_active_credentials().value
 
     def _read_active_oauth_keychain(self) -> tuple[str | None, bool]:
-        """Read the active OAuth Keychain item with a bounded retry.
+        """Read the active profile's OAuth Keychain item(s).
+
+        Reads the item(s) :func:`_active_oauth_keychain_services` resolves for
+        the current environment, in order, stopping at the first hit. Only the
+        explicit-``CLAUDE_CONFIG_DIR``-names-the-default-profile case yields
+        more than one; see that function for why.
+
+        Returns ``(value, failed)`` exactly as before: ``value`` is the
+        credential string, or ``None`` when every item was absent (rc-44) or the
+        Keychain was unreadable. ``failed`` is True only for unreadable.
+
+        An unreadable Keychain stops the walk. It is a property of the Keychain,
+        not of the item, so a second service name cannot fare better — and
+        ``_kc_call`` has already flipped routing to file mode by then.
+        """
+        for service in _active_oauth_keychain_services():
+            value, failed = self._read_one_oauth_keychain(service)
+            if value:
+                return value, False
+            if failed:
+                return None, True
+        return None, False
+
+    def _read_one_oauth_keychain(self, service: str) -> tuple[str | None, bool]:
+        """Read one OAuth Keychain item with a bounded retry.
 
         Returns ``(value, failed)``. ``value`` is the credential string, or
         ``None`` when the item is absent (rc-44) or unreadable. ``failed`` is True
@@ -460,7 +548,7 @@ class CredentialStore:
             try:
                 value = self._kc_call(
                     macos_keychain.get_password,
-                    CLAUDE_CODE_KEYCHAIN_SERVICE,
+                    service,
                     macos_keychain.keychain_account_name(),
                 )
                 return value, False
@@ -495,6 +583,26 @@ class CredentialStore:
         """
         keychain_failed = False
         # 1. OAuth Keychain (macOS, when usable), with a bounded retry.
+        #
+        # READ THE ITEM FOR *THIS* PROFILE, NOT THE FIXED NAME.
+        # CLAUDE_CODE_KEYCHAIN_SERVICE is a fixed name, but Claude Code stores
+        # only the DEFAULT profile's credential under it: with CLAUDE_CONFIG_DIR
+        # set it scopes the item to that config dir under a hashed service name.
+        # Reading the fixed name from a custom profile therefore returns a
+        # credential belonging to a different account, while the identity read
+        # one layer up (paths.get_claude_config_home, which does honor
+        # CLAUDE_CONFIG_DIR) reports the custom profile's. Pairing an identity
+        # with another account's token is silent, and every consumer of this
+        # read inherits it.
+        #
+        # REDIRECTED, NOT SKIPPED. Skipping the keychain under a custom profile
+        # would leave macOS mostly blind: claude writes rotations keychain-only
+        # there, so the step-2 plaintext file frequently does not exist at all
+        # and a logged-in profile would render as "no credentials" — trading a
+        # wrong answer for a missing one. The hashed name is not a guess in this
+        # codebase either: session.keychain_service_name codifies claude's
+        # derivation (pinned against its source) and the delete, session-read
+        # and capture paths already depend on it.
         if self._use_keychain():
             val, keychain_failed = self._read_active_oauth_keychain()
             # THIS read's own verdict, kept so a later success on some OTHER
@@ -546,8 +654,25 @@ class CredentialStore:
         macOS Keychain "Claude Code" (when usable) first, then ``~/.claude.json``
         ``primaryApiKey`` — mirroring Claude Code's
         ``getApiKeyFromConfigOrMacOSKeychain``.
+
+        The Keychain half is default-profile-only. Unlike the OAuth item above
+        this one is gated rather than redirected, because there is no codified
+        derivation to redirect it *to*: ``session.keychain_service_name`` covers
+        the credentials item, and claude's managed-key service name under a
+        custom profile is not pinned anywhere in this repo. Guessing it is the
+        thing the OAuth half can avoid and this half cannot.
+
+        Gating matches what capture already does.
+        ``_read_capture_credentials`` ends on "only this profile's own
+        ``primaryApiKey`` — never the unsuffixed 'Claude Code' Keychain item,
+        which belongs to the default profile and would answer for a login that
+        is not the one being added". Same item, same conclusion; this makes the
+        read side agree with the capture side instead of contradicting it.
+
+        ``primaryApiKey`` below is read from the active profile's own config and
+        stays, so a custom profile with a managed key is still found.
         """
-        if self._use_keychain():
+        if _active_profile_is_default() and self._use_keychain():
             try:
                 val = self._kc_call(
                     macos_keychain.get_password,
