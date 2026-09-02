@@ -118,6 +118,30 @@ Defaults like the threshold and cooldown are configurable with `ccswap config se
 
 </details>
 
+### Keep five-hour windows warm (opt-in)
+
+`cswap warmup` keeps stored OAuth accounts ready by checking usage every ten
+minutes and sending one minimal Haiku request only when an account has no live
+five-hour window:
+
+```bash
+cswap warmup --once --dry-run   # inspect every decision; spend no quota
+cswap warmup --once             # warm confirmed-cold accounts once
+cswap warmup                    # keep checking in the foreground
+cswap warmup --interval 900     # check every 15 minutes
+```
+
+This feature consumes real five-hour and weekly quota and is off until you run
+it. It skips disabled, API-key, weekly-exhausted, and uncertain accounts. It
+also treats an all-zero response with no reset timestamps as uncertain because
+the provider can return that hollow shape for inactive credentials.
+It never switches the global Claude login: other accounts use isolated session
+profiles with customizations and tools disabled. Successful and in-progress
+warms are recorded in `warmup_state.json`, preventing repeat requests from a
+stale usage snapshot or a second warmer process. The account lock stays held
+for each short warm request, so a simultaneous `cswap switch` may wait or time
+out instead of racing the request onto the wrong login.
+
 ### Run multiple accounts at the same time (session mode)
 
 Launch Claude Code as a specific account in the current terminal only — every other terminal and the VS Code extension stay on your default account, so two accounts can work in parallel.
@@ -204,6 +228,7 @@ This will update the stored credentials without creating a duplicate.
 ```bash
 ccswap run 2                     # Run an account in this terminal only (session mode)
 ccswap auto                      # Auto-switch when nearing rate limits (see above)
+ccswap warmup                    # Keep five-hour windows ready (opt-in quota spend)
 ccswap codex list                # List saved Codex CLI accounts
 ccswap codex switch 2            # Switch the file-backed Codex login
 ccswap config                    # Show or edit settings (see Configuration below)
@@ -255,7 +280,7 @@ ccswap purge                     # Remove all ccswap data
 | macOS | macOS Keychain | `~/.claude-swap-backup/` |
 | Linux / WSL | File-based (inside the backup directory, under `credentials/`) | `${XDG_DATA_HOME:-~/.local/share}/claude-swap/` |
 
-Session-mode profiles (`ccswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`) and auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset) live in the backup directory root.
+Session-mode profiles (`ccswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`), auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset), and five-hour warmer state (`warmup_state.json`) live in the backup directory root.
 
 On Linux/WSL, set `XDG_DATA_HOME` to override the default location.
 

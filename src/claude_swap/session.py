@@ -53,6 +53,7 @@ from claude_swap.claude_locks import proper_lockfile
 from claude_swap.exceptions import (
     ClaudeCodeLockTimeout,
     CredentialReadError,
+    PromptOutcomeUnknown,
     SessionError,
 )
 from claude_swap.fsutil import replace_with_retry
@@ -192,9 +193,15 @@ def mark_session_stale(session_dir: Path) -> bool:
 AUTH_OVERRIDE_ENV_VARS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
     "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
 )
 
 # `claude auth status` is a local check (no API call) but spawns the full CLI.
@@ -586,6 +593,132 @@ class SessionManager:
                 "'claude' was not found on PATH. Install Claude Code first."
             )
         self._exec(claude_bin, claude_args, env=dict(os.environ))
+
+    def run_prompt(
+        self,
+        identifier: str,
+        claude_args: list[str],
+        *,
+        timeout: float,
+        expected_identity: tuple[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run one bounded non-interactive prompt as a stored OAuth account.
+
+        Unlike :meth:`run`, this method returns to its caller and captures the
+        child output. It is intended for small housekeeping requests such as
+        the opt-in five-hour warmer. The active account uses Claude's default
+        profile; every other account uses its existing isolated session
+        profile, so no global credential switch occurs.
+
+        A nested ``CLAUDE_CONFIG_DIR`` is refused because active-account
+        detection would describe that profile while the child environment is
+        deliberately normalized to the real default profile. Proceeding could
+        therefore send the request on the wrong account.
+        """
+        claude_bin = shutil.which("claude")
+        if not claude_bin:
+            raise SessionError(
+                "'claude' was not found on PATH. Install Claude Code first."
+            )
+        if os.environ.get("CLAUDE_CONFIG_DIR") or os.environ.get(
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR"
+        ):
+            raise SessionError(
+                "Warm-up must run outside a Claude session: unset "
+                "CLAUDE_CONFIG_DIR and CLAUDE_SECURESTORAGE_CONFIG_DIR first."
+            )
+
+        def resolve_target() -> tuple[str, str, str]:
+            account_num, email, org_uuid = self.switcher.resolve_account(identifier)
+            self._ensure_not_api_key(account_num, email)
+            if expected_identity is not None and (email, org_uuid) != expected_identity:
+                raise SessionError(
+                    f"Account-{account_num} changed since the usage check; "
+                    "refusing to run a warm-up request on a different identity."
+                )
+            return account_num, email, org_uuid
+
+        def prompt_env(session_dir: Path | None = None) -> dict[str, str]:
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key not in AUTH_OVERRIDE_ENV_VARS
+                and key
+                not in ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+            }
+            if session_dir is not None:
+                env["CLAUDE_CONFIG_DIR"] = str(session_dir)
+            return env
+
+        # Serialize the active verdict through child completion. Every cswap
+        # switch takes this same lock, so the default login cannot change
+        # between selecting it and sending the request.
+        with FileLock(self.switcher.lock_file, timeout=_BOOTSTRAP_LOCK_TIMEOUT):
+            account_num, email, org_uuid = resolve_target()
+            if self.switcher._get_current_account() == (email, org_uuid):
+                return self._run_prompt_process(
+                    claude_bin, claude_args, prompt_env(), timeout, account_num, email
+                )
+
+        # setup_session takes the account lock internally and must run outside
+        # the context above. Keep the slot identifier: email alone is ambiguous
+        # when personal and organization accounts share an address. The final
+        # expected-identity check below fails closed if the slot moved while
+        # its profile was prepared.
+        session_dir, _account_num, _email = self.setup_session(
+            account_num, share=False, share_history=False
+        )
+
+        # A switch may have landed while the profile was prepared. Revalidate
+        # the snapshot identity, choose the now-correct profile, and hold the
+        # lock until Claude exits so another cswap switch cannot interleave.
+        with FileLock(self.switcher.lock_file, timeout=_BOOTSTRAP_LOCK_TIMEOUT):
+            account_num, email, org_uuid = resolve_target()
+            selected_dir = (
+                None
+                if self.switcher._get_current_account() == (email, org_uuid)
+                else session_dir
+            )
+            return self._run_prompt_process(
+                claude_bin,
+                claude_args,
+                prompt_env(selected_dir),
+                timeout,
+                account_num,
+                email,
+            )
+
+    @staticmethod
+    def _run_prompt_process(
+        claude_bin: str,
+        claude_args: list[str],
+        env: dict[str, str],
+        timeout: float,
+        account_num: str,
+        email: str,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the child without a shell; timeout leaves outcome ambiguous."""
+        argv = [claude_bin, *claude_args]
+        try:
+            return subprocess.run(
+                argv,
+                env=env,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PromptOutcomeUnknown(
+                f"Claude warm-up timed out after {timeout:.0f}s for "
+                f"Account-{account_num} ({email}); the request may have been "
+                "accepted, so retries remain temporarily protected."
+            ) from exc
+        except OSError as exc:
+            raise SessionError(
+                f"Claude warm-up could not start for Account-{account_num} "
+                f"({email}): {exc}"
+            ) from exc
 
     def _exec(self, claude_bin: str, claude_args: list[str], env: dict[str, str]) -> NoReturn:
         """Hand the terminal over to claude. Never returns.
