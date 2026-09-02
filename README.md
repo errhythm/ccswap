@@ -136,11 +136,14 @@ it. It skips disabled, API-key, weekly-exhausted, and uncertain accounts. It
 also treats an all-zero response with no reset timestamps as uncertain because
 the provider can return that hollow shape for inactive credentials.
 It never switches the global Claude login: other accounts use isolated session
-profiles with customizations and tools disabled. Successful and in-progress
-warms are recorded in `warmup_state.json`, preventing repeat requests from a
-stale usage snapshot or a second warmer process. The account lock stays held
-for each short warm request, so a simultaneous `cswap switch` may wait or time
-out instead of racing the request onto the wrong login.
+profiles with customizations and tools disabled. Immediately before sending,
+it verifies that the exact launch profile still uses the expected first-party
+Claude OAuth identity; cloud-provider or changed-account profiles are skipped.
+Successful and in-progress warms are recorded in `warmup_state.json`,
+preventing repeat requests from a stale usage snapshot or a second warmer
+process. The account lock stays held for each short warm request, so a
+simultaneous `cswap switch` may wait or time out instead of racing the request
+onto the wrong login.
 
 ### Run multiple accounts at the same time (session mode)
 

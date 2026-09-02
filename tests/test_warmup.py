@@ -408,6 +408,23 @@ def _session_switcher(tmp_path: Path, *, active: bool):
     return switcher
 
 
+def _oauth_auth_status(argv=None):
+    return subprocess.CompletedProcess(
+        argv or [],
+        0,
+        json.dumps(
+            {
+                "loggedIn": True,
+                "authMethod": "claude.ai",
+                "apiProvider": "firstParty",
+                "email": "user2@example.com",
+                "orgId": "org-2",
+            }
+        ),
+        "",
+    )
+
+
 def test_run_prompt_uses_default_profile_for_active_account_and_scrubs_overrides(
     tmp_path, monkeypatch
 ):
@@ -430,6 +447,10 @@ def test_run_prompt_uses_default_profile_for_active_account_and_scrubs_overrides
     monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
 
     def fake_run(argv, **kwargs):
+        if argv[-3:] == ["auth", "status", "--json"]:
+            assert "--safe-mode" in argv
+            assert all(name not in kwargs["env"] for name in provider_routes)
+            return _oauth_auth_status(argv)
         seen.update(argv=argv, **kwargs)
         return subprocess.CompletedProcess(argv, 0, "OK\n", "")
 
@@ -459,6 +480,8 @@ def test_run_prompt_holds_account_lock_while_child_runs(tmp_path, monkeypatch):
     def fake_run(argv, **_kwargs):
         peer = FileLock(switcher.lock_file, timeout=0)
         assert peer.acquire() is False
+        if argv[-3:] == ["auth", "status", "--json"]:
+            return _oauth_auth_status(argv)
         return subprocess.CompletedProcess(argv, 0, "OK", "")
 
     with patch("claude_swap.session.shutil.which", return_value="claude"), patch(
@@ -481,7 +504,10 @@ def test_run_prompt_rechecks_active_account_after_profile_setup(tmp_path, monkey
         manager, "setup_session", return_value=(profile, "2", "user2@example.com")
     ), patch("claude_swap.session.shutil.which", return_value="claude"), patch(
         "claude_swap.session.subprocess.run",
-        return_value=subprocess.CompletedProcess([], 0, "OK", ""),
+        side_effect=[
+            _oauth_auth_status(),
+            subprocess.CompletedProcess([], 0, "OK", ""),
+        ],
     ) as run:
         manager.run_prompt(
             "2",
@@ -520,16 +546,121 @@ def test_run_prompt_uses_isolated_profile_for_inactive_account(tmp_path, monkeyp
         "setup_session",
         return_value=(profile, "2", "user2@example.com"),
     ) as setup, patch(
+        "claude_swap.session.read_session_identity",
+        return_value=("user2@example.com", "org-2"),
+    ), patch(
         "claude_swap.session.shutil.which", return_value="claude"
     ), patch(
         "claude_swap.session.subprocess.run",
-        return_value=subprocess.CompletedProcess([], 0, "OK", ""),
+        side_effect=[
+            _oauth_auth_status(),
+            subprocess.CompletedProcess([], 0, "OK", ""),
+        ],
     ) as run:
         manager.run_prompt("2", ["--print", "hi"], timeout=30)
 
     # Slot numbers remain unambiguous when two organizations share an email.
-    setup.assert_called_once_with("2", share=False, share_history=False)
+    setup.assert_called_once_with(
+        "2",
+        share=False,
+        share_history=False,
+        sync_sharing=False,
+        refresh_credentials=False,
+        expected_identity=("user2@example.com", "org-2"),
+    )
     assert run.call_args.kwargs["env"]["CLAUDE_CONFIG_DIR"] == str(profile)
+
+
+def test_run_prompt_rejects_aba_profile_identity_drift(tmp_path, monkeypatch):
+    switcher = _session_switcher(tmp_path, active=False)
+    manager = SessionManager(switcher)
+    profile = tmp_path / "sessions" / "2-user2"
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
+
+    with patch.object(
+        manager,
+        "setup_session",
+        return_value=(profile, "2", "user2@example.com"),
+    ), patch(
+        "claude_swap.session.read_session_identity",
+        return_value=("user2@example.com", "org-other"),
+    ), patch("claude_swap.session.shutil.which", return_value="claude"), patch(
+        "claude_swap.session.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0, "OK", ""),
+    ) as run:
+        with pytest.raises(SessionError, match="prepared profile identity"):
+            manager.run_prompt(
+                "2",
+                ["--print", "hi"],
+                timeout=30,
+                expected_identity=("user2@example.com", "org-2"),
+            )
+
+    run.assert_not_called()
+
+
+def test_run_prompt_rejects_third_party_provider_preflight(tmp_path, monkeypatch):
+    switcher = _session_switcher(tmp_path, active=True)
+    manager = SessionManager(switcher)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
+    third_party = subprocess.CompletedProcess(
+        [],
+        0,
+        json.dumps(
+            {
+                "loggedIn": True,
+                "authMethod": "third_party",
+                "apiProvider": "bedrock",
+            }
+        ),
+        "",
+    )
+
+    with patch("claude_swap.session.shutil.which", return_value="claude"), patch(
+        "claude_swap.session.subprocess.run", return_value=third_party
+    ) as run:
+        with pytest.raises(SessionError, match="first-party Claude OAuth"):
+            manager.run_prompt("2", ["--print", "hi"], timeout=30)
+
+    run.assert_called_once()
+
+
+def test_run_prompt_rejects_same_email_with_different_org(tmp_path, monkeypatch):
+    switcher = _session_switcher(tmp_path, active=True)
+    manager = SessionManager(switcher)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
+    wrong_org = _oauth_auth_status()
+    status = json.loads(wrong_org.stdout)
+    status["orgId"] = ""
+    wrong_org = subprocess.CompletedProcess([], 0, json.dumps(status), "")
+
+    with patch("claude_swap.session.shutil.which", return_value="claude"), patch(
+        "claude_swap.session.subprocess.run", return_value=wrong_org
+    ) as run:
+        with pytest.raises(SessionError, match="authenticated identity changed"):
+            manager.run_prompt("2", ["--print", "hi"], timeout=30)
+
+    run.assert_called_once()
+
+
+def test_setup_prompt_session_rejects_changed_identity_before_credentials(tmp_path):
+    switcher = _session_switcher(tmp_path, active=False)
+    manager = SessionManager(switcher)
+
+    with pytest.raises(SessionError, match="refusing to touch"):
+        manager.setup_session(
+            "2",
+            share=False,
+            share_history=False,
+            sync_sharing=False,
+            refresh_credentials=False,
+            expected_identity=("user2@example.com", "org-other"),
+        )
+
+    switcher.read_account_credentials.assert_not_called()
 
 
 def test_run_prompt_rejects_nested_config_profile(tmp_path, monkeypatch):
