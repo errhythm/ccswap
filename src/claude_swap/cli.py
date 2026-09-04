@@ -828,7 +828,9 @@ Defaults live in settings.json in the backup root; flags override them.
         line = event.human()
         if event.kind == "switch":
             line = accent(line)
-        elif event.kind in ("error", "account-quarantined"):
+        elif event.kind in ("error", "account-quarantined") or (
+            event.kind == "warmup" and getattr(event, "action", None) == "failed"
+        ):
             line = yellowed(line)
         elif event.kind in ("poll", "no-switch", "sleep"):
             line = dimmed(line)
@@ -849,6 +851,14 @@ Defaults live in settings.json in the backup root; flags override them.
             dry_run=args.dry_run,
         )
 
+        if settings.warmup_five_hour and not args.dry_run and not args.json:
+            print(
+                yellowed(
+                    "Five-hour warm-up is enabled: cold or unconfirmed OAuth "
+                    "accounts may receive one minimal Haiku request per window."
+                )
+            )
+
         if args.once:
             sys.exit(engine.tick().value)
 
@@ -859,6 +869,7 @@ Defaults live in settings.json in the backup root; flags override them.
                 dimmed(
                     f"Auto-switch running: threshold {settings.threshold:.0f}%, "
                     f"every {settings.interval_seconds:.0f}s"
+                    f" · 5h warm-up {'on' if settings.warmup_five_hour else 'off'}"
                     f"{' (dry-run)' if args.dry_run else ''} — Ctrl-C to stop"
                 )
             )
@@ -897,9 +908,9 @@ def _warmup_command(argv: list[str]) -> None:
         prog="cswap warmup",
         description=(
             "Keep stored OAuth accounts' five-hour windows ready. A minimal "
-            "Haiku request is sent only when fresh usage data confirms that "
-            "the account has no live five-hour window. This consumes real "
-            "five-hour and weekly quota."
+            "Haiku request is sent when usage shows no live window, or once "
+            "under a five-hour guard when usage remains unavailable. This "
+            "consumes real five-hour and weekly quota."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""

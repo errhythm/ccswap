@@ -1,9 +1,11 @@
 """Opt-in keeper for Claude subscription five-hour usage windows.
 
-The usage endpoint is checked first. A real, minimal Haiku request is sent only
-when a fresh, evidence-bearing snapshot says the five-hour window is absent (or
-its advertised reset is already past). Hollow, unknown, failed, disabled,
-non-OAuth, and weekly-exhausted accounts fail closed.
+The usage endpoint is checked first. A real, minimal Haiku request is sent when
+the five-hour window is absent or expired. If usage remains unavailable after a
+fresh probe, one guarded request is still attempted: successful and ambiguous
+outcomes are protected in state so the fallback cannot become a request every
+poll. Disabled, non-OAuth, non-switchable, and known-weekly-exhausted accounts
+still fail closed.
 
 Warm requests run through persistent per-account session profiles, never by
 switching the globally active login. A small state file prevents duplicate
@@ -19,7 +21,6 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from claude_swap import oauth
 from claude_swap.exceptions import ClaudeSwitchError, PromptOutcomeUnknown, WarmupError
 from claude_swap.locking import FileLock
 from claude_swap.models import AccountSnapshot
@@ -37,17 +38,10 @@ MIN_INTERVAL_SECONDS = 300.0
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MODEL = "claude-haiku-4-5"
 FIVE_HOUR_SECONDS = 5 * 60 * 60
-PENDING_GUARD_SECONDS = 10 * 60
-STATE_SCHEMA_VERSION = 1
+PENDING_GUARD_SECONDS = FIVE_HOUR_SECONDS
+STATE_SCHEMA_VERSION = 2
+LEGACY_STATE_SCHEMA_VERSION = 1
 WARMUP_PROMPT = "Reply only: OK"
-
-
-def _usage_has_real_detail(usage: dict) -> bool:
-    """Whether a usage snapshot contains evidence beyond a hollow zero row."""
-    for _, pct, resets_at in oauth.relevant_windows(usage, models=("all",)):
-        if resets_at or pct > 0:
-            return True
-    return isinstance(usage.get("spend"), dict)
 
 
 @dataclass(frozen=True)
@@ -71,7 +65,7 @@ class WarmupSummary:
 
 
 class WarmupEngine:
-    """Inspect all managed accounts and warm only confirmed-cold windows."""
+    """Inspect managed accounts and warm cold or unconfirmed five-hour windows."""
 
     def __init__(
         self,
@@ -113,7 +107,11 @@ class WarmupEngine:
 
     def tick(self) -> WarmupSummary:
         """Run one serialized usage-check and warm pass."""
+        if self._stopped.is_set():
+            return WarmupSummary()
         with FileLock(self.lock_path, timeout=1.0):
+            if self._stopped.is_set():
+                return WarmupSummary()
             return self._tick_locked()
 
     def _tick_locked(self) -> WarmupSummary:
@@ -134,7 +132,10 @@ class WarmupEngine:
         warmed = would_warm = skipped = failed = 0
 
         for account in snapshot.accounts:
-            reason = self._skip_reason(account, state, now)
+            if self._stopped.is_set():
+                break
+            account_now = self.clock()
+            reason = self._skip_reason(account, state, account_now)
             if reason is not None:
                 skipped += 1
                 self._emit(account, reason, self._reason_detail(reason))
@@ -149,8 +150,16 @@ class WarmupEngine:
                 )
                 continue
 
-            self._mark_pending(state, account, now)
+            attempt_at = self.clock()
+            # Persist the latest possible acceptance time before launch. If
+            # this process dies inside run_prompt, the on-disk guard still
+            # covers a request accepted at the end of the timeout window.
+            self._mark_pending(state, account, attempt_at + self.timeout_seconds)
             self._save_state(state)
+            if self._stopped.is_set():
+                self._clear_pending(state, account)
+                self._save_state(state)
+                break
             try:
                 result = self.sessions.run_prompt(
                     account.number,
@@ -160,8 +169,10 @@ class WarmupEngine:
                 )
             except PromptOutcomeUnknown as exc:
                 # Anthropic may have accepted the request before the local
-                # timeout. Keep pendingAt so a stale cold snapshot cannot cause
-                # an immediate duplicate; its expiry forces a fresh usage probe.
+                # timeout. Keep pendingAt for a full window so unavailable
+                # usage cannot turn ambiguity into one request every poll.
+                self._mark_pending(state, account, self.clock())
+                self._save_state(state)
                 failed += 1
                 self._emit(account, "failed", self._clean_detail(str(exc)))
                 continue
@@ -175,6 +186,8 @@ class WarmupEngine:
             if result.returncode != 0:
                 # A child can exit nonzero after the service accepted its
                 # message. Preserve pendingAt and require a later fresh probe.
+                self._mark_pending(state, account, self.clock())
+                self._save_state(state)
                 failed += 1
                 self._emit(
                     account,
@@ -183,7 +196,7 @@ class WarmupEngine:
                 )
                 continue
 
-            self._mark_warmed(state, account, now)
+            self._mark_warmed(state, account, self.clock())
             self._save_state(state)
             warmed += 1
             self._emit(
@@ -215,21 +228,24 @@ class WarmupEngine:
         usage = entry.last_good
         if not isinstance(usage, dict):
             return True
+        if self._stale_weekly_is_exhausted(usage, now):
+            return False
 
         weekly = usage.get("seven_day")
         if isinstance(weekly, dict) and isinstance(weekly.get("pct"), (int, float)):
             if float(weekly["pct"]) >= 100.0:
                 reset = parse_reset_ts(weekly.get("resets_at"))
-                return reset is not None and reset <= now
+                # A known future weekly reset makes a prompt pointless. Any
+                # less complete stale shape should still get a fresh probe.
+                return reset is None or reset <= now
 
         five_hour = usage.get("five_hour")
         if not isinstance(five_hour, dict):
             return True
-        resets_at = five_hour.get("resets_at")
-        if not resets_at:
-            return five_hour.get("pct") == 0
-        reset = parse_reset_ts(resets_at)
-        return reset is not None and reset <= now
+        reset = parse_reset_ts(five_hour.get("resets_at"))
+        # A stale percentage without an absolute deadline cannot prove that
+        # its five-hour window is still live.
+        return reset is None or reset <= now
 
     def _skip_reason(self, account: AccountSnapshot, state: dict, now: float) -> str | None:
         if account.disabled:
@@ -243,47 +259,90 @@ class WarmupEngine:
 
         entry = account.usage
         usage = entry.decision_value()
-        if (
-            not isinstance(usage, dict)
-            or entry.last_error is not None
-            or entry.age_s is None
-            or entry.age_s > STALE_OK_S
-        ):
-            return "usage-unavailable"
+        usage_is_fresh = (
+            isinstance(usage, dict)
+            and entry.last_error is None
+            and entry.age_s is not None
+            and entry.age_s <= STALE_OK_S
+        )
+        if not usage_is_fresh:
+            # A stale last-good row can still prove the window live when its
+            # absolute reset is in the future. Otherwise the user's opt-in
+            # favors one state-guarded attempt over leaving the window cold.
+            stale = entry.last_good
+            if isinstance(stale, dict):
+                if self._stale_weekly_is_exhausted(stale, now):
+                    return "weekly-exhausted"
+                if self._stale_five_hour_is_live(stale, now):
+                    return "live"
+            return None
 
         weekly = usage.get("seven_day")
-        if not isinstance(weekly, dict) or not isinstance(
-            weekly.get("pct"), (int, float)
-        ):
-            return "usage-unavailable"
-        if float(weekly["pct"]) >= 100.0 or self._model_weekly_exhausted(usage):
+        if (
+            isinstance(weekly, dict)
+            and isinstance(weekly.get("pct"), (int, float))
+            and float(weekly["pct"]) >= 100.0
+        ) or self._model_weekly_exhausted(usage):
             return "weekly-exhausted"
 
-        # The provider can return an all-zero/no-reset placeholder for an
-        # inactive credential. It is indistinguishable from a cold window by
-        # five-hour fields alone, so require evidence elsewhere in the payload
-        # and fail closed rather than spend quota on an uncertain account.
-        if not _usage_has_real_detail(usage):
-            return "usage-unavailable"
-
-        if "five_hour" not in usage:
-            return None
         five_hour = usage.get("five_hour")
-        if not isinstance(five_hour, dict) or not isinstance(
-            five_hour.get("pct"), (int, float)
-        ):
-            return "usage-unavailable"
+        if not isinstance(five_hour, dict):
+            return None
         resets_at = five_hour.get("resets_at")
-        if not resets_at:
-            # The live endpoint's cold shape is {pct: 0} with no reset.
-            # A non-zero window missing its deadline is ambiguous, so skip it.
-            return None if float(five_hour["pct"]) == 0.0 else "usage-unavailable"
-        reset_ts = parse_reset_ts(resets_at)
-        if reset_ts is None:
-            return "usage-unavailable"
-        if reset_ts > now:
+        if resets_at:
+            reset_ts = parse_reset_ts(resets_at)
+            if reset_ts is not None:
+                return "live" if reset_ts > now else None
+        pct = five_hour.get("pct")
+        if isinstance(pct, (int, float)) and float(pct) > 0.0:
+            # Non-zero utilization itself proves the window was started, even
+            # if a partial response omitted its reset timestamp.
             return "live"
         return None
+
+    @staticmethod
+    def _stale_five_hour_is_live(usage: dict, now: float) -> bool:
+        five_hour = usage.get("five_hour")
+        if not isinstance(five_hour, dict):
+            return False
+        reset_ts = parse_reset_ts(five_hour.get("resets_at"))
+        return reset_ts is not None and reset_ts > now
+
+    def _stale_weekly_is_exhausted(self, usage: dict, now: float) -> bool:
+        weekly = usage.get("seven_day")
+        if (
+            isinstance(weekly, dict)
+            and isinstance(weekly.get("pct"), (int, float))
+            and float(weekly["pct"]) >= 100.0
+        ):
+            reset_ts = parse_reset_ts(weekly.get("resets_at"))
+            if reset_ts is not None and reset_ts > now:
+                return True
+
+        scoped = usage.get("scoped")
+        if not isinstance(scoped, list):
+            return False
+        wanted = self.model.casefold()
+        family = next(
+            (name for name in ("haiku", "sonnet", "opus", "fable") if name in wanted),
+            wanted,
+        )
+        for window in scoped:
+            if not isinstance(window, dict):
+                continue
+            name = window.get("name")
+            pct = window.get("pct")
+            reset_ts = parse_reset_ts(window.get("resets_at"))
+            if (
+                isinstance(name, str)
+                and family in name.casefold()
+                and isinstance(pct, (int, float))
+                and float(pct) >= 100.0
+                and reset_ts is not None
+                and reset_ts > now
+            ):
+                return True
+        return False
 
     def _model_weekly_exhausted(self, usage: dict) -> bool:
         scoped = usage.get("scoped")
@@ -336,16 +395,44 @@ class WarmupEngine:
                 f"Could not read {self.state_path}; refusing to risk duplicate "
                 f"warm-up requests: {exc}"
             ) from exc
-        if (
-            not isinstance(data, dict)
-            or data.get("schemaVersion") != STATE_SCHEMA_VERSION
-            or not isinstance(data.get("accounts"), dict)
-        ):
+        if not isinstance(data, dict) or not isinstance(data.get("accounts"), dict):
+            raise WarmupError(
+                f"Invalid warm-up state in {self.state_path}; refusing to risk "
+                "duplicate requests."
+            )
+        if data.get("schemaVersion") == LEGACY_STATE_SCHEMA_VERSION:
+            return self._migrate_legacy_state(data)
+        if data.get("schemaVersion") != STATE_SCHEMA_VERSION:
             raise WarmupError(
                 f"Invalid warm-up state in {self.state_path}; refusing to risk "
                 "duplicate requests."
             )
         return data
+
+    @classmethod
+    def _migrate_legacy_state(cls, state: dict) -> dict:
+        """Convert slot-keyed v1 rows to stable identity keys in memory."""
+        migrated: dict[str, dict] = {}
+        for row in state["accounts"].values():
+            if not isinstance(row, dict):
+                continue
+            email = row.get("email")
+            org_uuid = row.get("orgUuid", "")
+            if not isinstance(email, str) or not isinstance(org_uuid, str):
+                continue
+            key = cls._identity_key(email, org_uuid)
+            existing = migrated.get(key)
+            if existing is None:
+                migrated[key] = dict(row)
+                continue
+            for field in ("lastWarmAt", "pendingAt"):
+                old = existing.get(field)
+                new = row.get(field)
+                if isinstance(new, (int, float)) and (
+                    not isinstance(old, (int, float)) or new > old
+                ):
+                    existing[field] = new
+        return {"schemaVersion": STATE_SCHEMA_VERSION, "accounts": migrated}
 
     def _save_state(self, state: dict) -> None:
         try:
@@ -356,8 +443,14 @@ class WarmupEngine:
             ) from exc
 
     @staticmethod
-    def _state_row(state: dict, account: AccountSnapshot) -> dict | None:
-        row = state["accounts"].get(account.number)
+    def _identity_key(email: str, org_uuid: str) -> str:
+        # Organization ids are shared by multiple members; the composite is
+        # the same exact identity pair SessionManager verifies before launch.
+        return f"org:{org_uuid}|email:{email.casefold()}"
+
+    @classmethod
+    def _state_row(cls, state: dict, account: AccountSnapshot) -> dict | None:
+        row = state["accounts"].get(cls._identity_key(account.email, account.org_uuid))
         if not isinstance(row, dict):
             return None
         if row.get("email") != account.email or row.get("orgUuid", "") != account.org_uuid:
@@ -381,7 +474,7 @@ class WarmupEngine:
     def _mark_pending(self, state: dict, account: AccountSnapshot, now: float) -> None:
         row = self._state_row(state, account) or self._row_for(account)
         row["pendingAt"] = now
-        state["accounts"][account.number] = row
+        state["accounts"][self._identity_key(account.email, account.org_uuid)] = row
 
     def _clear_pending(self, state: dict, account: AccountSnapshot) -> None:
         row = self._state_row(state, account)
@@ -392,7 +485,7 @@ class WarmupEngine:
         row = self._state_row(state, account) or self._row_for(account)
         row.pop("pendingAt", None)
         row["lastWarmAt"] = now
-        state["accounts"][account.number] = row
+        state["accounts"][self._identity_key(account.email, account.org_uuid)] = row
 
     @staticmethod
     def _clean_detail(detail: str) -> str:
@@ -407,7 +500,6 @@ class WarmupEngine:
             "not-oauth": "API-key accounts are not warmed",
             "unavailable": "account is not currently switchable",
             "recently-warmed": "a successful or in-progress warm is still protected",
-            "usage-unavailable": "fresh successful usage data is unavailable; skipped safely",
             "weekly-exhausted": "weekly quota is exhausted; no request sent",
             "live": "five-hour window is already active",
         }[reason]

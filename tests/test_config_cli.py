@@ -48,6 +48,7 @@ class TestConfigList:
             "autoswitch.includeApiKeyAccounts",
             "autoswitch.unhealthyTicks",
             "autoswitch.model",
+            "autoswitch.warmupFiveHour",
             "ui.theme",
             "ui.view",
         ):
@@ -83,6 +84,7 @@ class TestConfigList:
         assert by_key["autoswitch.threshold"]["value"] == 90.0
         assert by_key["autoswitch.threshold"]["isSet"] is False
         assert by_key["autoswitch.includeApiKeyAccounts"]["value"] is False
+        assert by_key["autoswitch.warmupFiveHour"]["value"] is False
 
 
 class TestConfigSetGet:
@@ -110,6 +112,15 @@ class TestConfigSetGet:
         assert "= false" in out
         raw = json.loads(_settings_file(capsys).read_text())
         assert raw["autoswitch"]["includeApiKeyAccounts"] is False
+
+    def test_set_five_hour_warmup(self, temp_home, capsys):
+        code, out, _ = _run(
+            ["set", "autoswitch.warmupFiveHour", "yes"], capsys
+        )
+        assert code == 0
+        assert "= true" in out
+        raw = json.loads(_settings_file(capsys).read_text())
+        assert raw["autoswitch"]["warmupFiveHour"] is True
 
     def test_set_preserves_unknown_keys(self, temp_home, capsys):
         path = _settings_file(capsys)

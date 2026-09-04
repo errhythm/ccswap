@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,17 @@ from claude_swap.usage_store import UsageEntry
 NOW = 1_800_000_000.0
 
 
+class _MutableClock:
+    def __init__(self, now: float = NOW):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def _iso(seconds_from_now: float) -> str:
     return datetime.fromtimestamp(NOW + seconds_from_now, timezone.utc).isoformat()
 
@@ -33,6 +45,7 @@ def _account(
     *,
     age_s: float = 0.0,
     last_error: str | None = None,
+    trust_extended: bool = False,
     kind: str = "oauth",
     switchable: bool = True,
     disabled: bool = False,
@@ -51,6 +64,7 @@ def _account(
             fetched_at=NOW - age_s,
             age_s=age_s,
             last_error=last_error,
+            trust_extended=trust_extended,
         ),
     )
 
@@ -90,6 +104,7 @@ def _engine(
     sessions=None,
     dry_run=False,
     model="claude-haiku-4-5",
+    clock=None,
 ):
     from claude_swap.warmup import WarmupEngine
 
@@ -102,7 +117,7 @@ def _engine(
         session_manager=sessions,
         dry_run=dry_run,
         model=model,
-        clock=lambda: NOW,
+        clock=clock or (lambda: NOW),
     )
     return engine, switcher, sessions, events
 
@@ -139,8 +154,10 @@ def test_tick_warms_cold_account_and_skips_live_window(tmp_path):
     ]
     assert [event.kind for event in events] == ["warmed", "live"]
     state = json.loads((tmp_path / "warmup_state.json").read_text(encoding="utf-8"))
-    assert state["accounts"]["1"]["email"] == "user1@example.com"
-    assert state["accounts"]["1"]["lastWarmAt"] == NOW
+    assert state["schemaVersion"] == 2
+    key = "org:org-1|email:user1@example.com"
+    assert state["accounts"][key]["email"] == "user1@example.com"
+    assert state["accounts"][key]["lastWarmAt"] == NOW
 
 
 def test_tick_forces_one_fresh_probe_for_stale_cold_account(tmp_path):
@@ -189,18 +206,74 @@ def test_tick_does_not_reprobe_stale_but_still_live_window(tmp_path):
 
     assert switcher.snapshot_calls == 1
     assert sessions.calls == []
-    assert events[0].kind == "usage-unavailable"
+    assert events[0].kind == "live"
+
+
+@pytest.mark.parametrize("trust_extended", [False, True])
+def test_stale_nonzero_window_without_reset_is_probed_then_warmed(
+    tmp_path, trust_extended
+):
+    stale = _account(
+        "1",
+        {"five_hour": {"pct": 1.0}, "seven_day": {"pct": 2}},
+        age_s=600,
+        last_error="http-429",
+        trust_extended=trust_extended,
+    )
+
+    class UnavailableSwitcher(_FakeSwitcher):
+        def __init__(self):
+            super().__init__(tmp_path, [stale])
+            self.fetches = []
+
+        def accounts_snapshot(self, fetch=None):
+            self.fetches.append(fetch)
+            return AccountsSnapshot("1", (stale,), NOW)
+
+    from claude_swap.warmup import WarmupEngine
+
+    switcher = UnavailableSwitcher()
+    sessions = _FakeSessions()
+    engine = WarmupEngine(
+        switcher,
+        emit=lambda _event: None,
+        session_manager=sessions,
+        clock=lambda: NOW,
+    )
+
+    assert engine.tick().warmed == 1
+    assert switcher.fetches == [None, {"1"}]
+    assert [call[0] for call in sessions.calls] == ["1"]
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {
+            "seven_day": {"pct": 100.0, "resets_at": _iso(3600)},
+        },
+        {
+            "seven_day": {"pct": 20.0},
+            "scoped": [
+                {"name": "Haiku", "pct": 100.0, "resets_at": _iso(3600)}
+            ],
+        },
+    ],
+)
+def test_stale_known_weekly_exhaustion_still_skips(tmp_path, usage):
+    account = _account("1", usage, age_s=600, last_error="http-429")
+    engine, switcher, sessions, events = _engine(tmp_path, [account])
+
+    engine.tick()
+
+    assert switcher.snapshot_calls == 1
+    assert sessions.calls == []
+    assert events[0].kind == "weekly-exhausted"
 
 
 @pytest.mark.parametrize(
     ("account", "reason"),
     [
-        (_account("1", None), "usage-unavailable"),
-        (_account("1", {"seven_day": {"pct": 2}}, age_s=301), "usage-unavailable"),
-        (
-            _account("1", {"seven_day": {"pct": 2}}, last_error="http-429"),
-            "usage-unavailable",
-        ),
         (_account("1", {"seven_day": {"pct": 100}}), "weekly-exhausted"),
         (_account("1", {"seven_day": {"pct": 2}}, disabled=True), "disabled"),
         (
@@ -221,6 +294,24 @@ def test_tick_fails_closed_for_ineligible_accounts(tmp_path, account, reason):
     assert summary.warmed == 0
     assert sessions.calls == []
     assert events[0].kind == reason
+
+
+@pytest.mark.parametrize(
+    "account",
+    [
+        _account("1", None),
+        _account("1", {"seven_day": {"pct": 2}}, age_s=301),
+        _account("1", {"seven_day": {"pct": 2}}, last_error="http-429"),
+    ],
+)
+def test_tick_warms_when_usage_is_unavailable(tmp_path, account):
+    engine, _switcher, sessions, events = _engine(tmp_path, [account])
+
+    summary = engine.tick()
+
+    assert summary.warmed == 1
+    assert [call[0] for call in sessions.calls] == ["1"]
+    assert events[0].kind == "warmed"
 
 
 def test_tick_skips_exhausted_selected_model_window(tmp_path):
@@ -252,7 +343,7 @@ def test_zero_percent_five_hour_without_reset_is_warmed(tmp_path):
     assert events[0].kind == "warmed"
 
 
-def test_hollow_all_zero_usage_fails_closed(tmp_path):
+def test_hollow_all_zero_usage_is_warmed(tmp_path):
     account = _account(
         "1",
         {
@@ -265,12 +356,12 @@ def test_hollow_all_zero_usage_fails_closed(tmp_path):
 
     summary = engine.tick()
 
-    assert summary.warmed == 0
-    assert sessions.calls == []
-    assert events[0].kind == "usage-unavailable"
+    assert summary.warmed == 1
+    assert [call[0] for call in sessions.calls] == ["1"]
+    assert events[0].kind == "warmed"
 
 
-def test_nonzero_five_hour_without_reset_fails_closed(tmp_path):
+def test_nonzero_five_hour_without_reset_is_treated_as_live(tmp_path):
     account = _account(
         "1", {"five_hour": {"pct": 1.0}, "seven_day": {"pct": 1.0}}
     )
@@ -279,7 +370,34 @@ def test_nonzero_five_hour_without_reset_fails_closed(tmp_path):
     engine.tick()
 
     assert sessions.calls == []
-    assert events[0].kind == "usage-unavailable"
+    assert events[0].kind == "live"
+
+
+def test_unknown_usage_after_five_hour_guard_is_warmed_again(tmp_path):
+    (tmp_path / "warmup_state.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "accounts": {
+                    "1": {
+                        "email": "user1@example.com",
+                        "orgUuid": "org-1",
+                        "lastWarmAt": NOW - 6 * 3600,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    engine, _switcher, sessions, events = _engine(
+        tmp_path, [_account("1", None)]
+    )
+
+    summary = engine.tick()
+
+    assert summary.warmed == 1
+    assert [call[0] for call in sessions.calls] == ["1"]
+    assert events[0].kind == "warmed"
 
 
 def test_expired_five_hour_window_is_warmed(tmp_path):
@@ -347,6 +465,60 @@ def test_state_is_bound_to_identity_not_reused_slot(tmp_path):
     assert [call[0] for call in sessions.calls] == ["1"]
 
 
+def test_legacy_state_protection_follows_identities_after_slots_swap(tmp_path):
+    (tmp_path / "warmup_state.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "accounts": {
+                    "1": {
+                        "email": "user1@example.com",
+                        "orgUuid": "org-1",
+                        "lastWarmAt": NOW - 60,
+                    },
+                    "2": {
+                        "email": "user2@example.com",
+                        "orgUuid": "org-2",
+                        "lastWarmAt": NOW - 60,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    first = _account("1", None)
+    second = _account("2", None)
+    first = replace(first, email="user2@example.com", org_uuid="org-2")
+    second = replace(second, email="user1@example.com", org_uuid="org-1")
+    engine, _switcher, sessions, events = _engine(tmp_path, [first, second])
+
+    engine.tick()
+
+    assert sessions.calls == []
+    assert [event.kind for event in events] == ["recently-warmed", "recently-warmed"]
+
+
+def test_state_keeps_separate_guards_for_users_in_one_organization(tmp_path):
+    first = replace(_account("1", None), org_uuid="shared-org")
+    second = replace(_account("2", None), org_uuid="shared-org")
+    engine, _switcher, sessions, _events = _engine(tmp_path, [first, second])
+
+    assert engine.tick().warmed == 2
+    assert len(sessions.calls) == 2
+    state = json.loads((tmp_path / "warmup_state.json").read_text(encoding="utf-8"))
+    assert len(state["accounts"]) == 2
+
+    second_sessions = _FakeSessions()
+    engine, _switcher, _sessions, events = _engine(
+        tmp_path,
+        [first, second],
+        sessions=second_sessions,
+    )
+    assert engine.tick().skipped == 2
+    assert second_sessions.calls == []
+    assert [event.kind for event in events] == ["recently-warmed", "recently-warmed"]
+
+
 def test_dry_run_never_launches_or_writes_state(tmp_path):
     account = _account("1", {"seven_day": {"pct": 1.0}})
     engine, _switcher, sessions, events = _engine(tmp_path, [account], dry_run=True)
@@ -372,8 +544,9 @@ def test_failed_claude_request_is_not_recorded_as_warmed(tmp_path):
     assert events[0].kind == "failed"
     assert events[0].detail == "Claude exited with code 7; retry protected"
     state = json.loads((tmp_path / "warmup_state.json").read_text(encoding="utf-8"))
-    assert "lastWarmAt" not in state["accounts"]["1"]
-    assert state["accounts"]["1"]["pendingAt"] == NOW
+    key = "org:org-1|email:user1@example.com"
+    assert "lastWarmAt" not in state["accounts"][key]
+    assert state["accounts"][key]["pendingAt"] == NOW
 
 
 def test_ambiguous_timeout_keeps_duplicate_spend_guard(tmp_path):
@@ -392,7 +565,138 @@ def test_ambiguous_timeout_keeps_duplicate_spend_guard(tmp_path):
     assert summary.failed == 1
     assert events[0].kind == "failed"
     state = json.loads((tmp_path / "warmup_state.json").read_text(encoding="utf-8"))
-    assert state["accounts"]["1"]["pendingAt"] == NOW
+    key = "org:org-1|email:user1@example.com"
+    assert state["accounts"][key]["pendingAt"] == NOW
+
+
+def test_prelaunch_state_covers_the_full_request_timeout(tmp_path):
+    key = "org:org-1|email:user1@example.com"
+
+    class InspectingSessions(_FakeSessions):
+        def run_prompt(self, *_args, **_kwargs):
+            state = json.loads(
+                (tmp_path / "warmup_state.json").read_text(encoding="utf-8")
+            )
+            assert state["accounts"][key]["pendingAt"] == NOW + 120
+            raise PromptOutcomeUnknown("request outcome is unknown")
+
+    engine, _switcher, _sessions, _events = _engine(
+        tmp_path,
+        [_account("1", None)],
+        sessions=InspectingSessions(),
+    )
+
+    assert engine.tick().failed == 1
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "nonzero"])
+def test_unavailable_usage_does_not_retry_ambiguous_attempt_each_poll(
+    tmp_path, outcome
+):
+    clock = _MutableClock()
+
+    class AmbiguousSessions(_FakeSessions):
+        def run_prompt(self, *args, **kwargs):
+            if outcome == "timeout":
+                self.calls.append((args[0], args[1], kwargs["timeout"]))
+                raise PromptOutcomeUnknown("request outcome is unknown")
+            return super().run_prompt(*args, **kwargs)
+
+    sessions = AmbiguousSessions({"1": 7} if outcome == "nonzero" else None)
+    engine, _switcher, _sessions, events = _engine(
+        tmp_path,
+        [_account("1", None)],
+        sessions=sessions,
+        clock=clock,
+    )
+
+    assert engine.tick().failed == 1
+    clock.advance(600)
+    assert engine.tick().skipped == 1
+
+    assert len(sessions.calls) == 1
+    assert events[-1].kind == "recently-warmed"
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "nonzero"])
+def test_ambiguous_guard_starts_at_prompt_completion(tmp_path, outcome):
+    clock = _MutableClock()
+
+    class SlowAmbiguousSessions(_FakeSessions):
+        def run_prompt(self, *args, **kwargs):
+            if outcome == "timeout":
+                self.calls.append((args[0], args[1], kwargs["timeout"]))
+                clock.advance(700)
+                raise PromptOutcomeUnknown("request outcome is unknown")
+            result = super().run_prompt(*args, **kwargs)
+            clock.advance(700)
+            return result
+
+    sessions = SlowAmbiguousSessions({"1": 7} if outcome == "nonzero" else None)
+    engine, _switcher, _sessions, _events = _engine(
+        tmp_path,
+        [_account("1", None)],
+        sessions=sessions,
+        clock=clock,
+    )
+
+    assert engine.tick().failed == 1
+    key = "org:org-1|email:user1@example.com"
+    state = json.loads((tmp_path / "warmup_state.json").read_text(encoding="utf-8"))
+    assert state["accounts"][key]["pendingAt"] == NOW + 700
+
+    clock.advance(5 * 3600 - 1)
+    assert engine.tick().skipped == 1
+    assert len(sessions.calls) == 1
+    clock.advance(1)
+    assert engine.tick().failed == 1
+    assert len(sessions.calls) == 2
+
+
+def test_each_success_is_protected_from_its_actual_completion_time(tmp_path):
+    clock = _MutableClock()
+
+    class SlowSessions(_FakeSessions):
+        def run_prompt(self, *args, **kwargs):
+            result = super().run_prompt(*args, **kwargs)
+            clock.advance(700)
+            return result
+
+    engine, _switcher, _sessions, _events = _engine(
+        tmp_path,
+        [_account("1", None), _account("2", None)],
+        sessions=SlowSessions(),
+        clock=clock,
+    )
+
+    assert engine.tick().warmed == 2
+
+    state = json.loads((tmp_path / "warmup_state.json").read_text(encoding="utf-8"))
+    first_key = "org:org-1|email:user1@example.com"
+    second_key = "org:org-2|email:user2@example.com"
+    assert state["accounts"][first_key]["lastWarmAt"] == NOW + 700
+    assert state["accounts"][second_key]["lastWarmAt"] == NOW + 1400
+
+
+def test_stop_during_a_sweep_prevents_later_account_requests(tmp_path):
+    holder = {}
+
+    class StoppingSessions(_FakeSessions):
+        def run_prompt(self, *args, **kwargs):
+            result = super().run_prompt(*args, **kwargs)
+            holder["engine"].stop()
+            return result
+
+    sessions = StoppingSessions()
+    engine, _switcher, _sessions, _events = _engine(
+        tmp_path,
+        [_account("1", None), _account("2", None)],
+        sessions=sessions,
+    )
+    holder["engine"] = engine
+
+    assert engine.tick().warmed == 1
+    assert [call[0] for call in sessions.calls] == ["1"]
 
 
 def _session_switcher(tmp_path: Path, *, active: bool):
@@ -678,6 +982,14 @@ def test_main_dispatches_warmup_subcommand(monkeypatch):
     with patch("claude_swap.cli._warmup_command", side_effect=called.append):
         cli.main()
     assert called == [["--once"]]
+
+
+def test_warmup_help_describes_unavailable_usage_fallback(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli._warmup_command(["--help"])
+
+    assert exc.value.code == 0
+    assert "usage remains unavailable" in capsys.readouterr().out
 
 
 def test_warmup_command_builds_one_shot_dry_run_engine(tmp_path):
