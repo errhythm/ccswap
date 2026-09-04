@@ -2365,6 +2365,55 @@ class TestEventText:
         assert "warm-up failed" in text.plain
         assert any(Palette.DARK.sev_warn in str(span.style) for span in text.spans)
 
+    def test_live_warmup_uses_muted_style(self):
+        from claude_swap.autoswitch import WarmupAutoEvent
+        from claude_swap.tui.autoview import event_text
+        from claude_swap.tui.theme import Palette
+
+        event = WarmupAutoEvent(
+            action="live",
+            number="2",
+            email="b@x.com",
+            detail="the five-hour window is already active",
+        )
+        text = event_text(event)
+
+        assert "five-hour window is already active" in text.plain
+        assert "5h warm-up sent" not in text.plain
+        assert Palette.DARK.muted in str(text.spans[-1].style)
+
+    def test_warmed_account_uses_accent_and_marks_warmup_sent(self):
+        from claude_swap.autoswitch import WarmupAutoEvent
+        from claude_swap.tui.autoview import event_text
+        from claude_swap.tui.theme import Palette
+
+        event = WarmupAutoEvent(
+            action="warmed",
+            number="2",
+            email="b@x.com",
+            detail="sent guarded warm-up prompt",
+        )
+        text = event_text(event)
+
+        assert text.plain.endswith("sent guarded warm-up prompt (5h warm-up sent)")
+        assert Palette.DARK.accent in str(text.spans[-1].style)
+
+    def test_dry_run_warmup_preview_uses_accent(self):
+        from claude_swap.autoswitch import WarmupAutoEvent
+        from claude_swap.tui.autoview import event_text
+        from claude_swap.tui.theme import Palette
+
+        event = WarmupAutoEvent(
+            action="would-warm",
+            number="2",
+            email="b@x.com",
+            detail="would send one minimal request",
+        )
+        text = event_text(event)
+
+        assert "5h warm-up sent" not in text.plain
+        assert Palette.DARK.accent in str(text.spans[-1].style)
+
 
 # ---------------------------------------------------------------------------
 # accounts_snapshot on the real switcher

@@ -52,18 +52,24 @@ _EVENT_ROLES = {
     "account-quarantined": "sev_warn",
     "all-exhausted": "sev_crit",
 }
+_WARMUP_ACTION_ROLES = {
+    "warmed": "accent",
+    "would-warm": "accent",
+    "failed": "sev_warn",
+}
 _QUIET_KINDS = {"poll", "no-switch", "sleep", "account-unquarantined"}
 
 
 def event_text(event: AutoSwitchEvent, *, palette: Palette = Palette.DARK) -> Text:
     """Log line for one engine event, styled like the CLI's human renderer."""
     role = _EVENT_ROLES.get(event.kind)
-    if event.kind == "warmup" and getattr(event, "action", None) == "failed":
-        role = "sev_warn"
+    if event.kind == "warmup":
+        role = _WARMUP_ACTION_ROLES.get(getattr(event, "action", None))
     if role is not None:
         style = getattr(palette, role)
     else:
-        style = palette.muted if event.kind in _QUIET_KINDS else palette.foreground
+        is_quiet = event.kind in _QUIET_KINDS or event.kind == "warmup"
+        style = palette.muted if is_quiet else palette.foreground
     text = Text()
     text.append(f"{data.clock_stamp()}  ", style=palette.muted)
     text.append(event.human(), style=style)

@@ -514,9 +514,10 @@ class WarmupAutoEvent(AutoSwitchEvent):
         }
 
     def human(self) -> str:
+        suffix = " (5h warm-up sent)" if self.action == "warmed" else ""
         return (
             f"warm-up {self.action} Account-{self.number} ({self.email}): "
-            f"{self.detail}"
+            f"{self.detail}{suffix}"
         )
 
 
