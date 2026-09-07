@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -183,26 +184,101 @@ def _reset_credits(payload: object) -> dict[str, Any] | None:
     return result
 
 
+def _number(value: object) -> float | None:
+    """Normalize a finite numeric API value, including decimal strings."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _credits(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize the workspace/purchased Codex credit balance."""
+    raw = payload.get("credits")
+    if not isinstance(raw, dict):
+        return None
+
+    result: dict[str, Any] = {}
+    for source_key, target_key in (
+        ("has_credits", "has_credits"),
+        ("unlimited", "unlimited"),
+        ("overage_limit_reached", "limit_reached"),
+    ):
+        value = raw.get(source_key)
+        if isinstance(value, bool):
+            result[target_key] = value
+    for source_key, target_key in (
+        ("balance", "balance"),
+        ("approx_local_messages", "approx_local_messages"),
+        ("approx_cloud_messages", "approx_cloud_messages"),
+    ):
+        value = _number(raw.get(source_key))
+        if value is not None:
+            result[target_key] = value
+    return result or None
+
+
+def _credit_allowance(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize a user's monthly workspace credit/spend allowance."""
+    spend_control = payload.get("spend_control")
+    if not isinstance(spend_control, dict):
+        return None
+
+    result: dict[str, Any] = {}
+    individual = spend_control.get("individual_limit")
+    if isinstance(individual, dict):
+        for source_key, target_key in (
+            ("used", "used"),
+            ("limit", "limit"),
+            ("remaining", "remaining"),
+            ("used_percent", "pct"),
+        ):
+            value = _number(individual.get(source_key))
+            if value is not None:
+                result[target_key] = value
+        resets_at = _iso_timestamp(individual.get("reset_at"))
+        if resets_at is not None:
+            result["resets_at"] = resets_at
+
+    reached = spend_control.get("reached")
+    if reached is True or (isinstance(reached, bool) and result):
+        result["limit_reached"] = reached
+    return result or None
+
+
 def _convert_payload(payload: object) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise CodexUsageError("Codex usage response is not a JSON object")
-    rate_limit = payload.get("rate_limit")
-    if not isinstance(rate_limit, dict):
-        raise CodexUsageError("Codex usage response has no rate-limit data")
     usage: dict[str, Any] = {}
-    primary_raw = rate_limit.get("primary_window")
-    secondary_raw = rate_limit.get("secondary_window")
-    primary = _window(primary_raw)
-    secondary = _window(secondary_raw)
-    if primary is not None:
-        usage[_window_key(primary_raw, "five_hour")] = primary
-    if secondary is not None:
-        usage[_window_key(secondary_raw, "weekly")] = secondary
+    rate_limit = payload.get("rate_limit")
+    if isinstance(rate_limit, dict):
+        primary_raw = rate_limit.get("primary_window")
+        secondary_raw = rate_limit.get("secondary_window")
+        primary = _window(primary_raw)
+        secondary = _window(secondary_raw)
+        if primary is not None:
+            usage[_window_key(primary_raw, "five_hour")] = primary
+        if secondary is not None:
+            usage[_window_key(secondary_raw, "weekly")] = secondary
     reset_credits = _reset_credits(payload.get("rate_limit_reset_credits"))
     if reset_credits is not None:
         usage["reset_credits"] = reset_credits
+    credits = _credits(payload)
+    if credits is not None:
+        usage["credits"] = credits
+    credit_allowance = _credit_allowance(payload)
+    if credit_allowance is not None:
+        usage["credit_allowance"] = credit_allowance
     if not usage:
-        raise CodexUsageError("Codex did not return subscription usage windows for this account")
+        raise CodexUsageError("Codex did not return quota or credit data for this account")
     return usage
 
 

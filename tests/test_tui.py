@@ -598,7 +598,12 @@ class TestUsageRows:
         assert spend[3].index(" · ") < spend[3].index("$12.50")
 
     def test_codex_weekly_row_and_banked_reset_text(self):
-        from claude_swap.tui.widgets import reset_credits_text, usage_rows
+        from claude_swap.tui.widgets import (
+            credit_allowance_text,
+            credits_text,
+            reset_credits_text,
+            usage_rows,
+        )
 
         # Keep the boundary exact across platforms: round-tripping an arbitrary
         # time.time() value through ISO microseconds can land just below 48h,
@@ -612,11 +617,26 @@ class TestUsageRows:
                     now + 2 * 86400, timezone.utc
                 ).isoformat(),
             },
+            "credits": {
+                "has_credits": True,
+                "balance": 2500.0,
+            },
+            "credit_allowance": {
+                "remaining": 4678.44787979126,
+                "limit": 5000.0,
+            },
         }
 
         assert [row[0] for row in usage_rows(usage, now)] == ["Weekly"]
         assert reset_credits_text(usage, now) == (
             "3 banked · earliest expires 2d"
+        )
+        assert credits_text(usage, now) == "2,500.00 available"
+        assert credit_allowance_text(usage, now) == (
+            "4,678.45 remaining · 5,000.00 limit"
+        )
+        assert credit_allowance_text(usage, now, compact=True) == (
+            "4,678.45 remaining"
         )
 
     def test_banked_resets_render_in_the_card_and_the_mini_line(self):
@@ -635,6 +655,8 @@ class TestUsageRows:
             last_good={
                 "weekly": {"pct": 42.0},
                 "reset_credits": {"available": 3},
+                "credits": {"has_credits": True, "balance": 2500.0},
+                "credit_allowance": {"remaining": 4678.45, "limit": 5000.0},
             },
             fetched_at=now,
         )
@@ -643,9 +665,43 @@ class TestUsageRows:
             assert "Resets 3 banked" in account_card_text(
                 acc, 80, now=now, palette=palette
             ).plain
+            assert "Credits 2,500.00 available" in account_card_text(
+                acc, 80, now=now, palette=palette
+            ).plain
+            assert "Allowance 4,678.45 remaining · 5,000.00 limit" in (
+                account_card_text(acc, 80, now=now, palette=palette).plain
+            )
             assert "Resets 3 banked" in mini_account_text(
                 acc, now, palette=palette
             ).plain
+            assert "Credits 2,500.00 available" in mini_account_text(
+                acc, now, palette=palette
+            ).plain
+            assert "Allowance 4,678.45 remaining" in mini_account_text(
+                acc, now, palette=palette
+            ).plain
+
+    def test_no_credits_with_zero_balance_renders_as_none(self):
+        from claude_swap.tui.widgets import account_card_text, credits_text
+
+        now = 1_700_000_000.0
+        usage = {"credits": {"has_credits": False, "balance": 0.0}}
+        assert credits_text(usage, now) == "none"
+        assert credits_text(
+            {"credits": {"has_credits": False, "limit_reached": True}}, now
+        ) == "limit reached"
+        assert credits_text(
+            {"credits": {"has_credits": False, "unlimited": True}}, now
+        ) == "unlimited"
+
+        acc = make_account(
+            1,
+            active=True,
+            entry=UsageEntry(last_good=usage, fetched_at=now),
+        )
+        rendered = account_card_text(acc, 80, now=now).plain
+        assert "Credits none" in rendered
+        assert "usage unavailable" not in rendered
 
     def test_no_data_no_rows(self):
         from claude_swap.tui.widgets import usage_rows

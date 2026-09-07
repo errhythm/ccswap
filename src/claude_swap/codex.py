@@ -617,6 +617,42 @@ class CodexAccountSwitcher:
                             countdown, clock = format_reset(expires_at)
                             line += f" · earliest expires in {countdown} ({clock})"
                         print(line)
+                credits = account["usage"].get("credits")
+                if isinstance(credits, dict):
+                    if credits.get("limit_reached") is True:
+                        line = "  Credits: limit reached"
+                    elif credits.get("unlimited") is True:
+                        line = "  Credits: unlimited"
+                    elif credits.get("has_credits") is False:
+                        line = "  Credits: none"
+                    elif isinstance(credits.get("balance"), (int, float)):
+                        line = f"  Credits: {credits['balance']:,.2f} available"
+                    elif credits.get("has_credits") is True:
+                        line = "  Credits: available (balance not reported)"
+                    else:
+                        line = "  Credits: status unavailable"
+                    print(line)
+                allowance = account["usage"].get("credit_allowance")
+                if isinstance(allowance, dict):
+                    if allowance.get("limit_reached") is True:
+                        line = "  Credit allowance: spending limit reached"
+                    elif isinstance(allowance.get("remaining"), (int, float)):
+                        line = (
+                            f"  Credit allowance: {allowance['remaining']:,.2f} remaining"
+                        )
+                    elif isinstance(allowance.get("limit"), (int, float)):
+                        line = f"  Credit allowance: {allowance['limit']:,.2f} limit"
+                    else:
+                        line = "  Credit allowance: status unavailable"
+                    if isinstance(allowance.get("limit"), (int, float)) and isinstance(
+                        allowance.get("remaining"), (int, float)
+                    ):
+                        line += f" · {allowance['limit']:,.2f} limit"
+                    resets_at = allowance.get("resets_at")
+                    if isinstance(resets_at, str) and resets_at:
+                        countdown, clock = format_reset(resets_at)
+                        line += f" · resets in {countdown} ({clock})"
+                    print(line)
             else:
                 print(f"  usage unavailable: {account['error'] or 'no data returned'}")
         return payload
