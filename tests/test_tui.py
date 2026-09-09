@@ -2105,6 +2105,39 @@ class TestAutoScreen:
             assert fake_engine.instances[0].stopped is True
             assert fake_engine.instances[1].dry_run is False
 
+    @pytest.mark.parametrize("warmup_enabled", [False, True])
+    async def test_codex_auto_does_not_offer_or_change_claude_warmup(
+        self, tmp_path, fake_engine, warmup_enabled
+    ):
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(json.dumps({
+            "schemaVersion": 1,
+            "autoswitch": {"warmupFiveHour": warmup_enabled},
+        }))
+        original_settings = settings_path.read_bytes()
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(7, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            await menu_select(pilot, "auto")
+            await menu_select(pilot, "auto:codex")
+            await pilot.pause()
+            screen = app.screen
+            from textual.widgets import Static
+
+            assert screen.check_action("toggle_warmup", ()) is False
+            summary = screen.query_one("#auto-summary", Static)
+            assert "warm-up" not in summary.render().plain
+            await pilot.press("w")
+            await pilot.pause()
+            assert app.screen is screen
+            screen.action_toggle_warmup()
+            await pilot.pause()
+            assert app.screen is screen
+            assert settings_path.read_bytes() == original_settings
+            assert fake_engine.instances[-1].applied_warmups == []
+
     async def test_five_hour_warmup_toggle_is_confirmed_and_persisted(
         self, tmp_path, fake_engine
     ):

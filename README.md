@@ -107,7 +107,7 @@ ccswap auto
 - **Strategies** (`--strategy`, or `ccswap config set autoswitch.strategy`): `best` (default) stays put until the active account nears its limit, then moves to the account with the most quota left. `consume-first` proactively keeps you on the account whose **weekly window resets soonest** — use-it-or-lose-it — switching to a sooner-resetting account (with room to spare) even below the threshold, so perishable weekly quota isn't wasted.
 - Usage polling is adaptive — a couple of accounts per check, busy alternates watched more closely, and exhausted ones checked about every ten minutes (or slower after 429s) — so API traffic stays flat no matter how many accounts you manage.
 - It fails safe: if a usage check errors it keeps trusting the last-known numbers while retries back off, and an expired token on an idle machine makes it hold rather than fail over (Claude Code refreshes the token on your next message).
-- An account whose refresh token has died is quarantined and reported until you either log in with it and re-run `ccswap add --slot N`, or replace its stored credentials from a known-good export — a plain `ccswap import backup.ccswap` replaces dead-token slots on its own (`--force` is still required to replace other existing accounts; note a stale export can carry an already-superseded token). API-key accounts are never rotated onto unless you pass `--include-api-key-accounts`.
+- An account whose refresh token has died is quarantined and reported until you either log in with it and re-run `ccswap add --slot N`, or replace its stored credentials from a known-good export — a plain `ccswap import backup.cswap` replaces dead-token slots on its own (`--force` is still required to replace other existing accounts; note a stale export can carry an already-superseded token). API-key accounts are never rotated onto unless you pass `--include-api-key-accounts`.
 - To hold an account out of rotation yourself — a work account you don't want touched, one you're resting — run `ccswap disable <num|email>`; `ccswap enable <num|email>` puts it back. Disabled accounts are skipped by auto-switch, bare `ccswap switch`, and the `best` / `next-available` strategies, but stay fully managed and remain a valid explicit `ccswap switch <num|email>` target. They show a `(disabled)` marker in `ccswap list`, in the [TUI](#interactive-dashboard-tui), and in the [menu bar](#menu-bar-macos) — both of which also let you toggle the state in place (TUI: menu → *Disable / enable account…*; menu bar: *Disable / enable account*).
 - By default only the account-wide 5h/7d windows drive switching. If you work on one model and hit its **weekly per-model limit** first (e.g. Fable), add `--model Fable` (or `ccswap config set autoswitch.model Fable`) to fold that model's window into the decision, so it switches off an account whose model quota is spent even while its 5h/7d windows still have room.
   - **Model names** are Anthropic's own per-model `display_name`s, matched case-insensitively. The exact strings for your accounts are the per-model rows in `ccswap list` (e.g. a line reading `Fable: 100%`).
@@ -125,17 +125,17 @@ Defaults like the threshold and cooldown are configurable with `ccswap config se
 
 ### Keep five-hour windows warm (opt-in)
 
-`cswap warmup` keeps stored OAuth accounts ready by checking usage every ten
+`ccswap warmup` keeps stored OAuth accounts ready by checking usage every ten
 minutes and sending one minimal Haiku request when an account has no live
 five-hour window. It remains available for people who want warming without
 automatic switching; otherwise enable `autoswitch.warmupFiveHour` and run only
-`cswap auto`:
+`ccswap auto`:
 
 ```bash
-cswap warmup --once --dry-run   # inspect every decision; spend no quota
-cswap warmup --once             # warm confirmed-cold accounts once
-cswap warmup                    # keep checking in the foreground
-cswap warmup --interval 900     # check every 15 minutes
+ccswap warmup --once --dry-run   # inspect every decision; spend no quota
+ccswap warmup --once             # warm confirmed-cold accounts once
+ccswap warmup                    # keep checking in the foreground
+ccswap warmup --interval 900     # check every 15 minutes
 ```
 
 This feature consumes real five-hour and weekly quota and is opt-in. It skips
@@ -151,7 +151,7 @@ Successful and potentially accepted warms are recorded in `warmup_state.json`,
 preventing an unavailable or stale usage snapshot from becoming a request on
 every ten-minute poll, and preventing duplicates from a second warmer process.
 The account lock stays held for each short warm request, so a simultaneous
-`cswap switch` may wait or time out instead of racing the request onto the wrong
+`ccswap switch` may wait or time out instead of racing the request onto the wrong
 login.
 
 ### Run multiple accounts at the same time (session mode)

@@ -160,6 +160,8 @@ class AutoScreen(Screen):
     # -- threshold adjust mode ------------------------------------------------
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "toggle_warmup" and self.provider != "claude":
+            return False  # warm-up requests use Claude subscription windows
         if action in ("threshold_step", "adjust_done") and not self._adjusting:
             return False  # hidden and inert until adjust mode is armed
         return True
@@ -221,11 +223,12 @@ class AutoScreen(Screen):
         if self._settings.threshold != self._configured_threshold:
             text.append(" (session)", style=palette.muted)
         text.append(f" · poll every {self._settings.interval_seconds:.0f}s")
-        text.append(" · 5h warm-up ")
-        text.append(
-            "on" if self._settings.warmup_five_hour else "off",
-            style=palette.accent if self._settings.warmup_five_hour else palette.muted,
-        )
+        if self.provider == "claude":
+            text.append(" · 5h warm-up ")
+            text.append(
+                "on" if self._settings.warmup_five_hour else "off",
+                style=palette.accent if self._settings.warmup_five_hour else palette.muted,
+            )
         if self._adjusting:
             text.append("   ← → adjust · enter done", style=palette.muted)
         self.query_one("#auto-summary", Static).update(text)
@@ -233,6 +236,8 @@ class AutoScreen(Screen):
     # -- five-hour warm-up -------------------------------------------------
 
     def action_toggle_warmup(self) -> None:
+        if self.provider != "claude":
+            return
         if self._settings.warmup_five_hour:
             self._set_warmup_enabled(False)
             return
@@ -244,7 +249,7 @@ class AutoScreen(Screen):
         )
         self.app.push_screen(
             ConfirmModal(
-                "Enable five-hour warm-up for `cswap auto`?\n\n"
+                "Enable five-hour warm-up for `ccswap auto`?\n\n"
                 "When live, it may send one minimal Haiku request after a "
                 "window expires or when usage remains unavailable. Successful "
                 "and uncertain attempts are protected against rapid repeats.\n\n"
@@ -262,7 +267,7 @@ class AutoScreen(Screen):
     def _set_warmup_enabled(self, enabled: bool) -> None:
         try:
             set_setting(
-                self.app.switcher.backup_dir,
+                self.app.switcher_for(self.provider).backup_dir,
                 "autoswitch.warmupFiveHour",
                 "true" if enabled else "false",
             )
@@ -279,7 +284,7 @@ class AutoScreen(Screen):
         state = "enabled" if enabled else "disabled"
         self.query_one("#event-log", RichLog).write(
             Text(
-                f"— five-hour warm-up {state} for cswap auto —",
+                f"— five-hour warm-up {state} for ccswap auto —",
                 style=Palette.from_theme(self.app.current_theme).muted,
             )
         )
