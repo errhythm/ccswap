@@ -363,7 +363,7 @@ def test_status_reads_the_jobs_own_state_not_a_nested_blocks(tmp_path):
     reported the endpoint's state as the service's.
     """
     printed = (
-        "gui/501/com.cswap.menubar = {\n"
+        "gui/501/com.ccswap.menubar = {\n"
         "\tactive count = 1\n"
         "\tstate = running\n"
         "\tpid = 25026\n"

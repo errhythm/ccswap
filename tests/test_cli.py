@@ -510,7 +510,7 @@ class TestCLI:
             _record(
                 "install",
                 {
-                    "label": "com.cswap.menubar",
+                    "label": "com.ccswap.menubar",
                     "plist": "/tmp/p.plist",
                     "program": ["/tmp/cswap", "menubar"],
                     "stdout_log": "/tmp/o.log",
@@ -520,14 +520,14 @@ class TestCLI:
         )
         monkeypatch.setattr(
             "claude_swap.launch_agent.uninstall",
-            _record("uninstall", {"label": "com.cswap.menubar", "was_loaded": True, "removed_plist": True}),
+            _record("uninstall", {"label": "com.ccswap.menubar", "was_loaded": True, "removed_plist": True}),
         )
         monkeypatch.setattr(
             "claude_swap.launch_agent.status",
             _record(
                 "status",
                 {
-                    "label": "com.cswap.menubar",
+                    "label": "com.ccswap.menubar",
                     "installed": True,
                     "loaded": True,
                     "state": "running",

@@ -36,7 +36,7 @@ from pathlib import Path
 
 from claude_swap.exceptions import ClaudeSwitchError
 
-LABEL = "com.cswap.menubar"
+LABEL = "com.ccswap.menubar"
 
 # launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin, which covers
 # `security` (Keychain reads) but not a Homebrew or ~/.local/bin `claude`. The
@@ -71,7 +71,7 @@ def log_paths(label: str = LABEL, home: Path | None = None) -> tuple[Path, Path]
 
 
 def service_target(label: str = LABEL, uid: int | None = None) -> str:
-    """launchd service target, e.g. ``gui/501/com.cswap.menubar``."""
+    """launchd service target, e.g. ``gui/501/com.ccswap.menubar``."""
     return f"gui/{os.getuid() if uid is None else uid}/{label}"
 
 

@@ -286,7 +286,7 @@ ccswap menubar --service-status      # installed? loaded? pid?
 ccswap menubar --uninstall-service   # stop it and remove the plist
 ```
 
-The agent lives at `~/Library/LaunchAgents/com.cswap.menubar.plist` and logs to `~/Library/Logs/com.cswap.menubar.{log,err}`. It pins the `ccswap` console script, whose path survives an upgrade — but the running process keeps the old build until it restarts, so after `ccswap upgrade` either re-run `--install-service` or `launchctl kickstart -k gui/$(id -u)/com.cswap.menubar`.
+The agent lives at `~/Library/LaunchAgents/com.ccswap.menubar.plist` and logs to `~/Library/Logs/com.ccswap.menubar.{log,err}`. It pins the `ccswap` console script, whose path survives an upgrade — but the running process keeps the old build until it restarts, so after `ccswap upgrade` either re-run `--install-service` or `launchctl kickstart -k gui/$(id -u)/com.ccswap.menubar`.
 
 </details>
 
