@@ -111,7 +111,7 @@ def test_build_plist_path_env_keeps_the_launchd_defaults(tmp_path):
 
 
 def test_resolve_program_prefers_the_console_script(tmp_path):
-    script = tmp_path / "cswap"
+    script = tmp_path / "ccswap"
     script.write_text("#!/bin/sh\n")
     with patch.object(launch_agent.sys, "argv", [str(script)]):
         assert launch_agent.resolve_program() == [str(script)]
@@ -125,11 +125,11 @@ def test_resolve_program_keeps_the_symlink_and_does_not_follow_it(tmp_path):
     """
     venv_bin = tmp_path / "venv" / "bin"
     venv_bin.mkdir(parents=True)
-    real = venv_bin / "cswap"
+    real = venv_bin / "ccswap"
     real.write_text("#!/bin/sh\n")
     link_dir = tmp_path / "local" / "bin"
     link_dir.mkdir(parents=True)
-    link = link_dir / "cswap"
+    link = link_dir / "ccswap"
     link.symlink_to(real)
 
     with patch.object(launch_agent.sys, "argv", [str(link)]):
@@ -137,10 +137,10 @@ def test_resolve_program_keeps_the_symlink_and_does_not_follow_it(tmp_path):
 
 
 def test_resolve_program_makes_a_relative_argv0_absolute(tmp_path, monkeypatch):
-    script = tmp_path / "cswap"
+    script = tmp_path / "ccswap"
     script.write_text("#!/bin/sh\n")
     monkeypatch.chdir(tmp_path)
-    with patch.object(launch_agent.sys, "argv", ["./cswap"]):
+    with patch.object(launch_agent.sys, "argv", ["./ccswap"]):
         result = launch_agent.resolve_program()
     assert result == [str(script)]
     assert Path(result[0]).is_absolute()

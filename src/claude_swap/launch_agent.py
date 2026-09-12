@@ -96,10 +96,10 @@ def resolve_program() -> list[str]:
     candidate = sys.argv[0] if sys.argv and sys.argv[0] else None
     if candidate is not None:
         absolute = Path(os.path.abspath(candidate))
-        if absolute.name == "cswap" and absolute.is_file():
+        if absolute.name == "ccswap" and absolute.is_file():
             return [str(absolute)]
 
-    which = shutil.which("cswap")
+    which = shutil.which("ccswap")
     if which:
         return [str(Path(os.path.abspath(which)))]
 

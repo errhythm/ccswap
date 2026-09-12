@@ -1082,7 +1082,7 @@ def _menubar_service(args) -> int:
         print(f"  logs:  {result['stderr_log']}")
         print(
             dimmed(
-                "It starts at login from now on. Re-run this after a cswap "
+                "It starts at login from now on. Re-run this after a ccswap "
                 "upgrade to point launchd at the new build."
             )
         )
@@ -1090,7 +1090,7 @@ def _menubar_service(args) -> int:
             # The hint printed above is about upgrades. A reinstall does not
             # restart the service that is already running, so say that here.
             warning(
-                unsupported + "\n  Then run: cswap menubar --install-service",
+                unsupported + "\n  Then run: ccswap menubar --install-service",
                 file=sys.stderr,
             )
         return 0
@@ -1106,7 +1106,7 @@ def _menubar_service(args) -> int:
     result = launch_agent.status()
     if not result["installed"] and not result["loaded"]:
         print("Menu bar service is not installed.")
-        print(dimmed("Install it with: cswap menubar --install-service"))
+        print(dimmed("Install it with: ccswap menubar --install-service"))
         return 0
     state = result["state"] or ("loaded" if result["loaded"] else "stopped")
     pid = f" (pid {result['pid']})" if result["pid"] else ""
