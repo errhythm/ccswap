@@ -1,10 +1,55 @@
 # ccswap (Claude Codex Swap)
 
+[![CI](https://github.com/errhythm/ccswap/actions/workflows/ci.yml/badge.svg)](https://github.com/errhythm/ccswap/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ccswap.svg)](https://pypi.org/project/ccswap/)
+[![Python versions](https://img.shields.io/pypi/pyversions/ccswap.svg)](https://pypi.org/project/ccswap/)
+[![Downloads](https://img.shields.io/pypi/dm/ccswap.svg)](https://pypi.org/project/ccswap/)
+[![License](https://img.shields.io/pypi/l/ccswap.svg)](LICENSE)
 
 Multi-account and usage manager for Claude Code and OpenAI Codex. Save multiple logins, check their quota windows, switch manually or automatically before you hit a rate limit, and manage both providers from one dashboard.
 
-`ccswap` began as a fork of [claude-swap (`cswap`)](https://github.com/realiti4/claude-swap) by Onur Cetinkol, and still carries the original MIT license and credit for that. Since then it's grown into its own project: no more tracking upstream, no `cswap` compatibility, its own package and release line, and adds Codex support. It's MIT-licensed too, so fork it, file issues, send PRs — whatever's useful to you.
+<img src="assets/tui-watch.png" width="760" alt="ccswap watch — live 5h/7d usage bars for every account, with reset times and the active account marked">
+
+## What it does
+
+- Stores several Claude Code logins and several Codex CLI logins side by side, and switches the active one with `ccswap switch 2` or `ccswap codex switch 2`.
+- Reads each account's quota windows: Claude's 5-hour and 7-day usage, Codex's weekly window and credit balance, and every reset time, all in `ccswap list`.
+- `ccswap auto` polls every 60 seconds and moves to the account with the most quota left once the active one crosses the threshold (default 90%), so the switch happens before the rate limit does.
+- `ccswap run 2` launches Claude Code as account 2 in the current terminal only, leaving every other terminal on your default login, so two accounts work in parallel.
+- Maps a directory to an account, so a bare `ccswap run` in that repo starts the right login.
+- Full-screen TUI dashboard (`ccswap tui`, or `ccswap watch` for the live monitor) showing both providers with live usage and keyboard-driven switching, on macOS, Linux, and Windows.
+- Optional macOS menu-bar app with 5h / 7d / spend per account and click-to-switch, installable as a launchd agent that starts at login.
+- `--json` on `list`, `status`, and `switch`, plus `ccswap auto --once` with outcome exit codes, for cron jobs and scripts.
+
+## Quick start
+
+```bash
+uv tool install ccswap
+
+# Log into Claude Code with your first account, then:
+ccswap add
+# Log in with the next account, then:
+ccswap add
+
+ccswap list       # every account's usage and reset times
+ccswap switch 2   # or: ccswap switch --strategy best
+ccswap auto       # or let it switch for you before a limit is hit
+```
+
+Codex accounts work the same way: run `codex login`, then `ccswap codex add`.
+
+## Contents
+
+- [Installation](#installation)
+- [Usage](#usage)
+- [Restarts and session behavior](#restarts-and-session-behavior)
+- [How it works](#how-it-works)
+- [Where ccswap stores data](#where-ccswap-stores-data)
+- [Menu bar (macOS)](#menu-bar-macos)
+- [Advanced](#advanced)
+- [Uninstall](#uninstall)
+- [Requirements](#requirements)
+- [License and credits](#license-and-credits)
 
 ## Installation
 
@@ -23,8 +68,8 @@ pipx install ccswap
 ### From source
 
 ```bash
-git clone https://github.com/errhythm/cc-swap.git
-cd cc-swap
+git clone https://github.com/errhythm/ccswap.git
+cd ccswap
 uv sync
 uv run ccswap help
 ```
@@ -80,9 +125,9 @@ ccswap list
 
 Or ccswap auto-picks by remaining quota — `ccswap switch --strategy best` (most quota left) or `--strategy next-available` (skip rate-limited accounts).
 
-**Note:** You usually don't need to restart — on Linux/Windows the new account is picked up automatically, and on macOS after the Keychain cache expires. To apply it instantly, restart Claude Code or reopen the VS Code extension tab. See [Tips](#tips) for the per-platform details.
+**Note:** You usually don't need to restart — on Linux/Windows the new account is picked up automatically, and on macOS after the Keychain cache expires. To apply it instantly, restart Claude Code or reopen the VS Code extension tab. See [Restarts and session behavior](#restarts-and-session-behavior) for the per-platform details.
 
-### Automatic switching
+### Automatic switching before you hit a rate limit
 
 Let ccswap watch your usage and switch for you. When the active account's 5-hour or 7-day window reaches the threshold (default 90%), it switches to the account with the most quota left — before you hit the limit, and safe to run while Claude Code is working:
 
@@ -168,9 +213,7 @@ Subfolders inherit the nearest mapped ancestor. In an unmapped directory, `ccswa
 
 Run `ccswap` on its own (or `ccswap tui`) for the full-screen dashboard: Claude Code and Codex appear together in labelled sections, with live usage, provider-correct switching, and auto-switching, all keyboard-driven. Arrow-key and Vim-style menu navigation wraps at both ends. The menu's **Settings…** screen cycles the theme, dashboard view, auto-switch threshold, and strategy; its dashboard view can show both providers or only Claude Code / Codex without stopping background updates for the hidden provider. `ccswap watch` opens straight into the live monitor using the selected dashboard view. Works on macOS, Linux, and Windows.
 
-<img src="assets/tui-watch.png" width="760" alt="ccswap watch — live 5h/7d usage bars for every account, with reset times and the active account marked">
-
-### Codex accounts
+### Codex CLI accounts
 
 `ccswap` can also save and switch Codex CLI logins. Log into each account with `codex login`, then save it before logging into the next one:
 
@@ -204,7 +247,7 @@ ccswap add
 
 This will update the stored credentials without creating a duplicate.
 
-### Other commands
+### Command reference
 
 ```bash
 ccswap run 2                     # Run an account in this terminal only (session mode)
@@ -233,7 +276,7 @@ ccswap upgrade                   # Upgrade ccswap to the latest version
 ccswap purge                     # Remove all ccswap data
 ```
 
-## Tips
+## Restarts and session behavior
 
 - **Do you need to restart after switching?** For **Claude Code**, usually not. On **Linux and Windows**, credentials are stored in a file and Claude Code re-reads them whenever that file changes, so the new account takes effect on your next message — no restart needed. On **macOS**, credentials live in the Keychain, which Claude Code caches for about 30 seconds; a running session picks up the switch once that cache expires. Restart Claude Code (or close and reopen the VS Code extension tab) only if you want the change to apply instantly.
 - **Codex always needs a restart.** Unlike Claude Code, the Codex CLI reads `auth.json` once when it starts and keeps the login in memory — it never re-reads the file or caches it on a timer. A running Codex session therefore keeps using the old account no matter what you swap underneath it. `ccswap codex switch` and `ccswap codex auto` write the selected login and tailor the reminder to your machine: if a Codex process is running they tell you to quit and relaunch it (or start a new session / reload the IDE extension); if none is running they confirm the account is ready for the next launch. This is a limitation of the Codex CLI, not ccswap — there is no flag, signal, or config setting that makes a live Codex reload credentials, and ccswap deliberately does not kill your running Codex process for you.
@@ -252,7 +295,7 @@ ccswap purge                     # Remove all ccswap data
 - Usage numbers refresh every few minutes — faster for an account being used or close to switching, slower for idle ones — keeping ccswap comfortably inside Anthropic's rate limits however many dashboards you keep open on a machine. An age note like `· 6m ago` just means the next scheduled check hasn't come yet, not that something is stuck.
 - Codex usage checks refresh inactive saved logins when possible; running Codex sessions must be restarted after a Codex account switch
 
-## Data locations
+## Where ccswap stores data
 
 | Platform | Credentials | Config backups |
 |----------|-------------|----------------|
@@ -276,7 +319,7 @@ uv tool install 'ccswap[menubar]'   # or: pipx install 'ccswap[menubar]'
 ccswap menubar
 ```
 
-Shows every account's 5h / 7d / spend usage and switches with a click (specific / rotate / best / next-available), plus the TUI's add / disable-enable / remove / refresh actions. Enable *Settings → Auto-switch accounts* to run the same engine as [`ccswap auto`](#automatic-switching) in the background; it shares the `autoswitch.*` settings, so the menu bar and CLI stay in sync. Off until you turn it on.
+Shows every account's 5h / 7d / spend usage and switches with a click (specific / rotate / best / next-available), plus the TUI's add / disable-enable / remove / refresh actions. Enable *Settings → Auto-switch accounts* to run the same engine as [`ccswap auto`](#automatic-switching-before-you-hit-a-rate-limit) in the background; it shares the `autoswitch.*` settings, so the menu bar and CLI stay in sync. Off until you turn it on.
 
 **Keep it running without a terminal.** `ccswap menubar` runs in the foreground, so the status item dies with the terminal that started it and does not come back after a reboot. `--install-service` hands it to launchd instead — starts at login, restarts on crash, no `.app` bundle:
 
@@ -433,6 +476,8 @@ pipx uninstall ccswap
 - Claude Code and/or Codex CLI
 - A file-backed login for managed Codex accounts
 
-## License
+## License and credits
+
+`ccswap` began as a fork of [claude-swap (`cswap`)](https://github.com/realiti4/claude-swap) by Onur Cetinkol, and still carries the original MIT license and credit for that. Since then it's grown into its own project: no more tracking upstream, no `cswap` compatibility, its own package and release line, and adds Codex support. It's MIT-licensed too, so fork it, file issues, send PRs — whatever's useful to you.
 
 MIT. This fork retains the original project's copyright and license notice; see [LICENSE](LICENSE). Upstream: [realiti4/claude-swap](https://github.com/realiti4/claude-swap).
