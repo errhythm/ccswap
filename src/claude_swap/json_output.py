@@ -124,6 +124,35 @@ def usage_to_json(usage: dict, fetched_at: float | None = None) -> dict:
         if "expires_at" in resets:
             resets_out["earliestExpiresAt"] = resets["expires_at"]
         out["resetCredits"] = resets_out
+    if "credits" in usage:
+        credits = usage["credits"]
+        credits_out: dict = {}
+        for source_key, target_key in (
+            ("has_credits", "hasCredits"),
+            ("unlimited", "unlimited"),
+            ("limit_reached", "limitReached"),
+            ("balance", "balance"),
+            ("approx_local_messages", "approxLocalMessages"),
+            ("approx_cloud_messages", "approxCloudMessages"),
+        ):
+            if source_key in credits:
+                credits_out[target_key] = credits[source_key]
+        out["credits"] = credits_out
+    if "credit_allowance" in usage:
+        allowance = usage["credit_allowance"]
+        allowance_out: dict = {}
+        for source_key, target_key in (
+            ("limit_reached", "limitReached"),
+            ("used", "used"),
+            ("limit", "limit"),
+            ("remaining", "remaining"),
+            ("pct", "pct"),
+        ):
+            if source_key in allowance:
+                allowance_out[target_key] = allowance[source_key]
+        if "resets_at" in allowance:
+            allowance_out["resetsAt"] = allowance["resets_at"]
+        out["creditAllowance"] = allowance_out
     if "spend" in usage:
         spend = usage["spend"]
         spend_out: dict = {

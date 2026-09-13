@@ -180,6 +180,61 @@ def reset_credits_text(last_good: dict | None, now: float) -> str | None:
     return text
 
 
+def credits_text(
+    last_good: dict | None, now: float, *, compact: bool = False
+) -> str | None:
+    """Codex workspace/purchased credit balance."""
+    del now
+    if not isinstance(last_good, dict):
+        return None
+    credits = last_good.get("credits")
+    if not isinstance(credits, dict):
+        return None
+    if credits.get("limit_reached") is True:
+        return "limit reached"
+    if credits.get("unlimited") is True:
+        return "unlimited"
+    if credits.get("has_credits") is False:
+        return "none"
+
+    balance = credits.get("balance")
+    if isinstance(balance, (int, float)):
+        return f"{balance:,.2f} available"
+    if credits.get("has_credits") is True:
+        return "available" if compact else "available · balance not reported"
+    return None
+
+
+def credit_allowance_text(
+    last_good: dict | None, now: float, *, compact: bool = False
+) -> str | None:
+    """Per-user monthly workspace allowance, separate from credit balance."""
+    if not isinstance(last_good, dict):
+        return None
+    allowance = last_good.get("credit_allowance")
+    if not isinstance(allowance, dict):
+        return None
+
+    remaining = allowance.get("remaining")
+    limit = allowance.get("limit")
+    if allowance.get("limit_reached") is True:
+        text = "limit reached"
+    elif isinstance(remaining, (int, float)):
+        text = f"{remaining:,.2f} remaining"
+    elif isinstance(limit, (int, float)):
+        text = f"{limit:,.2f} limit"
+    else:
+        return None
+    if not compact and isinstance(limit, (int, float)) and isinstance(
+        remaining, (int, float)
+    ):
+        text += f" · {limit:,.2f} limit"
+    reset = data.reset_text({"resets_at": allowance.get("resets_at")}, now)
+    if reset and not compact:
+        text += f" · {reset}"
+    return text
+
+
 def account_card_text(
     acc: AccountSnapshot,
     width: int,
@@ -227,7 +282,10 @@ def account_card_text(
         return text
 
     rows = usage_rows(acc.usage.last_good, now, acc.usage.fetched_at)
-    if not rows:
+    credits = credits_text(acc.usage.last_good, now)
+    allowance = credit_allowance_text(acc.usage.last_good, now)
+    resets = reset_credits_text(acc.usage.last_good, now)
+    if not rows and not credits and not allowance and not resets:
         text.append("\n    ")
         text.append("usage unavailable", style=palette.muted)
         if acc.usage.last_error:
@@ -238,29 +296,37 @@ def account_card_text(
             text.append(f" · {note}", style=palette.muted)
         return text
 
-    stale = acc.usage.age_s is not None and acc.usage.age_s > STALE_OK_S
-    label_width = max(len(label) for label, _pct, _suffix, _full in rows)
-    bar_width = max(12, min(30, width - 42 - label_width))
-    # everything on a row except the suffix: indent, label, bar, " NNN%", gap
-    row_overhead = 4 + label_width + 1 + bar_width + 5 + 2
-    for label, pct, suffix, suffix_full in rows:
-        # per-row: show the absolute clock only where it fits, so a long
-        # spend row degrading doesn't cost the 5h/7d rows their clocks
-        if suffix_full != suffix and row_overhead + len(suffix_full) <= width:
-            suffix = suffix_full
-        text.append("\n    ")
-        text.append(
-            usage_bar(
-                f"{label:<{label_width}}",
-                pct,
-                suffix or None,
-                bar_width,
-                stale=stale,
-                threshold=threshold,
-                palette=palette,
+    if rows:
+        stale = acc.usage.age_s is not None and acc.usage.age_s > STALE_OK_S
+        label_width = max(len(label) for label, _pct, _suffix, _full in rows)
+        bar_width = max(12, min(30, width - 42 - label_width))
+        # everything on a row except the suffix: indent, label, bar, " NNN%", gap
+        row_overhead = 4 + label_width + 1 + bar_width + 5 + 2
+        for label, pct, suffix, suffix_full in rows:
+            # per-row: show the absolute clock only where it fits, so a long
+            # spend row degrading doesn't cost the 5h/7d rows their clocks
+            if suffix_full != suffix and row_overhead + len(suffix_full) <= width:
+                suffix = suffix_full
+            text.append("\n    ")
+            text.append(
+                usage_bar(
+                    f"{label:<{label_width}}",
+                    pct,
+                    suffix or None,
+                    bar_width,
+                    stale=stale,
+                    threshold=threshold,
+                    palette=palette,
+                )
             )
-        )
-    resets = reset_credits_text(acc.usage.last_good, now)
+    if credits:
+        text.append("\n    ")
+        text.append("Credits ", style=palette.muted)
+        text.append(credits, style=palette.foreground)
+    if allowance:
+        text.append("\n    ")
+        text.append("Allowance ", style=palette.muted)
+        text.append(allowance, style=palette.foreground)
     if resets:
         text.append("\n    ")
         text.append("Resets ", style=palette.muted)
@@ -332,6 +398,18 @@ def mini_account_text(
         if parts:
             text.append(" · ", style=palette.track)
         text.append(f"{name} (!)", style=palette.sev_crit)
+        parts += 1
+    credits = credits_text(last_good, now, compact=True)
+    if credits:
+        if parts:
+            text.append(" · ", style=palette.track)
+        text.append(f"Credits {credits}", style=palette.muted)
+        parts += 1
+    allowance = credit_allowance_text(last_good, now, compact=True)
+    if allowance:
+        if parts:
+            text.append(" · ", style=palette.track)
+        text.append(f"Allowance {allowance}", style=palette.muted)
         parts += 1
     resets = reset_credits_text(last_good, now)
     if resets:

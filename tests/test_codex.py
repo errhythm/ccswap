@@ -506,7 +506,16 @@ def test_usage_text_output_includes_reset_countdown(switcher, monkeypatch, capsy
         codex,
         "fetch_codex_usage",
         lambda auth, *, base_url: {
-            "five_hour": {"pct": 47, "resets_at": "2999-01-01T00:00:00Z"}
+            "five_hour": {"pct": 47, "resets_at": "2999-01-01T00:00:00Z"},
+            "credits": {
+                "has_credits": True,
+                "balance": 2500.0,
+            },
+            "credit_allowance": {
+                "remaining": 4678.44787979126,
+                "limit": 5000.0,
+                "resets_at": "2999-01-01T00:00:00Z",
+            },
         },
     )
 
@@ -515,3 +524,50 @@ def test_usage_text_output_includes_reset_countdown(switcher, monkeypatch, capsy
     out = capsys.readouterr().out
     assert "47% used" in out
     assert "resets in" in out
+    assert "Credits: 2,500.00 available" in out
+    assert "Credit allowance: 4,678.45 remaining · 5,000.00 limit" in out
+
+
+def test_usage_text_output_prefers_no_credits_to_zero_balance(
+    switcher, monkeypatch, capsys
+):
+    instance, home = switcher
+    _write_live(home, _auth_with_plan("team@example.com", "acct-team", "team"))
+    instance.add_account(assume_yes=True)
+    monkeypatch.setattr(
+        codex,
+        "fetch_codex_usage",
+        lambda auth, *, base_url: {
+            "credits": {"has_credits": False, "balance": 0.0}
+        },
+    )
+
+    instance.usage_status()
+
+    out = capsys.readouterr().out
+    assert "Credits: none" in out
+    assert "available" not in out
+
+
+@pytest.mark.parametrize(
+    ("credits", "expected"),
+    [
+        ({"has_credits": False, "limit_reached": True}, "Credits: limit reached"),
+        ({"has_credits": False, "unlimited": True}, "Credits: unlimited"),
+    ],
+)
+def test_usage_text_output_credit_state_precedence(
+    switcher, monkeypatch, capsys, credits, expected
+):
+    instance, home = switcher
+    _write_live(home, _auth_with_plan("team@example.com", "acct-team", "team"))
+    instance.add_account(assume_yes=True)
+    monkeypatch.setattr(
+        codex,
+        "fetch_codex_usage",
+        lambda auth, *, base_url: {"credits": credits},
+    )
+
+    instance.usage_status()
+
+    assert expected in capsys.readouterr().out

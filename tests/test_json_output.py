@@ -37,6 +37,17 @@ class TestJsonHelpers:
                     "available": 3,
                     "expires_at": "2026-07-20T12:00:00Z",
                 },
+                "credits": {
+                    "has_credits": True,
+                    "unlimited": False,
+                    "balance": 2500.0,
+                },
+                "credit_allowance": {
+                    "remaining": 4678.45,
+                    "limit": 5000.0,
+                    "pct": 6.0,
+                    "resets_at": "2026-10-01T00:00:00Z",
+                },
             }
         )
 
@@ -45,6 +56,17 @@ class TestJsonHelpers:
             "resetCredits": {
                 "available": 3,
                 "earliestExpiresAt": "2026-07-20T12:00:00Z",
+            },
+            "credits": {
+                "hasCredits": True,
+                "unlimited": False,
+                "balance": 2500.0,
+            },
+            "creditAllowance": {
+                "remaining": 4678.45,
+                "limit": 5000.0,
+                "pct": 6.0,
+                "resetsAt": "2026-10-01T00:00:00Z",
             },
         }
 

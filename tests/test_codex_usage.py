@@ -116,6 +116,161 @@ def test_weekly_only_primary_is_classified_from_duration(monkeypatch):
     }
 
 
+def test_fetch_usage_adds_credit_allowance_and_availability(monkeypatch):
+    class Response:
+        def read(self):
+            return json.dumps(
+                {
+                    "rate_limit": {
+                        "primary_window": {
+                            "used_percent": 28,
+                            "limit_window_seconds": 604_800,
+                        }
+                    },
+                    "credits": {
+                        "has_credits": True,
+                        "unlimited": False,
+                        "overage_limit_reached": False,
+                        "balance": None,
+                    },
+                    "spend_control": {
+                        "reached": False,
+                        "individual_limit": {
+                            "limit": "5000",
+                            "used": "321.55212020874023",
+                            "remaining": "4678.44787979126",
+                            "used_percent": 6,
+                            "reset_at": 1_800_000_000,
+                        },
+                    },
+                }
+            ).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        codex_usage.urllib.request, "urlopen", lambda request, *, timeout: Response()
+    )
+
+    assert codex_usage.fetch_codex_usage(_auth()) == {
+        "weekly": {"pct": 28.0},
+        "credits": {
+            "has_credits": True,
+            "unlimited": False,
+            "limit_reached": False,
+        },
+        "credit_allowance": {
+            "limit": 5000.0,
+            "used": 321.55212020874023,
+            "remaining": 4678.44787979126,
+            "pct": 6.0,
+            "limit_reached": False,
+            "resets_at": "2027-01-15T08:00:00Z",
+        },
+    }
+
+
+def test_fetch_usage_keeps_credit_balance_when_no_individual_limit(monkeypatch):
+    class Response:
+        def read(self):
+            return json.dumps(
+                {
+                    "rate_limit": {"primary_window": {"used_percent": 1}},
+                    "credits": {
+                        "has_credits": True,
+                        "unlimited": False,
+                        "balance": "2500",
+                        "approx_local_messages": 125,
+                    },
+                    "spend_control": {"reached": False, "individual_limit": None},
+                }
+            ).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        codex_usage.urllib.request, "urlopen", lambda request, *, timeout: Response()
+    )
+
+    usage = codex_usage.fetch_codex_usage(_auth())
+
+    assert usage["credits"] == {
+        "has_credits": True,
+        "unlimited": False,
+        "balance": 2500.0,
+        "approx_local_messages": 125.0,
+    }
+    assert "credit_allowance" not in usage
+
+
+def test_fetch_usage_accepts_credit_only_payload_and_preserves_no_credits(monkeypatch):
+    class Response:
+        def read(self):
+            return json.dumps(
+                {
+                    "rate_limit": None,
+                    "credits": {
+                        "has_credits": False,
+                        "unlimited": False,
+                        "overage_limit_reached": False,
+                        "balance": "0",
+                    },
+                    "spend_control": {"reached": False, "individual_limit": None},
+                }
+            ).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        codex_usage.urllib.request, "urlopen", lambda request, *, timeout: Response()
+    )
+
+    assert codex_usage.fetch_codex_usage(_auth()) == {
+        "credits": {
+            "has_credits": False,
+            "unlimited": False,
+            "limit_reached": False,
+            "balance": 0.0,
+        }
+    }
+
+
+def test_fetch_usage_accepts_reached_allowance_without_rate_limit(monkeypatch):
+    class Response:
+        def read(self):
+            return json.dumps(
+                {
+                    "spend_control": {"reached": True, "individual_limit": None},
+                }
+            ).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        codex_usage.urllib.request, "urlopen", lambda request, *, timeout: Response()
+    )
+
+    assert codex_usage.fetch_codex_usage(_auth()) == {
+        "credit_allowance": {"limit_reached": True}
+    }
+
+
 def test_fetch_usage_adds_banked_reset_count_and_earliest_expiry(monkeypatch):
     requested = []
 

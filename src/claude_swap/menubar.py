@@ -273,6 +273,34 @@ def usage_summary(
         if countdown:
             seg += f" (expires {countdown})"
         parts.append(seg)
+    credits = usage.get("credits")
+    if isinstance(credits, dict):
+        if credits.get("limit_reached") is True:
+            seg = "Credits limit reached"
+        elif credits.get("unlimited") is True:
+            seg = "Credits unlimited"
+        elif credits.get("has_credits") is False:
+            seg = "Credits none"
+        elif isinstance(credits.get("balance"), (int, float)):
+            seg = f"Credits {credits['balance']:,.2f}"
+        elif credits.get("has_credits") is True:
+            seg = "Credits available"
+        else:
+            seg = ""
+        if seg:
+            parts.append(seg)
+    allowance = usage.get("credit_allowance")
+    if isinstance(allowance, dict):
+        if allowance.get("limit_reached") is True:
+            seg = "Allowance limit reached"
+        elif isinstance(allowance.get("remaining"), (int, float)):
+            seg = f"Allowance {allowance['remaining']:,.2f} left"
+        elif isinstance(allowance.get("limit"), (int, float)):
+            seg = f"Allowance {allowance['limit']:,.2f} limit"
+        else:
+            seg = ""
+        if seg:
+            parts.append(seg)
     # Per-model weekly limits (e.g. Fable), from the usage API's ``limits`` array.
     for window in usage.get("scoped") or []:
         window = _rolled_weekly_window(window, now)  # weekly cadence, same roll-forward

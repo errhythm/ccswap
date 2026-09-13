@@ -149,6 +149,31 @@ def test_usage_summary_codex_weekly_and_banked_resets():
     )
 
 
+def test_usage_summary_codex_credit_allowance():
+    usage = {
+        "weekly": {"pct": 42.0},
+        "credits": {"has_credits": True, "balance": 2500.0},
+        "credit_allowance": {
+            "remaining": 4678.44787979126,
+            "limit": 5000.0,
+        },
+    }
+    assert menubar.usage_summary(usage) == (
+        "Weekly 42% · Credits 2,500.00 · Allowance 4,678.45 left"
+    )
+
+
+def test_usage_summary_no_credits_wins_over_zero_balance():
+    usage = {"credits": {"has_credits": False, "balance": 0.0}}
+    assert menubar.usage_summary(usage) == "Credits none"
+    assert menubar.usage_summary(
+        {"credits": {"has_credits": False, "limit_reached": True}}
+    ) == "Credits limit reached"
+    assert menubar.usage_summary(
+        {"credits": {"has_credits": False, "unlimited": True}}
+    ) == "Credits unlimited"
+
+
 def test_usage_summary_includes_scoped_model_limits():
     # Per-model weekly limits (e.g. Fable) come through as usage["scoped"], after
     # 5h/7d and before spend.
