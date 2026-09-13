@@ -377,6 +377,144 @@ def test_reset_credit_detail_failure_keeps_usage_and_count(monkeypatch):
     }
 
 
+def test_number_rejects_a_huge_integer_instead_of_raising():
+    # float(10**400) raises OverflowError; _number must degrade to None, not crash.
+    assert codex_usage._number(10**400) is None
+
+
+def test_iso_timestamp_rejects_millisecond_epoch_and_nan():
+    # A millisecond epoch where seconds were expected overflows datetime's year range.
+    assert codex_usage._iso_timestamp(1_800_000_000_000) is None
+    assert codex_usage._iso_timestamp(float("nan")) is None
+    assert codex_usage._iso_timestamp(10**19) is None
+
+
+def test_convert_payload_rejects_banked_resets_alone():
+    try:
+        codex_usage._convert_payload({"rate_limit_reset_credits": {"available_count": 0}})
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
+def test_convert_payload_rejects_message_estimate_only_credits():
+    try:
+        codex_usage._convert_payload({"credits": {"approx_local_messages": 5}})
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
+def test_convert_payload_rejects_empty_payload():
+    try:
+        codex_usage._convert_payload({})
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
+def test_convert_payload_accepts_real_credit_balance_without_windows():
+    assert codex_usage._convert_payload({"credits": {"balance": 12.5}}) == {
+        "credits": {"balance": 12.5}
+    }
+
+
+def test_convert_payload_accepts_has_credits_flag_without_windows():
+    assert codex_usage._convert_payload({"credits": {"has_credits": True}}) == {
+        "credits": {"has_credits": True}
+    }
+
+
+def test_convert_payload_accepts_unlimited_flag_without_windows():
+    assert codex_usage._convert_payload({"credits": {"unlimited": True}}) == {
+        "credits": {"unlimited": True}
+    }
+
+
+def test_convert_payload_accepts_real_spend_allowance_without_windows():
+    assert codex_usage._convert_payload(
+        {"spend_control": {"individual_limit": {"limit": 100, "used": 10}}}
+    ) == {"credit_allowance": {"limit": 100.0, "used": 10.0}}
+
+
+def test_window_degrades_millisecond_epoch_reset_instead_of_raising():
+    # A millisecond epoch (year overflow) must drop resets_at, not crash the
+    # whole conversion; used_percent is still valid so the window survives.
+    usage = codex_usage._convert_payload(
+        {"rate_limit": {"primary_window": {"used_percent": 50, "reset_at": 1_800_000_000_000}}}
+    )
+    assert usage == {"five_hour": {"pct": 50.0}}
+
+
+def test_window_degrades_nan_reset_instead_of_raising():
+    usage = codex_usage._convert_payload(
+        {"rate_limit": {"primary_window": {"used_percent": 50, "reset_at": float("nan")}}}
+    )
+    assert usage == {"five_hour": {"pct": 50.0}}
+
+
+def test_window_rejects_huge_used_percent_instead_of_raising():
+    try:
+        codex_usage._convert_payload(
+            {"rate_limit": {"primary_window": {"used_percent": 10**400}}}
+        )
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
+def test_window_drops_nan_used_percent_rather_than_emitting_bare_nan():
+    # json.dumps({"pct": float("nan")}) emits invalid JSON (`NaN`) for
+    # `ccswap codex usage --json` consumers; a NaN pct must not reach output.
+    try:
+        codex_usage._convert_payload(
+            {"rate_limit": {"primary_window": {"used_percent": float("nan")}}}
+        )
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
+def test_reset_credits_rejects_nan_available_count_instead_of_raising():
+    try:
+        codex_usage._convert_payload(
+            {"rate_limit_reset_credits": {"available_count": float("nan")}}
+        )
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
+def test_reset_credits_rejects_infinite_available_count_instead_of_raising():
+    try:
+        codex_usage._convert_payload(
+            {"rate_limit_reset_credits": {"available_count": float("inf")}}
+        )
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
+def test_convert_payload_rejects_bare_allowance_reset_timestamp():
+    # A bare reset_at with no limit/used/remaining/pct/limit_reached is not a
+    # real allowance and must not be accepted as healthy account data.
+    try:
+        codex_usage._convert_payload(
+            {"spend_control": {"individual_limit": {"reset_at": 1_800_000_000}}}
+        )
+    except codex_usage.CodexUsageError as exc:
+        assert "Codex did not return quota or credit data" in str(exc)
+    else:
+        raise AssertionError("expected a Codex usage error")
+
+
 def test_fetch_usage_explains_expired_or_unauthorized_credentials(monkeypatch):
     def urlopen(request, *, timeout):
         raise codex_usage.urllib.error.HTTPError(

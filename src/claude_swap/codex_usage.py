@@ -104,14 +104,18 @@ def _window(window: object) -> dict[str, Any] | None:
     pct = window.get("used_percent")
     if isinstance(pct, bool) or not isinstance(pct, (int, float)):
         return None
-    result: dict[str, Any] = {"pct": float(pct)}
+    # Keep the type gate above (this path must stay numbers-only, unlike
+    # _number's string support) but route the actual conversion through the
+    # shared helper so huge/NaN values degrade instead of crashing.
+    pct_value = _number(pct)
+    if pct_value is None:
+        return None
+    result: dict[str, Any] = {"pct": pct_value}
     reset_at = window.get("reset_at")
     if isinstance(reset_at, (int, float)) and not isinstance(reset_at, bool):
-        result["resets_at"] = (
-            datetime.fromtimestamp(reset_at, timezone.utc)
-            .isoformat(timespec="seconds")
-            .replace("+00:00", "Z")
-        )
+        resets_at = _iso_timestamp(reset_at)
+        if resets_at is not None:
+            result["resets_at"] = resets_at
     return result
 
 
@@ -141,11 +145,19 @@ def _window_key(window: object, fallback: str) -> str:
 
 def _iso_timestamp(value: object) -> str | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return (
-            datetime.fromtimestamp(value, timezone.utc)
-            .isoformat(timespec="seconds")
-            .replace("+00:00", "Z")
-        )
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        # API-controlled numbers can be out of datetime's range (a millisecond
+        # epoch where seconds were expected, or plain garbage) — degrade to
+        # None instead of crashing the caller.
+        try:
+            return (
+                datetime.fromtimestamp(value, timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
+        except (ValueError, OverflowError, OSError):
+            return None
     if isinstance(value, str) and value:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -165,7 +177,10 @@ def _reset_credits(payload: object) -> dict[str, Any] | None:
     count = payload.get("available_count", payload.get("availableCount"))
     if isinstance(count, bool) or not isinstance(count, (int, float)):
         return None
-    result: dict[str, Any] = {"available": max(0, int(count))}
+    count_value = _number(count)
+    if count_value is None:
+        return None
+    result: dict[str, Any] = {"available": max(0, int(count_value))}
     credits = payload.get("credits")
     if isinstance(credits, list):
         expiries = [
@@ -189,7 +204,10 @@ def _number(value: object) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        number = float(value)
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
     elif isinstance(value, str):
         try:
             number = float(value)
@@ -249,9 +267,32 @@ def _credit_allowance(payload: dict[str, Any]) -> dict[str, Any] | None:
             result["resets_at"] = resets_at
 
     reached = spend_control.get("reached")
-    if reached is True or (isinstance(reached, bool) and result):
+    if reached is True or (reached is False and result):
         result["limit_reached"] = reached
     return result or None
+
+
+# Credit fields that reflect real credit state. `approx_local_messages` and
+# `approx_cloud_messages` are rough estimates only, not evidence of usable
+# credit, so they don't count on their own.
+_SUBSTANTIVE_CREDIT_KEYS = frozenset({"has_credits", "unlimited", "limit_reached", "balance"})
+# A bare `resets_at` (or nothing) is not a real allowance — only these mean the
+# account actually carries spend/limit state.
+_SUBSTANTIVE_ALLOWANCE_KEYS = frozenset({"limit", "used", "remaining", "pct", "limit_reached"})
+
+
+def _has_substantive_data(usage: dict[str, Any]) -> bool:
+    """Reject a payload that only degrades to banked resets or message
+    estimates — those alone must not overwrite a healthy last-good usage row."""
+    if "five_hour" in usage or "weekly" in usage:
+        return True
+    credits = usage.get("credits")
+    if isinstance(credits, dict) and not _SUBSTANTIVE_CREDIT_KEYS.isdisjoint(credits):
+        return True
+    allowance = usage.get("credit_allowance")
+    if isinstance(allowance, dict) and not _SUBSTANTIVE_ALLOWANCE_KEYS.isdisjoint(allowance):
+        return True
+    return False
 
 
 def _convert_payload(payload: object) -> dict[str, Any]:
@@ -277,7 +318,7 @@ def _convert_payload(payload: object) -> dict[str, Any]:
     credit_allowance = _credit_allowance(payload)
     if credit_allowance is not None:
         usage["credit_allowance"] = credit_allowance
-    if not usage:
+    if not _has_substantive_data(usage):
         raise CodexUsageError("Codex did not return quota or credit data for this account")
     return usage
 
