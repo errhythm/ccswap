@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "ccswap"
-version = "0.32.0"
+version = "0.33.0"
 source = { editable = "." }
 dependencies = [
     { name = "keyring", marker = "sys_platform == 'win32'" },
