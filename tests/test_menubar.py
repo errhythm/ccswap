@@ -73,6 +73,7 @@ def test_settings_defaults_when_file_missing(tmp_path: Path):
     assert s.title_pct == "both"
     assert s.refresh_interval == 60
     assert s.auto_switch_enabled is False
+    assert s.codex_auto_switch_enabled is False
 
 
 def test_settings_round_trip(tmp_path: Path):
@@ -82,6 +83,7 @@ def test_settings_round_trip(tmp_path: Path):
         title_pct="5h",
         refresh_interval=300,
         auto_switch_enabled=True,
+        codex_auto_switch_enabled=True,
     )
     original.save(path)
     loaded = menubar.MenuBarSettings.load(path)
