@@ -31,7 +31,7 @@ _logger = logging.getLogger("claude-swap")
 
 @dataclass(frozen=True)
 class AutoSwitchSettings:
-    """Policy knobs for the auto-switch engine (``cswap auto``).
+    """Policy knobs for the auto-switch engine (``ccswap auto``).
 
     ``threshold`` is binding-window utilization (max of the 5h/7d percentages):
     at or above it the engine looks for a better account. 90 rather than 95
@@ -57,6 +57,9 @@ class AutoSwitchSettings:
     # 5h/7d windows still have headroom. None = account-wide 5h/7d only
     # (default).
     model: str | None = None
+    # Opt-in: let `ccswap auto` also keep OAuth accounts' five-hour windows
+    # started. The warmer keeps its own five-hour duplicate-spend guard.
+    warmup_five_hour: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,7 +79,7 @@ class SettingSpec:
     """Metadata for one user-tunable settings.json key.
 
     Single source of truth for bounds/choices: both the lenient clamp on load
-    (`_clamped`) and the strict validation in `cswap config set`
+    (`_clamped`) and the strict validation in `ccswap config set`
     (`parse_setting_value`) read from here, so the two can't drift.
     """
 
@@ -137,6 +140,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
             help="Also switch on these models' weekly limits (e.g. Fable, Fable,Opus, or all)",
         ),
         SettingSpec(
+            "autoswitch", "warmupFiveHour", "warmup_five_hour", "bool",
+            help="Let ccswap auto start cold or unconfirmed five-hour windows",
+        ),
+        SettingSpec(
             "ui", "theme", "theme", "choice", choices=("dark", "light", "auto"),
             help="Color theme; auto follows the terminal background",
         ),
@@ -190,7 +197,12 @@ def _clamped(settings: AutoSwitchSettings) -> AutoSwitchSettings:
             clamped = num(value, spec.default, spec.lo, spec.hi)
             kwargs[spec.field] = int(clamped) if spec.kind == "int" else clamped
         elif spec.kind == "bool":
-            kwargs[spec.field] = bool(value)
+            if spec.field == "warmup_five_hour":
+                # This opt-in can spend quota; only a real JSON boolean may
+                # enable it. In particular, the string "false" is truthy.
+                kwargs[spec.field] = value if isinstance(value, bool) else spec.default
+            else:
+                kwargs[spec.field] = bool(value)
         elif spec.kind == "string":
             # A non-empty string keeps as-is; anything else reverts to default
             # (None) so a null/garbage settings.json value disables the filter.
@@ -293,11 +305,11 @@ _BOOL_WORDS = {
 
 
 def parse_setting_value(spec: SettingSpec, raw_value: str):
-    """Strictly parse a CLI-provided string for `cswap config set`.
+    """Strictly parse a CLI-provided string for `ccswap config set`.
 
     Unlike the forgiving clamp on load, out-of-range or mistyped values raise
     ConfigError so the user learns about the problem when setting the value,
-    not by silently degraded behavior at `cswap auto` time.
+    not by silently degraded behavior at `ccswap auto` time.
     """
     if spec.kind == "bool":
         # Never bool(str): bool("false") is True.
@@ -377,7 +389,7 @@ def _read_raw_for_write(path: Path) -> dict:
 
 
 def set_setting(backup_root: Path, dotted_key: str, raw_value: str):
-    """Validate and persist one key for `cswap config set`; returns the value.
+    """Validate and persist one key for `ccswap config set`; returns the value.
 
     Writes only the given key (plus schemaVersion) — deliberately not
     ``save_settings``, which writes every known key and would freeze the
@@ -418,7 +430,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
     """(spec, effective value, explicitly set?) per key, in registry order.
 
     "Set" means the key is present in the raw file — an explicit value equal
-    to the default still counts — so `cswap config`'s "(default)" marker
+    to the default still counts — so `ccswap config`'s "(default)" marker
     reflects the file, not value equality.
     """
     raw = _read_raw(settings_path(backup_root))
@@ -472,7 +484,7 @@ def atomic_write_json(path: Path, data: dict) -> None:
     - The temp file is created beside the RESOLVED target, so the rename
       stays on one filesystem and remains atomic (beside the LINK it would
       hit EXDEV whenever the target lives on another mount).
-    - The 0700 hardening stays on the directory cswap owns. Applying it to
+    - The 0700 hardening stays on the directory ccswap owns. Applying it to
       the resolved parent would narrow a directory belonging to something
       else, and raise ``PermissionError`` outright when that parent is not
       ours to chmod. The written file still gets 0600, and ``mkstemp``

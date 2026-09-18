@@ -138,6 +138,10 @@ ccswap auto --model Fable       # also switch when the Fable weekly limit is hit
 ccswap auto --once              # single check-and-switch, for cron/scripts
 ccswap auto --dry-run           # log what it would do, never switch
 ccswap auto --strategy consume-first   # burn the soonest-resetting account first
+
+# One process can also keep five-hour windows started:
+ccswap config set autoswitch.warmupFiveHour true
+ccswap auto
 ```
 
 <details>
@@ -152,6 +156,7 @@ ccswap auto --strategy consume-first   # burn the soonest-resetting account firs
 - To hold an account out of rotation yourself — a work account you don't want touched, one you're resting — run `ccswap disable <num|email>`; `ccswap enable <num|email>` puts it back. Disabled accounts are skipped by auto-switch, bare `ccswap switch`, and the `best` / `next-available` strategies, but stay fully managed and remain a valid explicit `ccswap switch <num|email>` target. They show a `(disabled)` marker in `ccswap list`, in the [TUI](#interactive-dashboard-tui), and in the [menu bar](#menu-bar-macos) — both of which also let you toggle the state in place (TUI: menu → *Disable / enable account…*; menu bar: *Disable / enable account*).
 - By default only the account-wide 5h/7d windows drive switching. If you work on one model and hit its **weekly per-model limit** first (e.g. Fable), add `--model Fable` (or `ccswap config set autoswitch.model Fable`) to fold that model's window into the decision, so it switches off an account whose model quota is spent even while its 5h/7d windows still have room.
   - **Model names** are Anthropic's own per-model `display_name`s, matched case-insensitively. The exact strings for your accounts are the per-model rows in `ccswap list` (e.g. a line reading `Fable: 100%`).
+- Five-hour warm-up is opt-in. Enable it with `ccswap config set autoswitch.warmupFiveHour true`, or open the TUI's Auto screen (`ccswap`, then `g`) and press `w`. The same `ccswap auto` process then checks warm-up eligibility every ten minutes after making its switch decision. Do not also run the standalone `ccswap warmup` loop; the shared lock prevents duplicate requests, but using one loop avoids needless contention and error messages.
 
 For cron/systemd timers, `--once` reports the outcome in its exit code (`0` switched, `1` error, `2` nothing to do, `3` blocked — no viable target), and `--json` emits one JSON event per line:
 
@@ -162,6 +167,37 @@ For cron/systemd timers, `--once` reports the outcome in its exit code (`0` swit
 Defaults like the threshold and cooldown are configurable with `ccswap config set autoswitch.threshold 80` — flags override them (see [Configuration](#configuration)).
 
 </details>
+
+### Keep five-hour windows warm (opt-in)
+
+`ccswap warmup` keeps stored OAuth accounts ready by checking usage every ten
+minutes and sending one minimal Haiku request when an account has no live
+five-hour window. It remains available for people who want warming without
+automatic switching; otherwise enable `autoswitch.warmupFiveHour` and run only
+`ccswap auto`:
+
+```bash
+ccswap warmup --once --dry-run   # inspect every decision; spend no quota
+ccswap warmup --once             # warm confirmed-cold accounts once
+ccswap warmup                    # keep checking in the foreground
+ccswap warmup --interval 900     # check every 15 minutes
+```
+
+This feature consumes real five-hour and weekly quota and is opt-in. It skips
+disabled, API-key, non-switchable, and accounts with known exhausted weekly quota.
+If usage remains missing, stale, errored, or hollow after a fresh probe, it
+attempts one guarded request rather than leaving the window cold. Reliable
+evidence of a live five-hour window still skips the request.
+It never switches the global Claude login: other accounts use isolated session
+profiles with customizations and tools disabled. Immediately before sending,
+it verifies that the exact launch profile still uses the expected first-party
+Claude OAuth identity; cloud-provider or changed-account profiles are skipped.
+Successful and potentially accepted warms are recorded in `warmup_state.json`,
+preventing an unavailable or stale usage snapshot from becoming a request on
+every ten-minute poll, and preventing duplicates from a second warmer process.
+The account lock stays held for each short warm request, so a simultaneous
+`ccswap switch` may wait or time out instead of racing the request onto the wrong
+login.
 
 ### Run multiple accounts at the same time (session mode)
 
@@ -252,6 +288,7 @@ This will update the stored credentials without creating a duplicate.
 ```bash
 ccswap run 2                     # Run an account in this terminal only (session mode)
 ccswap auto                      # Auto-switch when nearing rate limits (see above)
+ccswap warmup                    # Keep five-hour windows ready (opt-in quota spend)
 ccswap codex list                # List saved Codex CLI accounts
 ccswap codex switch 2            # Switch the file-backed Codex login
 ccswap config                    # Show or edit settings (see Configuration below)
@@ -303,7 +340,7 @@ ccswap purge                     # Remove all ccswap data
 | macOS | macOS Keychain | `~/.claude-swap-backup/` |
 | Linux / WSL | File-based (inside the backup directory, under `credentials/`) | `${XDG_DATA_HOME:-~/.local/share}/claude-swap/` |
 
-Session-mode profiles (`ccswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`) and auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset) live in the backup directory root.
+Session-mode profiles (`ccswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`), auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset), and five-hour warmer state (`warmup_state.json`) live in the backup directory root.
 
 On Linux/WSL, set `XDG_DATA_HOME` to override the default location.
 

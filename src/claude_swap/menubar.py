@@ -863,6 +863,8 @@ def run(switcher) -> int:
                     # engine emits it once per run; dropping it would leave a
                     # menu-bar user with a silently inert filter.
                     rumps.notification("ccswap", "Configuration warning", ev.human())
+                elif ev.kind == "warmup" and getattr(ev, "action", None) == "failed":
+                    rumps.notification("ccswap", "Five-hour warm-up failed", ev.human())
 
         # ---- Codex auto-switch engine -----------------------------------------
         def _start_codex_engine(self):
