@@ -125,6 +125,22 @@ class TestAccountHeadroom:
         assert oauth.account_headroom(usage, ["all"]) == 3.0
         assert oauth.account_headroom(usage, ["ALL"]) == 3.0
 
+    def test_account_windows_defaults_to_both(self):
+        usage = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 90.0}}
+        assert oauth.account_headroom(usage) == 10.0  # 100 - max(10, 90)
+
+    def test_account_windows_can_ignore_seven_day(self):
+        usage = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 90.0}}
+        assert oauth.account_headroom(usage, (), ("5h",)) == 90.0
+
+    def test_account_windows_can_ignore_five_hour(self):
+        usage = {"five_hour": {"pct": 90.0}, "seven_day": {"pct": 10.0}}
+        assert oauth.account_headroom(usage, (), ("7d",)) == 90.0
+
+    def test_account_windows_filter_is_case_insensitive(self):
+        usage = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 90.0}}
+        assert oauth.account_headroom(usage, (), ("5H",)) == 90.0
+
 
 class TestRelevantWindows:
     """Test relevant_windows — the canonical window source."""
@@ -150,6 +166,23 @@ class TestRelevantWindows:
     def test_non_dict_usage_is_empty(self):
         assert oauth.relevant_windows(None) == []
         assert oauth.relevant_windows("no credentials") == []
+
+    def test_account_windows_narrows_to_five_hour(self):
+        usage = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 20.0}}
+        assert oauth.relevant_windows(usage, (), ("5h",)) == [("5h", 10.0, None)]
+
+    def test_account_windows_narrows_to_seven_day(self):
+        usage = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 20.0}}
+        assert oauth.relevant_windows(usage, (), ("7d",)) == [("7d", 20.0, None)]
+
+    def test_account_windows_never_hides_codex_weekly(self):
+        # "Weekly" is Codex's own single window, not a second axis of the
+        # same 5h/7d filter -- narrowing to "5h" must not drop it.
+        usage = {"five_hour": {"pct": 10.0}, "weekly": {"pct": 40.0}}
+        assert oauth.relevant_windows(usage, (), ("5h",)) == [
+            ("5h", 10.0, None),
+            ("Weekly", 40.0, None),
+        ]
 
 
 class TestFormatReset:

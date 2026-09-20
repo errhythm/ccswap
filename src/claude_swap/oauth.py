@@ -536,14 +536,21 @@ def build_usage_result(data: dict) -> dict | None:
 
 
 def relevant_windows(
-    usage: dict | None, models: Sequence[str] = ()
+    usage: dict | None,
+    models: Sequence[str] = (),
+    account_windows: Sequence[str] = ("5h", "7d"),
 ) -> list[tuple[str, float, str | None]]:
     """Every ``(label, pct, resets_at)`` window that gates this account.
 
     Always includes the provider's account-wide windows: 5-hour ("5h") and
     7-day ("7d") for Claude, or the canonical weekly window returned by newer
-    Codex plans. When ``models`` is non-empty, each named per-model weekly
-    ``scoped`` window is included too
+    Codex plans. ``account_windows`` restricts WHICH of "5h"/"7d" count
+    (default both, unchanged behavior) — ``autoswitch.windows`` lets a user
+    who only cares about the rolling 5-hour session ignore the weekly window
+    entirely, e.g. when they run their weekly quota all the way down on
+    purpose. Codex's own "Weekly" window is unaffected: it is Codex's one
+    canonical window, not a second axis to filter. When ``models`` is
+    non-empty, each named per-model weekly ``scoped`` window is included too
     (matched case-insensitively on display name, e.g. "Fable"; the sentinel
     ``all`` matches every scoped window the account reports). The single
     canonical window source for decisions, scheduling, and reset math — so a
@@ -554,12 +561,15 @@ def relevant_windows(
     """
     if not isinstance(usage, dict):
         return []
+    wanted_account_windows = {w.lower() for w in account_windows}
     windows: list[tuple[str, float, str | None]] = []
     for key, label in (
         ("five_hour", "5h"),
         ("seven_day", "7d"),
         ("weekly", "Weekly"),
     ):
+        if label.lower() in ("5h", "7d") and label.lower() not in wanted_account_windows:
+            continue
         window = usage.get(key)
         if isinstance(window, dict) and isinstance(window.get("pct"), (int, float)):
             windows.append((label, float(window["pct"]), window.get("resets_at")))
@@ -580,21 +590,24 @@ def relevant_windows(
 
 
 def account_headroom(
-    usage: dict | None, models: Sequence[str] = ()
+    usage: dict | None,
+    models: Sequence[str] = (),
+    account_windows: Sequence[str] = ("5h", "7d"),
 ) -> float | None:
     """Remaining percentage before this account hits a rate-limit window.
 
     Considers the 5-hour and 7-day utilization windows — the two that always
-    gate requests. When ``models`` is non-empty, each named per-model weekly
-    ``scoped`` window (see :func:`relevant_windows`) is folded in too: a model
-    maxed at 100% blocks that model's work even with 5h/7d headroom, so for
-    someone pinned to that model it binds just as hard. Returns the headroom
-    of the *binding* window (``100 - max(pct)``), so ``<= 0`` means the
-    account is at or over a limit. Returns ``None`` when usage is unavailable
-    or carries no window data, which callers treat as "unknown" (never
-    auto-skipped).
+    gate requests — narrowed to ``account_windows`` when the caller only
+    wants one of them to bind (see :func:`relevant_windows`). When ``models``
+    is non-empty, each named per-model weekly ``scoped`` window (see
+    :func:`relevant_windows`) is folded in too: a model maxed at 100% blocks
+    that model's work even with 5h/7d headroom, so for someone pinned to that
+    model it binds just as hard. Returns the headroom of the *binding* window
+    (``100 - max(pct)``), so ``<= 0`` means the account is at or over a
+    limit. Returns ``None`` when usage is unavailable or carries no window
+    data, which callers treat as "unknown" (never auto-skipped).
     """
-    pcts = [pct for _, pct, _ in relevant_windows(usage, models)]
+    pcts = [pct for _, pct, _ in relevant_windows(usage, models, account_windows)]
     if not pcts:
         return None
     return 100.0 - max(pcts)
