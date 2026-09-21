@@ -472,7 +472,11 @@ def due_candidate(
     return due[0][2]
 
 
-def _earliest_reset(last_good: dict | None, models: tuple[str, ...] = ()) -> float | None:
+def _earliest_reset(
+    last_good: dict | None,
+    models: tuple[str, ...] = (),
+    account_windows: tuple[str, ...] = ("5h", "7d"),
+) -> float | None:
     """Epoch of the soonest relevant window to roll over, or None if unknown.
 
     The soonest one is what matters: once it resets, usage there is zeroed and
@@ -483,7 +487,7 @@ def _earliest_reset(last_good: dict | None, models: tuple[str, ...] = ()) -> flo
     """
     resets = [
         ts
-        for _, _, resets_at in oauth.relevant_windows(last_good, models)
+        for _, _, resets_at in oauth.relevant_windows(last_good, models, account_windows)
         if (ts := parse_reset_ts(resets_at)) is not None
     ]
     return min(resets) if resets else None
@@ -494,6 +498,7 @@ def _rate_limited_trust_ok(
     age_s: float | None,
     now: float,
     models: tuple[str, ...] = (),
+    account_windows: tuple[str, ...] = ("5h", "7d"),
 ) -> bool:
     """Whether 429-stale ``last_good`` is still trustworthy for decisions.
 
@@ -523,7 +528,7 @@ def _rate_limited_trust_ok(
     if age_s is None:
         return False
     ceiling = now + (RATE_LIMIT_TRUST_MAX_AGE_S - age_s)
-    soonest = _earliest_reset(last_good, models)
+    soonest = _earliest_reset(last_good, models, account_windows)
     # The soonest window to roll over invalidates the snapshot; never trust past
     # it, and never past the client-side ceiling.
     return now < (min(soonest, ceiling) if soonest is not None else ceiling)
@@ -876,14 +881,17 @@ class UsageStore:
         self,
         identities: dict[str, Identity],
         models: tuple[str, ...] = (),
+        account_windows: tuple[str, ...] = ("5h", "7d"),
     ) -> dict[str, UsageEntry]:
         """Identity-guarded snapshot for the given slots (empty entry when the
         row is missing or belongs to a different account).
 
         ``models`` are the configured scoped-window model names; they let the
         429-stale trust bound also honor per-model (e.g. Fable) window resets,
-        matching the scheduler's window view. Omitted (``()``) for callers that
-        only read timestamps/last-good and never consult scoped resets."""
+        matching the scheduler's window view. ``account_windows`` narrows the
+        5h/7d half of that same view (``autoswitch.windows``). Omitted (``()``
+        / default) for callers that only read timestamps/last-good and never
+        consult scoped resets."""
         now = self.clock()
         rows = self._read_rows()
         out: dict[str, UsageEntry] = {}
@@ -920,6 +928,7 @@ class UsageStore:
                     age_s,
                     now,
                     models,
+                    account_windows,
                 )
             else:
                 within_ceiling = age_s is not None and age_s <= TRUST_MAX_AGE_S

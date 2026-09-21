@@ -606,6 +606,68 @@ class TestDecisionTable:
         assert harness.engine._next_delay(outcome) == NO_RESET_FALLBACK_S
 
 
+class TestAccountWindowSelection:
+    """``autoswitch.windows`` ("5h"/"7d"/default "both") narrows which of the
+    two account-wide windows bind the switch decision — see oauth.
+    relevant_windows' ``account_windows`` filter."""
+
+    def _seeded(self, temp_home: Path, **settings_kwargs) -> EngineHarness:
+        h = EngineHarness(temp_home, **settings_kwargs)
+        h.seed(1, "a@example.com")
+        h.seed(2, "b@example.com")
+        h.make_live("a@example.com", 1)
+        return h
+
+    def test_windows_5h_ignores_a_maxed_weekly_window(self, temp_home):
+        # Active is fine on 5h (10%) but maxed on 7d (95%). Default "both"
+        # would switch on the 95% weekly window; scoped to "5h" alone the
+        # weekly number never binds.
+        h = self._seeded(temp_home, windows="5h")
+        outcome = h.tick_with_usage({
+            "1": {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 95.0}},
+            "2": {"five_hour": {"pct": 5.0}, "seven_day": {"pct": 5.0}},
+        })
+        assert outcome is TickOutcome.NO_ACTION
+        assert h.active_number() == 1
+        reasons = [e.reason for e in h.events if isinstance(e, NoSwitchEvent)]
+        assert reasons == ["below-threshold"]
+
+    def test_windows_7d_ignores_a_maxed_session_window(self, temp_home):
+        # Mirror case: active maxed on 5h (95%) but fine on 7d (10%). Scoped
+        # to "7d" alone, the session number never binds.
+        h = self._seeded(temp_home, windows="7d")
+        outcome = h.tick_with_usage({
+            "1": {"five_hour": {"pct": 95.0}, "seven_day": {"pct": 10.0}},
+            "2": {"five_hour": {"pct": 5.0}, "seven_day": {"pct": 5.0}},
+        })
+        assert outcome is TickOutcome.NO_ACTION
+        assert h.active_number() == 1
+        reasons = [e.reason for e in h.events if isinstance(e, NoSwitchEvent)]
+        assert reasons == ["below-threshold"]
+
+    def test_default_both_still_switches_on_either_window(self, temp_home):
+        # Same maxed-weekly usage as the first case above, but with the
+        # default ("both") — unlike windows="5h", this DOES switch. Pins the
+        # default's behavior against the two scoped tests above.
+        h = self._seeded(temp_home)
+        outcome = h.tick_with_usage({
+            "1": {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 95.0}},
+            "2": {"five_hour": {"pct": 5.0}, "seven_day": {"pct": 5.0}},
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
+    def test_windows_5h_still_switches_on_a_maxed_session_window(self, temp_home):
+        # windows="5h" only ever IGNORES 7d; a maxed 5h still switches.
+        h = self._seeded(temp_home, windows="5h")
+        outcome = h.tick_with_usage({
+            "1": {"five_hour": {"pct": 95.0}, "seven_day": {"pct": 5.0}},
+            "2": {"five_hour": {"pct": 5.0}, "seven_day": {"pct": 5.0}},
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
+
 class TestIdleHold:
     """Active token expired while Claude Code owns it → hold, don't fail over."""
 
@@ -2217,7 +2279,7 @@ class TestSessionThreshold:
         harness.engine.apply_threshold(72.0)
         assert harness.engine.settings.threshold == 72.0
         # Poll-cadence planning follows the new value immediately.
-        assert harness.switcher._poll_inputs_override == (72.0, ())
+        assert harness.switcher._poll_inputs_override == (72.0, (), ("5h", "7d"))
         # And the very next tick decides with it: 80% ≥ 72 switches, where
         # the constructed 90 would not have.
         outcome = harness.tick_with_usage({
@@ -3212,6 +3274,7 @@ class TestConsumeFirstDepartureRecordsItsOwnTrigger:
         class Fake(AutoSwitchEngine):
             def __init__(self):
                 self._models = ()
+                self._windows = ("5h", "7d")
 
         e = Fake()
         settings = AutoSwitchSettings()
@@ -3261,6 +3324,7 @@ class TestConsumeFirstDepartureRecordsItsOwnTrigger:
         class Fake(AutoSwitchEngine):
             def __init__(self):
                 self._models = ()
+                self._windows = ("5h", "7d")
 
         e = Fake()
         settings = AutoSwitchSettings()
@@ -3297,6 +3361,7 @@ class TestConsumeFirstDepartureRecordsItsOwnTrigger:
         class Fake(AutoSwitchEngine):
             def __init__(self):
                 self._models = ()
+                self._windows = ("5h", "7d")
 
         e = Fake()
         settings = AutoSwitchSettings()

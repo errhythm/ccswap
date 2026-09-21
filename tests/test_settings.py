@@ -20,6 +20,7 @@ from claude_swap.settings import (
     load_settings,
     load_ui_settings,
     merged_with_cli,
+    parse_window_selection,
     save_settings,
     set_setting,
     settings_path,
@@ -97,6 +98,19 @@ class TestLoadSettings:
     def test_set_strategy_consume_first(self, tmp_path: Path):
         set_setting(tmp_path, "autoswitch.strategy", "consume-first")
         assert load_settings(tmp_path).strategy == "consume-first"
+
+    def test_windows_defaults_to_both(self, tmp_path: Path):
+        assert load_settings(tmp_path).windows == "both"
+
+    def test_set_windows_5h(self, tmp_path: Path):
+        set_setting(tmp_path, "autoswitch.windows", "5h")
+        assert load_settings(tmp_path).windows == "5h"
+
+    def test_unsupported_windows_falls_back_to_both(self, tmp_path: Path):
+        settings_path(tmp_path).write_text(
+            json.dumps({"autoswitch": {"windows": "1d"}})
+        )
+        assert load_settings(tmp_path).windows == "both"
 
 
 class TestSaveSettings:
@@ -180,6 +194,22 @@ class TestSettingSpecs:
         sources = {"autoswitch": AutoSwitchSettings(), "ui": UiSettings()}
         for spec in SETTING_SPECS.values():
             assert spec.default == getattr(sources[spec.section], spec.field)
+
+
+class TestParseWindowSelection:
+    def test_both_is_the_default(self):
+        assert parse_window_selection("both") == ("5h", "7d")
+        assert parse_window_selection(None) == ("5h", "7d")
+
+    def test_5h_narrows_to_the_session_window(self):
+        assert parse_window_selection("5h") == ("5h",)
+
+    def test_7d_narrows_to_the_weekly_window(self):
+        assert parse_window_selection("7d") == ("7d",)
+
+    def test_unrecognized_value_degrades_to_both(self):
+        assert parse_window_selection("1d") == ("5h", "7d")
+        assert parse_window_selection("") == ("5h", "7d")
 
 
 class TestSetUnsetSetting:

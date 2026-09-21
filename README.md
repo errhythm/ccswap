@@ -152,6 +152,7 @@ ccswap auto --strategy consume-first   # burn the soonest-resetting account firs
 - To hold an account out of rotation yourself — a work account you don't want touched, one you're resting — run `ccswap disable <num|email>`; `ccswap enable <num|email>` puts it back. Disabled accounts are skipped by auto-switch, bare `ccswap switch`, and the `best` / `next-available` strategies, but stay fully managed and remain a valid explicit `ccswap switch <num|email>` target. They show a `(disabled)` marker in `ccswap list`, in the [TUI](#interactive-dashboard-tui), and in the [menu bar](#menu-bar-macos) — both of which also let you toggle the state in place (TUI: menu → *Disable / enable account…*; menu bar: *Disable / enable account*).
 - By default only the account-wide 5h/7d windows drive switching. If you work on one model and hit its **weekly per-model limit** first (e.g. Fable), add `--model Fable` (or `ccswap config set autoswitch.model Fable`) to fold that model's window into the decision, so it switches off an account whose model quota is spent even while its 5h/7d windows still have room.
   - **Model names** are Anthropic's own per-model `display_name`s, matched case-insensitively. The exact strings for your accounts are the per-model rows in `ccswap list` (e.g. a line reading `Fable: 100%`).
+- **Which window binds** (`ccswap config set autoswitch.windows <both|5h|7d>`, default `both`): narrows the decision to just one of the two account-wide windows. Set it to `5h` to switch only on the rolling session window and never on the weekly one — for someone happy to run their weekly quota all the way down. Set it to `7d` for the opposite: ignore the session window, switch only when the weekly one is the problem. `ccswap list` and `cswap watch` keep showing both numbers regardless — this only changes what `auto` decides on.
 
 For cron/systemd timers, `--once` reports the outcome in its exit code (`0` switched, `1` error, `2` nothing to do, `3` blocked — no viable target), and `--json` emits one JSON event per line:
 
@@ -348,6 +349,7 @@ ccswap config get autoswitch.threshold
 ccswap config set autoswitch.threshold 80  # validated: rejects out-of-range values loudly
 ccswap config set ui.view codex             # combined (default), claude, or codex
 ccswap config set autoswitch.model Fable   # per-model switching (see "auto"); Fable,Opus for several
+ccswap config set autoswitch.windows 5h    # switch on the session window only; 7d for weekly-only, both to reset
 ccswap config unset autoswitch.threshold   # back to the default
 ccswap config path                         # where settings.json lives
 ```

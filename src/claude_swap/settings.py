@@ -57,6 +57,11 @@ class AutoSwitchSettings:
     # 5h/7d windows still have headroom. None = account-wide 5h/7d only
     # (default).
     model: str | None = None
+    # Which of Claude's two account-wide windows bind the switch decision:
+    # "both" (default, unchanged), "5h" (ignore the weekly window entirely —
+    # for someone happy to run their weekly quota all the way down), or "7d"
+    # (ignore the rolling session window, switch only on the weekly one).
+    windows: str = "both"
 
 
 @dataclass(frozen=True)
@@ -137,6 +142,11 @@ SETTING_SPECS: dict[str, SettingSpec] = {
             help="Also switch on these models' weekly limits (e.g. Fable, Fable,Opus, or all)",
         ),
         SettingSpec(
+            "autoswitch", "windows", "windows", "choice",
+            choices=("both", "5h", "7d"),
+            help="Which account-wide window(s) bind the switch decision",
+        ),
+        SettingSpec(
             "ui", "theme", "theme", "choice", choices=("dark", "light", "auto"),
             help="Color theme; auto follows the terminal background",
         ),
@@ -171,6 +181,18 @@ def parse_model_names(value: str | None) -> tuple[str, ...]:
         if name and name.lower() not in seen:
             seen[name.lower()] = name
     return tuple(seen.values())
+
+
+def parse_window_selection(value: str | None) -> tuple[str, ...]:
+    """``autoswitch.windows`` ("both"/"5h"/"7d") as the tuple ``oauth.
+    relevant_windows``'s ``account_windows`` filter expects. An unrecognized
+    value (a hand-edited settings.json, an older/newer schema) degrades to
+    "both" rather than silently binding on neither window."""
+    if value == "5h":
+        return ("5h",)
+    if value == "7d":
+        return ("7d",)
+    return ("5h", "7d")
 
 
 def _clamped(settings: AutoSwitchSettings) -> AutoSwitchSettings:

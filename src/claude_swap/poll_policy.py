@@ -147,19 +147,25 @@ ESCALATION_MARGIN_PCT = 15.0
 RESET_SLACK_S = 60.0
 
 
-def binding_pct(usage: dict | None, models: tuple[str, ...] = ()) -> float | None:
+def binding_pct(
+    usage: dict | None,
+    models: tuple[str, ...] = (),
+    account_windows: tuple[str, ...] = ("5h", "7d"),
+) -> float | None:
     """Utilization of the binding (worst) relevant window, or None."""
-    headroom = oauth.account_headroom(usage, models)
+    headroom = oauth.account_headroom(usage, models, account_windows)
     return None if headroom is None else 100.0 - headroom
 
 
 def limiting_reset_ts(
-    usage: dict | None, models: tuple[str, ...] = ()
+    usage: dict | None,
+    models: tuple[str, ...] = (),
+    account_windows: tuple[str, ...] = ("5h", "7d"),
 ) -> float | None:
     """Epoch when the last of the ≥100% relevant windows resets (account
     usable again)."""
     latest: float | None = None
-    for _, pct, resets_at in oauth.relevant_windows(usage, models):
+    for _, pct, resets_at in oauth.relevant_windows(usage, models, account_windows):
         if pct < 100.0:
             continue
         ts = parse_reset_ts(resets_at)
@@ -169,12 +175,15 @@ def limiting_reset_ts(
 
 
 def earliest_future_reset_ts(
-    usage: dict | None, now: float, models: tuple[str, ...] = ()
+    usage: dict | None,
+    now: float,
+    models: tuple[str, ...] = (),
+    account_windows: tuple[str, ...] = ("5h", "7d"),
 ) -> float | None:
     """Epoch of the next relevant-window reset ahead of ``now``, any
     utilization."""
     earliest: float | None = None
-    for _, _, resets_at in oauth.relevant_windows(usage, models):
+    for _, _, resets_at in oauth.relevant_windows(usage, models, account_windows):
         ts = parse_reset_ts(resets_at)
         if ts is not None and ts > now and (earliest is None or ts < earliest):
             earliest = ts

@@ -4283,7 +4283,7 @@ class TestDeadTokenQuarantine:
 
         switcher = ClaudeAccountSwitcher()
         switcher._setup_directories()
-        switcher._poll_inputs_override = (90.0, ("Fable",))
+        switcher._poll_inputs_override = (90.0, ("Fable",), ("5h", "7d"))
         store = switcher._usage_store
         now = time.time()
 
