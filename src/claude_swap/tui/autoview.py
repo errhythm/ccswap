@@ -32,7 +32,12 @@ from claude_swap.autoswitch import (
 )
 from claude_swap.codex_autoswitch import CodexAutoSwitchEngine
 from claude_swap.models import AccountsSnapshot
-from claude_swap.settings import SETTING_SPECS, load_settings, parse_model_names
+from claude_swap.settings import (
+    SETTING_SPECS,
+    load_settings,
+    parse_model_names,
+    parse_window_selection,
+)
 from claude_swap.tui import data
 from claude_swap.tui.modals import ConfirmModal
 from claude_swap.tui.theme import Palette
@@ -308,16 +313,22 @@ class AutoScreen(Screen):
         self, snap: AccountsSnapshot, active_number: str | None
     ) -> Text:
         """Switch targets ranked by remaining headroom (best first)."""
-        # Same window set as the engine (autoswitch.model included), so the
-        # displayed ranking can never disagree with the account it picks.
+        # Same window set as the engine (autoswitch.model and
+        # autoswitch.windows included), so the displayed ranking can never
+        # disagree with the account it picks.
         palette = Palette.from_theme(self.app.current_theme)
         models = parse_model_names(self._settings.model) if self._settings else ()
+        windows = (
+            parse_window_selection(self._settings.windows)
+            if self._settings
+            else ("5h", "7d")
+        )
         ranked: list[tuple[float, str]] = []  # (sort key: pct used, number)
         lines: dict[str, Text] = {}
         for acc in snap.accounts:
             if acc.number == active_number or not acc.switchable:
                 continue
-            pct = binding_pct(acc.usage.last_good, models)
+            pct = binding_pct(acc.usage.last_good, models, windows)
             entry = Text()
             entry.append(f"\n  {acc.number:>2}  ", style=palette.foreground)
             entry.append(acc.email, style=palette.foreground)

@@ -4378,6 +4378,78 @@ class TestDeadTokenQuarantine:
             "bound"
         )
 
+    def test_collect_usage_entries_never_narrows_the_429_trust_bound_by_windows(
+        self, temp_home
+    ):
+        """``autoswitch.windows`` must never reach the 429-stale trust bound.
+
+        Repro from the PR review: a 5h window whose reset already passed 5
+        minutes ago, and a 7d window resetting 4 days out, at age 600s. On
+        the full 5h/7d view the past 5h reset ends trust (untrusted/unknown).
+        Narrowing to 7d-only removes that reset candidate and wrongly keeps
+        the stale row trusted — exactly the bug ``account_windows`` caused by
+        reaching ``store.entries`` from ``_collect_usage_entries``.
+        """
+        from datetime import datetime, timezone
+
+        switcher = ClaudeAccountSwitcher()
+        switcher._setup_directories()
+        # Simulates autoswitch.windows=7d.
+        switcher._poll_inputs_override = (90.0, (), ("7d",))
+        store = switcher._usage_store
+        now = time.time()
+
+        def iso(ahead_s):
+            return (
+                datetime.fromtimestamp(now + ahead_s, tz=timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+
+        live = json.dumps({"claudeAiOauth": {
+            "accessToken": "at", "refreshToken": "rt",
+            "expiresAt": (now + 86400) * 1000,
+        }})
+        info = [(2, "test@example.com", "Org", "", False, live, "")]
+        ident = {"2": ("test@example.com", "")}
+        store.record({"2": FetchRecord(usage={
+            "five_hour": {"pct": 95.0, "resets_at": iso(-300.0)},
+            "seven_day": {"pct": 40.0, "resets_at": iso(4 * 86400.0)},
+        })}, ident)
+        # Stamp the row as 429-stale (age 600s, past STALE_OK_S) with a
+        # failure recorded, so `decision_value()` turns entirely on the trust
+        # bound rather than raw age.
+        with store.path.open() as fh:
+            table = json.load(fh)
+        row = table["accounts"]["2"]
+        row["lastError"] = "http-429"
+        row["consecutiveFailures"] = 1
+        row["fetchedAt"] = now - 600.0
+        store.path.write_text(json.dumps(table))
+
+        entries = switcher._collect_usage_entries(info, fetch=set())
+        assert entries["2"].decision_value() is None, (
+            "the 5h reset already passed, so the row must be untrusted on "
+            "the full 5h/7d view — autoswitch.windows=7d narrowed the trust "
+            "bound and kept a dead snapshot trusted"
+        )
+
+    def test_poll_policy_inputs_reads_windows_from_settings_file(self, temp_home):
+        """The disk-read path of ``_poll_policy_inputs`` (no engine pin) must
+        parse ``autoswitch.windows`` into the third tuple element, exactly
+        like the pinned-override path already does."""
+        from claude_swap.settings import AutoSwitchSettings, save_settings
+
+        switcher = ClaudeAccountSwitcher()
+        switcher._setup_directories()
+        save_settings(switcher.backup_dir, AutoSwitchSettings(windows="7d"))
+
+        _threshold, _models, account_windows = switcher._poll_policy_inputs()
+        assert account_windows == ("7d",), (
+            f"expected the settings file's autoswitch.windows=7d to parse to "
+            f"('7d',), got {account_windows!r}"
+        )
+
     def test_readd_clears_quarantine(self, temp_home):
         # Re-adding an account (fresh credential) must lift the quarantine, so
         # the disabled fetches don't leave it stuck at "re-login needed" forever.

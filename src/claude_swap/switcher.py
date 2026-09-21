@@ -5010,17 +5010,21 @@ class ClaudeAccountSwitcher:
             for num, email, _org_name, org_uuid, _active, _creds, _alias in accounts_info
         }
         info_by_num = {str(info[0]): info for info in accounts_info}
-        # Scoped-window models (and account-window selection) so the 429-stale
-        # trust bound honors per-model (e.g. Fable) resets and the chosen
-        # 5h/7d view, matching the poll planner's window view.
-        _threshold, models, account_windows = self._poll_policy_inputs()
+        # Scoped-window models so the 429-stale trust bound honors per-model
+        # (e.g. Fable) resets, matching the poll planner's window view. The
+        # trust bound deliberately keeps the full 5h/7d view regardless of
+        # autoswitch.windows: whether cached data is still fresh is
+        # objective and must not move with that preference, and this
+        # collector also backs `ccswap list`, the TUI and the manual switch
+        # strategies, none of which the setting scopes.
+        _threshold, models, _account_windows = self._poll_policy_inputs()
         sentinels: dict[str, str] = {}
         for num, info in info_by_num.items():
             static = self._static_usage_sentinel(info)
             if static is not None:
                 sentinels[num] = static
 
-        entries = store.entries(identities, models, account_windows)
+        entries = store.entries(identities, models)
         # Dead refresh-token lineage: quarantine. Surfacing the sentinel here both
         # drives the "re-login needed" display and (via ``num not in sentinels``
         # below) stops the endless fetch loop that would otherwise 401/429 forever.
@@ -5040,7 +5044,7 @@ class ClaudeAccountSwitcher:
                 self._usage_store.clear_dead_token(
                     [num], {num: identities[num]}
                 )
-                entries = store.entries(identities, models, account_windows)
+                entries = store.entries(identities, models)
         requested = [
             num
             for num in info_by_num
@@ -5095,7 +5099,7 @@ class ClaudeAccountSwitcher:
             for num, record in accepted_records.items():
                 if record.sentinel is not None:
                     sentinels[num] = record.sentinel
-            entries = store.entries(identities, models, account_windows)
+            entries = store.entries(identities, models)
             # A fetch that just returned invalid_grant advances the strike to the
             # dead threshold. The pre-fetch quarantine scan above couldn't see it,
             # so surface "re-login needed" in *this* pass instead of leaving the
