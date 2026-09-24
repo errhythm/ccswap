@@ -2082,6 +2082,21 @@ class TestEventsShape:
         assert "#2: 5h 10% · 7d 0%" in line
         assert "#3: ?" in line
 
+    def test_poll_event_labels_active_windows_after_switch(self):
+        poll = PollEvent(
+            active={"number": 1, "email": "account@example.com"},
+            headroom={"1": 51.0, "2": 0.0},
+            threshold=96.0,
+            windows={
+                "1": {"5h": 0.0, "7d": 49.0},
+                "2": {"5h": 100.0, "7d": 68.0},
+            },
+        )
+        line = poll.human()
+        assert "Account-1 (account@example.com): 49% used [5h 0% · 7d 49%]" in line
+        assert "#2: 5h 100% · 7d 68%" in line
+        assert poll.to_json()["windowsPct"]["1"] == {"5h": 0.0, "7d": 49.0}
+
     def test_poll_event_windows_match_the_decision_set(self, temp_home):
         # Scoped windows appear only when configured: rendering an ignored
         # Fable 100% next to a switch onto that account would read as a bug.
