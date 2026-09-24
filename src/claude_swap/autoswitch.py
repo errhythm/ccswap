@@ -349,6 +349,8 @@ class PollEvent(AutoSwitchEvent):
         h = self.headroom.get(str(num))
         if h is not None:
             used = f"{100 - h:.0f}% used"
+            if self.windows.get(str(num)):
+                used += f" [{self._describe(str(num))}]"
         else:
             err = self.fetch_errors.get(str(num))
             used = f"usage unknown ({err})" if err else "usage unknown"
