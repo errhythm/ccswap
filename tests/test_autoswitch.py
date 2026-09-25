@@ -2082,6 +2082,31 @@ class TestEventsShape:
         assert "#2: 5h 10% · 7d 0%" in line
         assert "#3: ?" in line
 
+    def test_poll_event_labels_active_windows_after_switch(self, temp_home):
+        h = EngineHarness(temp_home, threshold=96.0)
+        h.seed(1, "a@example.com")
+        h.seed(2, "b@example.com")
+        h.make_live("a@example.com", 1)
+
+        assert h.tick_with_usage({
+            "1": _usage(98),
+            "2": {"five_hour": {"pct": 0.0}, "seven_day": {"pct": 49.0}},
+        }) is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
+        h.events.clear()
+        assert h.tick_with_usage({
+            "1": {"five_hour": {"pct": 0.0}, "seven_day": {"pct": 49.0}},
+            "2": {"five_hour": {"pct": 41.0}, "seven_day": {"pct": 60.0}},
+        }) is TickOutcome.NO_ACTION
+        poll = next(e for e in h.events if isinstance(e, PollEvent))
+        assert "Account-2 (b@example.com): 60% used [5h 41% · 7d 60%]" in poll.human()
+        assert "#1: 5h 0% · 7d 49%" in poll.human()
+        assert poll.to_json()["windowsPct"]["2"] == {"5h": 41.0, "7d": 60.0}
+        assert [e.reason for e in h.events if isinstance(e, NoSwitchEvent)] == [
+            "below-threshold"
+        ]
+
     def test_poll_event_windows_match_the_decision_set(self, temp_home):
         # Scoped windows appear only when configured: rendering an ignored
         # Fable 100% next to a switch onto that account would read as a bug.
