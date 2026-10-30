@@ -77,7 +77,12 @@ def eligible(account: AccountSnapshot, now: float) -> bool:
             # Even a zero-percent window may already be running. A reading
             # taken before its reset cannot tell us that it is now idle.
             return False
-    for scoped in usage.get("scoped", []):
+    scoped_windows = usage.get("scoped", [])
+    if not isinstance(scoped_windows, list):
+        return False
+    for scoped in scoped_windows:
+        if not isinstance(scoped, dict):
+            return False
         if "haiku" in str(scoped.get("name", "")).casefold():
             if _pct(scoped) is None or _pct(scoped) >= 100:
                 return False
@@ -110,7 +115,7 @@ def _run_prompt(binary: str, token: str, root: Path) -> bool:
     proxy, Node preload, plugin or credential-store override is inherited.
     The refresh token never leaves the existing account store.
     """
-    with tempfile.TemporaryDirectory(prefix="warmup-", dir=root) as directory:
+    with tempfile.TemporaryDirectory(prefix="warmup-", dir=root, ignore_cleanup_errors=True) as directory:
         home = Path(directory)
         env = {k: v for k, v in os.environ.items() if k.upper() in {
             "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",

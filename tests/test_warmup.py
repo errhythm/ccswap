@@ -97,6 +97,8 @@ def test_ineligible_accounts(harness, change):
     ({"pct": 0}, {"pct": 100}, []),
     ({"pct": 0}, {"pct": float("nan")}, []),
     ({"pct": 0}, {"pct": 25}, [{"name": "Haiku", "pct": 100}]),
+    ({"pct": 0}, {"pct": 25}, None),
+    ({"pct": 0}, {"pct": 25}, ["Haiku"]),
 ])
 def test_windows_must_prove_headroom(harness, five, weekly, scoped):
     harness.account.usage.last_good.update(five_hour=five, seven_day=weekly, scoped=scoped)

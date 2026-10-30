@@ -29,8 +29,7 @@ The fixed prompt is `Reply OK.`, using the `haiku` model alias and one turn;
 Claude Code's normal request overhead still applies. It does not create
 additional quota or promise that every model-specific window will start.
 
-While enabled, the auto process wakes at least once a minute, even with a
-longer configured interval. It checks cached readings at most once a minute
+While enabled, each auto check looks at cached readings (at most once a minute)
 and sends at most one warmup request per check. Normal usage polling and its
 backoff remain in charge: warming never forces a usage refresh. Disabled,
 API-key, incomplete, or unidentifiable accounts are skipped. A running window

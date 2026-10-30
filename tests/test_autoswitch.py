@@ -7350,17 +7350,3 @@ class TestOptionalWarmup:
         assert harness.engine.tick() == TickOutcome.NO_ACTION
         assert harness.events[-1].kind == "warmup"
 
-    def test_enabled_loop_checks_during_long_reset_sleep(self, harness, monkeypatch):
-        engine = harness.engine
-        engine.settings = replace(engine.settings, warmup_five_hour=True)
-        monkeypatch.setattr(engine, "tick", lambda: TickOutcome.NO_ACTION)
-        monkeypatch.setattr(engine, "_next_delay", lambda outcome: 3600)
-        delays = []
-
-        def wait(delay):
-            delays.append(delay)
-            engine.stop()
-
-        monkeypatch.setattr(engine._wake, "wait", wait)
-        assert engine.run_loop() == 0
-        assert delays == [60]

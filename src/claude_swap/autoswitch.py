@@ -2689,10 +2689,6 @@ class AutoSwitchEngine:
                 )
                 outcome = TickOutcome.ERROR
             delay = self._next_delay(outcome)
-            if self.settings.warmup_five_hour:
-                from claude_swap.warmup import INTERVAL_S
-
-                delay = min(delay, INTERVAL_S)
             if delay > self.settings.interval_seconds * 1.5:
                 until = datetime.now(timezone.utc) + timedelta(seconds=delay)
                 self._emit(
