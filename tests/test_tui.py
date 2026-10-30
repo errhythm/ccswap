@@ -2892,3 +2892,33 @@ class TestThemeWiring:
             assert app._theme_name == "light"
             assert app.theme == "cswap-light"
             assert json.loads((tmp_path / "settings.json").read_text())["ui"]["theme"] == "light"
+
+
+@pytest.mark.asyncio
+async def test_menu_hover_and_keyboard_help_do_not_activate_option(tmp_path):
+    from textual.widgets import ListView, Static, Tooltip
+    from claude_swap.tui.widgets import MenuItem
+    from claude_swap.tui.modals import OutputModal
+    fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+    app = make_app(fake)
+    app.TOOLTIP_DELAY = 0.01
+    async with app.run_test(size=(110, 40), tooltips=True) as pilot:
+        await settle(pilot)
+        await menu_select(pilot, "settings-menu")
+        menu = app.screen.query_one("#menu", ListView)
+        item = next(i for i in menu.query(MenuItem) if i.action_id == "setting:threshold")
+        menu.index = list(menu.children).index(item)
+        assert all(i.tooltip for i in menu.query(MenuItem))
+        before = app.threshold_pct
+        await pilot.hover(item.query_one(Static))
+        await pilot.pause(0.1)
+        assert "utilization threshold" in str(app.screen.query_one(Tooltip).render())
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, OutputModal)
+        assert "utilization threshold" in app.screen._output
+        assert app.threshold_pct == before
+        await pilot.press("escape")
+        await pilot.pause()
+        assert menu.highlighted_child is item
+        assert not (tmp_path / "settings.json").exists()

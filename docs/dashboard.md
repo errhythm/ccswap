@@ -4,6 +4,9 @@
 
 Run `ccswap` on its own (or `ccswap tui`) for the full-screen dashboard: Claude Code and Codex appear together in labelled sections, with live usage, provider-correct switching, and auto-switching, all keyboard-driven. Arrow-key and Vim-style menu navigation wraps at both ends. The menu's **Settings…** screen cycles the theme, dashboard view, auto-switch threshold, and strategy, and toggles **Mask account info**. Masking hides email addresses and organization names on the dashboard, the `w` watch page, and the auto-switch view — including its candidate list and event log — while slot numbers and aliases stay visible so you can still switch. `m` toggles it from any screen, and the footer shows `Mask on` or `Mask off`. The same switch is `ccswap config set ui.mask on` (off by default). The dashboard view can show both providers or only Claude Code / Codex without stopping background updates for the hidden provider. `ccswap watch` opens straight into the live monitor using the selected dashboard view. Works on macOS, Linux, and Windows.
 
+Hover over a menu option for a short explanation. With the keyboard, highlight
+a row and press `?` to read the same help; Esc closes it without activating the option.
+
 ## Menu bar (macOS)
 
 Needs the `menubar` extra (macOS only):

@@ -630,9 +630,12 @@ class CyclingListView(ListView):
 class MenuItem(ListItem):
     """One menu row: a label plus an action id the screen dispatches on."""
 
-    def __init__(self, label: str, action_id: str, *, muted: bool = False) -> None:
+    def __init__(
+        self, label: str, action_id: str, *, muted: bool = False, help_text: str | None = None
+    ) -> None:
         item = Static(label, markup=False)
         if muted:
             item.add_class("menu-item-muted")
         super().__init__(item)
         self.action_id = action_id
+        self.tooltip = Text(help_text) if help_text else None

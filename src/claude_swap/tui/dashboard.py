@@ -35,6 +35,8 @@ from claude_swap.tui.data import (
     iter_accounts,
     present_tag,
 )
+from claude_swap.tui.option_help import option_help
+from claude_swap.tui.modals import OutputModal
 from claude_swap.tui.widgets import (
     AccountItem,
     AccountsPanel,
@@ -89,6 +91,7 @@ class DashboardScreen(Screen):
         Binding("w", "app.open_watch", "Watch"),
         Binding("escape,left", "menu_back", "Back", show=False),
         Binding("q", "app.quit", "Quit"),
+        Binding("question_mark", "option_help", "Option help"),
         # Power shortcuts; the menu is the discoverable path.
         Binding("g", "app.open_auto", "Auto view", show=False),
         Binding("f", "app.refresh_full", "Refresh usage", show=False),
@@ -296,10 +299,17 @@ class DashboardScreen(Screen):
         menu = self.query_one("#menu", ListView)
         await menu.clear()
         await menu.extend(
-            MenuItem(label, action_id, muted=(action_id == "back"))
+            MenuItem(label, action_id, muted=(action_id == "back"),
+                     help_text=option_help(action_id))
             for label, action_id in entries
         )
         menu.index = 0
+
+    def action_option_help(self) -> None:
+        menu = self.query_one("#menu", ListView)
+        item = menu.highlighted_child
+        if isinstance(item, MenuItem) and (help_text := option_help(item.action_id)):
+            self.app.push_screen(OutputModal("Option help", help_text))
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
