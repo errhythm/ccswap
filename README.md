@@ -45,6 +45,8 @@ You usually don't need to restart Claude Code after a switch. Codex always needs
 
 **Switch automatically.** `ccswap auto` polls every 60 seconds and is safe to run while Claude Code works. Thresholds, per-model limits, cron mode and strategies are in [auto-switching](https://github.com/errhythm/ccswap/blob/main/docs/auto-switching.md).
 
+Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-window-warming) sends a minimal Haiku prompt for idle Claude accounts. It uses subscription quota and is disabled by default.
+
 **Two accounts at once.** `ccswap run 2` launches Claude Code as account 2 in this terminal only. `ccswap map 2 ~/work` makes a bare `ccswap run` pick account 2 in that folder. [Session mode](https://github.com/errhythm/ccswap/blob/main/docs/session-mode.md)
 
 **Codex sessions.** `ccswap codex run 2` launches an account in a private home; the default login runs plain Codex. [Codex session mode](https://github.com/errhythm/ccswap/blob/main/docs/codex.md#session-mode-codex-run)

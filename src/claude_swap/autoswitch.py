@@ -314,6 +314,18 @@ class AutoSwitchEvent:
 
 
 @dataclass(frozen=True)
+class WarmupEvent(AutoSwitchEvent):
+    kind: ClassVar[str] = "warmup"
+    message: str
+
+    def _fields(self) -> dict:
+        return {"message": self.message}
+
+    def human(self) -> str:
+        return self.message
+
+
+@dataclass(frozen=True)
 class PollEvent(AutoSwitchEvent):
     kind: ClassVar[str] = "poll"
     active: dict | None  # account_ref shape, or None
@@ -708,6 +720,7 @@ class AutoSwitchEngine:
         self.dry_run = dry_run
         self.state_path = state_path or (switcher.backup_dir / STATE_FILENAME)
         self.clock = clock
+        self._warmup = None
         self._stop = threading.Event()
         # Cuts the current inter-tick sleep short (a session threshold change
         # from the TUI should show a fresh decision now, not next interval).
@@ -926,6 +939,19 @@ class AutoSwitchEngine:
         try:
             outcome = self._tick_inner()
             self._persist_health_counters(self._health_account)
+            if self.settings.warmup_five_hour and not self._stop.is_set():
+                from claude_swap.warmup import WarmupEngine
+
+                if self._warmup is None:
+                    self._warmup = WarmupEngine(
+                        self.switcher, self.clock,
+                        lambda message: self._emit(WarmupEvent(message=message)),
+                        lambda: self.settings.warmup_five_hour and not self._stop.is_set(),
+                    )
+                try:
+                    self._warmup.tick(dry_run=self.dry_run)
+                except Exception:
+                    self._emit(WarmupEvent(message="Warmup unavailable; switching continues"))
             return outcome
         except ClaudeSwitchError as e:
             self._emit(ErrorEvent(message=str(e), transient=True))
@@ -2663,6 +2689,10 @@ class AutoSwitchEngine:
                 )
                 outcome = TickOutcome.ERROR
             delay = self._next_delay(outcome)
+            if self.settings.warmup_five_hour:
+                from claude_swap.warmup import INTERVAL_S
+
+                delay = min(delay, INTERVAL_S)
             if delay > self.settings.interval_seconds * 1.5:
                 until = datetime.now(timezone.utc) + timedelta(seconds=delay)
                 self._emit(

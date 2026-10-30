@@ -80,6 +80,8 @@ class AutoSwitchSettings:
     # absent from ``model``; a model listed in ``model`` without an entry
     # here still uses ``threshold``.
     model_thresholds: str | None = None
+    # Real, quota-consuming Haiku requests; deliberately opt-in.
+    warmup_five_hour: bool = False
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "autoswitch", "intervalSeconds", "interval_seconds", "float", 15.0, 3600.0,
             help="Poll interval for the ccswap auto loop, in seconds",
+        ),
+        SettingSpec(
+            "autoswitch", "warmupFiveHour", "warmup_five_hour", "bool",
+            help="Start idle Claude 5h windows with a minimal Haiku request (uses quota)",
         ),
         SettingSpec(
             "autoswitch", "cooldownSeconds", "cooldown_seconds", "float", 0.0, 86400.0,
@@ -513,7 +519,9 @@ def _clamped(settings: AutoSwitchSettings) -> AutoSwitchSettings:
             clamped = num(value, spec.default, spec.lo, spec.hi)
             kwargs[spec.field] = int(clamped) if spec.kind == "int" else clamped
         elif spec.kind == "bool":
-            kwargs[spec.field] = bool(value)
+            kwargs[spec.field] = (
+                value is True if spec.field == "warmup_five_hour" else bool(value)
+            )
         elif spec.kind == "string":
             # A non-empty string keeps as-is; anything else reverts to default
             # (None) so a null/garbage settings.json value disables the filter.

@@ -11,6 +11,56 @@ ccswap auto --dry-run           # log what it would do, never switch
 ccswap auto --strategy consume-first   # burn the soonest-resetting account first
 ```
 
+## Optional five-hour window warming
+
+A fresh five-hour window starts with a real request. To start idle Claude
+accounts' windows before you need them, explicitly enable warming:
+
+```bash
+ccswap config set autoswitch.warmupFiveHour true
+ccswap auto --once --dry-run     # preview eligible accounts; no warmup requests
+ccswap auto                     # keep running for automatic warming
+```
+
+Disable it with `ccswap config set autoswitch.warmupFiveHour false`. Restart
+an already running auto process after changing this setting. It is **off by
+default**, applies only to Claude, and sends real subscription requests.
+The fixed prompt is `Reply OK.`, using the `haiku` model alias and one turn;
+Claude Code's normal request overhead still applies. It does not create
+additional quota or promise that every model-specific window will start.
+
+While enabled, the auto process wakes at least once a minute, even with a
+longer configured interval. It checks cached readings at most once a minute
+and sends at most one warmup request per check. Normal usage polling and its
+backoff remain in charge: warming never forces a usage refresh. Disabled,
+API-key, incomplete, or unidentifiable accounts are skipped. A running window
+is skipped even at 0%. Usage must be no more than two minutes old, read after
+the previous reset, and show weekly headroom; exhausted Haiku limits also
+prevent warming. Unknown or expired access tokens are skipped rather than
+refreshed by warming. This conservative policy can delay warming when usage
+is unavailable or polling is slow.
+
+The request runs in a disposable profile and working directory, with no shared
+user/project settings, tools, skills, MCP servers or user hooks. The child
+receives only the verified access token; no refresh token is copied or spent,
+and the global login is not switched. Administrator-managed Claude policies
+still apply, including managed hooks and routing: enable warming only where
+those policies permit unattended requests. The CLI must support the flags
+listed in [its reference](https://code.claude.com/docs/en/cli-reference).
+
+`warmup` events appear in the auto log and JSONL output. A completed CLI request
+is not independent verification of the server's new reset time; subsequent
+normal quota polling supplies that reading. Before launching, ccswap records
+an account-and-organization guard in `warmup.json` in its data directory.
+Concurrent auto processes share it, and slot renumbering does not bypass it.
+Timeouts, crashes and unsuccessful responses conservatively retain the guard
+for five hours plus the one-minute request timeout. Do not delete this file
+to retry an uncertain request. Guards are local to this machine.
+Warming is synchronous: the identity probe has a five-second timeout and the
+request a one-minute timeout, delaying the next auto-switch check. CLI wrappers
+may have child processes that outlive that timeout and delay cleanup further;
+the persistent guard still prevents retries.
+
 ## How it behaves & advanced usage
 
 - Runs safely alongside Claude Code: switches take the same credential locks Claude Code uses, so a swap never collides with a token refresh.
