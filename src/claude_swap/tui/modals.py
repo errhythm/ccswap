@@ -11,8 +11,15 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 
+from claude_swap.i18n import localize_bindings, mark
 
-class ConfirmModal(ModalScreen[bool]):
+
+class LocalizedModal(ModalScreen):
+    def on_mount(self) -> None:
+        localize_bindings(self, self.app.gettext)
+
+
+class ConfirmModal(LocalizedModal):
     """Yes/No confirmation. Dismisses with True only on explicit confirm.
 
     Keyboard-first: ←/→ move between the buttons (Enter presses the focused
@@ -20,14 +27,14 @@ class ConfirmModal(ModalScreen[bool]):
     """
 
     BINDINGS = [
-        Binding("y", "confirm", "Yes", show=False),
-        Binding("n,escape", "cancel", "No", show=False),
+        Binding("y", "confirm", mark("Yes"), show=False),
+        Binding("n,escape", "cancel", mark("No"), show=False),
         Binding("left", "app.focus_previous", show=False),
         Binding("right", "app.focus_next", show=False),
     ]
 
     def __init__(
-        self, message: str, *, title: str = "Confirm", yes_label: str = "Yes"
+        self, message: str, *, title: str | None = None, yes_label: str | None = None
     ) -> None:
         super().__init__()
         self._title = title
@@ -35,14 +42,20 @@ class ConfirmModal(ModalScreen[bool]):
         self._yes_label = yes_label
 
     def compose(self) -> ComposeResult:
+        title = self._title if self._title is not None else self.app.gettext("Confirm")
+        yes_label = (
+            self._yes_label if self._yes_label is not None else self.app.gettext("Yes")
+        )
         with Vertical(classes="modal-box"):
-            yield Label(self._title, classes="modal-title")
+            yield Label(title, classes="modal-title")
             yield Static(self._message, classes="modal-body")
             with Horizontal(classes="modal-buttons"):
-                yield Button(self._yes_label, id="yes")
-                yield Button("Cancel", id="no")
+                yield Button(yes_label, id="yes")
+                yield Button(self.app.gettext("Cancel"), id="no")
             yield Static(
-                f"← → · enter  ·  y {self._yes_label.lower()}  ·  n / esc cancel",
+                self.app.gettext(
+                    "← → · enter  ·  y {answer}  ·  n / esc cancel"
+                ).format(answer=yes_label.lower()),
                 classes="modal-hint",
             )
 
@@ -65,7 +78,7 @@ class TokenForm:
     slot: int | None
 
 
-class AddTokenModal(ModalScreen["TokenForm | None"]):
+class AddTokenModal(LocalizedModal):
     """Collects a setup-token/API key, optional email label, optional slot.
 
     ←/→ only reach the screen when a Button is focused (a focused Input
@@ -74,28 +87,41 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
     """
 
     BINDINGS = [
-        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("escape", "cancel", mark("Cancel"), show=False),
         Binding("left", "app.focus_previous", show=False),
         Binding("right", "app.focus_next", show=False),
     ]
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
-            yield Label("Add account from token", classes="modal-title")
+            yield Label(
+                self.app.gettext("Add account from token"), classes="modal-title"
+            )
             yield Static(
-                "OAuth setup-token (sk-ant-oat…) or Console API key "
-                "(sk-ant-api…, sk-ant-usr…); the type is auto-detected.",
+                self.app.gettext(
+                    "OAuth setup-token (sk-ant-oat…) or Console API key (sk-ant-api…, sk-ant-usr…); the type is auto-detected."
+                ),
                 classes="modal-body",
             )
-            yield Input(password=True, placeholder="token (required)", id="token")
-            yield Input(placeholder="email label (optional)", id="email")
-            yield Input(placeholder="slot number (optional)", id="slot", type="integer")
+            yield Input(
+                password=True,
+                placeholder=self.app.gettext("token (required)"),
+                id="token",
+            )
+            yield Input(
+                placeholder=self.app.gettext("email label (optional)"), id="email"
+            )
+            yield Input(
+                placeholder=self.app.gettext("slot number (optional)"),
+                id="slot",
+                type="integer",
+            )
             yield Static("", id="form-error", classes="form-error")
             with Horizontal(classes="modal-buttons"):
-                yield Button("Add", id="add")
-                yield Button("Cancel", id="cancel")
+                yield Button(self.app.gettext("Add"), id="add")
+                yield Button(self.app.gettext("Cancel"), id="cancel")
             yield Static(
-                "enter add  ·  tab next field  ·  esc cancel",
+                self.app.gettext("enter add  ·  tab next field  ·  esc cancel"),
                 classes="modal-hint",
             )
 
@@ -113,7 +139,9 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
         email = self.query_one("#email", Input).value.strip() or None
         slot_raw = self.query_one("#slot", Input).value.strip()
         if not token:
-            self.query_one("#form-error", Static).update("Token is required.")
+            self.query_one("#form-error", Static).update(
+                self.app.gettext("Token is required.")
+            )
             return
         slot: int | None = None
         if slot_raw:
@@ -121,11 +149,13 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
                 slot = int(slot_raw)
             except ValueError:
                 self.query_one("#form-error", Static).update(
-                    "Slot must be a number."
+                    self.app.gettext("Slot must be a number.")
                 )
                 return
             if slot < 1:
-                self.query_one("#form-error", Static).update("Slot must be >= 1.")
+                self.query_one("#form-error", Static).update(
+                    self.app.gettext("Slot must be >= 1.")
+                )
                 return
         self.dismiss(TokenForm(token=token, email=email, slot=slot))
 
@@ -133,10 +163,10 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
         self.dismiss(None)
 
 
-class OutputModal(ModalScreen[None]):
+class OutputModal(LocalizedModal):
     """Scrollable display of captured (ANSI-colored) action output."""
 
-    BINDINGS = [Binding("escape,q,enter", "dismiss_modal", "Close", show=False)]
+    BINDINGS = [Binding("escape,q,enter", "dismiss_modal", mark("Close"), show=False)]
 
     def __init__(self, title: str, output: str) -> None:
         super().__init__()
@@ -147,10 +177,14 @@ class OutputModal(ModalScreen[None]):
         with Vertical(classes="modal-box modal-box-wide"):
             yield Label(self._title, classes="modal-title")
             with VerticalScroll(classes="modal-output"):
-                yield Static(Text.from_ansi(self._output.rstrip() or "(no output)"))
+                yield Static(
+                    Text.from_ansi(
+                        self._output.rstrip() or self.app.gettext("(no output)")
+                    )
+                )
             with Horizontal(classes="modal-buttons"):
-                yield Button("Close", id="close")
-            yield Static("esc close", classes="modal-hint")
+                yield Button(self.app.gettext("Close"), id="close")
+            yield Static(self.app.gettext("esc close"), classes="modal-hint")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(None)

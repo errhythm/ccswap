@@ -2967,3 +2967,70 @@ async def test_two_expiring_minis_keep_local_times_in_narrow_panel(tmp_path):
         clock = "".join(expiry.astimezone().strftime("%Y-%m-%d %H:%M %Z (%z)").split())
         assert visible.count(clock) == 2
         assert "usageunknown" not in visible
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('language,settings_label,remove_label', [
+    ('de', 'Einstellungen…', 'Entfernen'), ('el', 'Ρυθμίσεις…', 'Αφαίρεση'),
+])
+async def test_language_localizes_controls_but_keeps_actions_and_confirmation_safe(tmp_path, language, settings_label, remove_label):
+    from textual.widgets import Static, Button
+    from claude_swap.tui.widgets import MenuItem
+    (tmp_path / 'settings.json').write_text(json.dumps({'ui': {'language': language}}))
+    fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+    app = make_app(fake)
+    async with app.run_test(size=(80, 32)) as pilot:
+        await settle(pilot)
+        labels = [str(row.query_one(Static).render()) for row in app.screen.query(MenuItem)]
+        assert any(settings_label in label for label in labels)
+        await menu_select(pilot, 'settings-menu')
+        assert app.screen._menu_stack[-1][0] == 'settings'
+        await menu_select(pilot, 'setting:mask')
+        assert json.loads((tmp_path / 'settings.json').read_text())['ui']['mask'] is True
+        await menu_select(pilot, 'setting:language')
+        assert app._language_name != language
+        assert json.loads((tmp_path / "settings.json").read_text())["ui"]["language"] == app._language_name
+        # A saved language does not mutate the running app's translator.
+        assert app.gettext('Settings…') == settings_label
+        app.confirm_remove('claude', '1', 'fake@example.com')
+        await pilot.pause()
+        assert str(app.screen.query_one('#yes', Button).label) == remove_label
+        await pilot.press('n')
+        await pilot.pause()
+        assert not any(call[0] == 'remove' for call in fake.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('key,confirmed', [('n', False), ('y', True)])
+async def test_confirmation_translates_once_and_keeps_yes_no_keys(tmp_path, key, confirmed):
+    from textual.widgets import Button
+    fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+    app = make_app(fake)
+    app.gettext = lambda text: {'Remove': 'Entfernen', 'Entfernen': 'wrong second translation'}.get(text, text)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.confirm_remove('claude', '1', 'fake@example.com')
+        await pilot.pause()
+        assert str(app.screen.query_one('#yes', Button).label) == 'Entfernen'
+        await pilot.press(key)
+        await settle(pilot)
+        assert any(call[0] == 'remove' for call in fake.calls) is confirmed
+
+
+def test_translated_quota_labels_preserve_window_ids_and_spend_countdowns():
+    from claude_swap.tui.widgets import account_card_text, mini_account_text
+    now = 1_700_000_000.0
+    seen = []
+    entry = UsageEntry(last_good={
+        'weekly': {'pct': 42.0},
+        'spend': {'pct': 30.0, 'used': 3.0, 'limit': 10.0, 'resets_at': datetime.fromtimestamp(now + 3600, timezone.utc).isoformat()},
+    }, fetched_at=now)
+    translate = lambda text: {'Weekly': 'Woche', 'resets {duration}': 'Reset in {duration}'}.get(text, text)
+    def threshold(window):
+        seen.append(window)
+        return None
+    account = make_account(1, entry=entry)
+    card = account_card_text(account, 100, now=now, tr=translate, threshold_for=threshold).plain
+    assert 'Weekly' in seen and 'Woche' not in seen
+    assert 'Woche' in card and 'Reset in 1h' in card
+    assert 'Woche' in mini_account_text(account, now, tr=translate).plain

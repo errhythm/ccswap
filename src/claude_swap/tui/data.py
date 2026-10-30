@@ -172,9 +172,11 @@ def run_action(fn: Callable[[], dict | None]) -> ActionResult:
     saved_stdin = sys.stdin
     sys.stdin = io.StringIO()
     try:
-        with printer.force_color(), contextlib.redirect_stdout(
-            buf
-        ), contextlib.redirect_stderr(buf):
+        with (
+            printer.force_color(),
+            contextlib.redirect_stdout(buf),
+            contextlib.redirect_stderr(buf),
+        ):
             try:
                 payload = fn()
             except ClaudeSwitchError as e:
@@ -194,6 +196,7 @@ def run_action(fn: Callable[[], dict | None]) -> ActionResult:
 # Display helpers
 # ---------------------------------------------------------------------------
 
+
 def sentinel_label(sentinel: str) -> str:
     """The same wording ``cswap list`` prints for this sentinel state."""
     return SENTINEL_NOTES.get(sentinel, sentinel)
@@ -210,8 +213,10 @@ def window_pct(last_good: dict | None, key: str) -> float | None:
     return float(pct) if isinstance(pct, (int, float)) else None
 
 
-def reset_text(window: dict | None, now: float) -> str | None:
-    """Live countdown to one window's reset ("resets 2h 13m"), if known.
+def reset_countdown(
+    window: dict | None, now: float, *, tr: Callable[[str], str] = str
+) -> str | None:
+    """Live countdown without a language-dependent prefix, if known.
 
     Computed from ``resets_at`` at render time — the countdown the API sent
     was correct at *fetch* time and drifts as the measurement ages.
@@ -227,8 +232,17 @@ def reset_text(window: dict | None, now: float) -> str | None:
         return None
     remaining = ts - now
     if remaining <= 0:
-        return "resets now"
-    return f"resets {format_duration(remaining)}"
+        return tr("now")
+    return format_duration(remaining)
+
+
+def reset_text(
+    window: dict | None, now: float, *, tr: Callable[[str], str] = str
+) -> str | None:
+    countdown = reset_countdown(window, now)
+    if countdown == "now":
+        return tr("resets now")
+    return tr("resets {duration}").format(duration=countdown) if countdown else None
 
 
 def reset_clock(window: dict | None, now: float) -> str | None:
@@ -273,11 +287,11 @@ def format_duration(seconds: float) -> str:
     return f"{d}d {h}h" if h else f"{d}d"
 
 
-def format_age(age_s: float | None) -> str | None:
+def format_age(age_s: float | None, *, tr: Callable[[str], str] = str) -> str | None:
     """Measurement age note ("· 2m ago"); None while comfortably fresh."""
     if age_s is None or age_s < usage_store.SERVE_TTL_S:
         return None
-    return f"· {format_duration(age_s)} ago"
+    return tr("· {age} ago").format(age=format_duration(age_s))
 
 
 def clock_stamp() -> str:
@@ -299,6 +313,7 @@ __all__ = [
     "present_email",
     "present_tag",
     "reset_clock",
+    "reset_countdown",
     "reset_text",
     "run_action",
     "sentinel_label",

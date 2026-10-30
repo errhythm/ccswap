@@ -7,6 +7,8 @@ Run `ccswap` on its own (or `ccswap tui`) for the full-screen dashboard: Claude 
 Hover over a menu option for a short explanation. With the keyboard, highlight
 a row and press `?` to read the same help; Esc closes it without activating the option.
 
+The dashboard also supports English, German and Greek. Choose **Settings → Language (restart)** or use `ccswap config set ui.language de` / `el`, then restart. See [translation contributions](translating.md) for additional languages.
+
 ## Menu bar (macOS)
 
 Needs the `menubar` extra (macOS only):

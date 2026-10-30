@@ -24,6 +24,7 @@ from pathlib import Path
 
 from claude_swap.exceptions import ConfigError
 from claude_swap.fsutil import atomic_write_text, publish_target
+from claude_swap.i18n import LANGUAGES
 
 SETTINGS_SCHEMA_VERSION = 1
 SETTINGS_FILENAME = "settings.json"
@@ -95,6 +96,7 @@ class UiSettings:
     view: str = "combined"
     mask: bool = False
     star_prompt: bool = True
+    language: str = "en"
 
 
 @dataclass(frozen=True)
@@ -230,6 +232,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "autoswitch", "modelThresholds", "model_thresholds", "model_thresholds",
             help="Per-model gates, e.g. Fable=40 or Fable=40,Opus=70 (each 1-99.9)",
+        ),
+        SettingSpec(
+            "ui", "language", "language", "choice", choices=tuple(LANGUAGES),
+            help="TUI language; restart the dashboard after changing it",
         ),
         SettingSpec(
             "ui", "theme", "theme", "choice", choices=("dark", "light", "auto"),
@@ -589,6 +595,10 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
     default = UiSettings()
     if not isinstance(section, dict):
         return default
+    language = section.get("language", default.language)
+    if language not in SETTING_SPECS["ui.language"].choices:
+        _logger.warning("settings.json: unsupported ui.language %r; using %r", language, default.language)
+        language = default.language
     theme = section.get("theme", default.theme)
     if theme not in SETTING_SPECS["ui.theme"].choices:
         _logger.warning(
@@ -617,7 +627,7 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
             star_prompt, default.star_prompt,
         )
         star_prompt = default.star_prompt
-    return UiSettings(theme=theme, view=view, mask=mask, star_prompt=star_prompt)
+    return UiSettings(theme=theme, view=view, mask=mask, star_prompt=star_prompt, language=language)
 
 
 def load_credential_settings(backup_root: Path) -> CredentialSettings:

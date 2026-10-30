@@ -26,11 +26,12 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, ListView, Static
 
+from claude_swap.i18n import LANGUAGES, localize_bindings, mark
 from claude_swap.models import AccountSnapshot, AccountsSnapshot
 from claude_swap.settings import parse_model_thresholds
 from claude_swap.tui.data import (
-    PROVIDERS,
     PROVIDER_LABELS,
+    PROVIDERS,
     account_label,
     iter_accounts,
     present_tag,
@@ -61,9 +62,11 @@ _BACK = ("← back", "back")
 _GATE_STOPS = (40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0)
 
 
-def _gate_label(pct: float | None, inherited: float) -> str:
+def _gate_label(
+    pct: float | None, inherited: float, tr: Callable[[str], str] = str
+) -> str:
     if pct is None:
-        return f"inherit ({inherited:g}%)"
+        return tr("inherit ({inherited:g}%)").format(inherited=inherited)
     return f"{pct:g}%"
 
 
@@ -87,14 +90,14 @@ def _next_gate(current: float | None) -> float | None:
 
 class DashboardScreen(Screen):
     BINDINGS = [
-        Binding("s", "open_switch", "Switch accounts"),
-        Binding("w", "app.open_watch", "Watch"),
-        Binding("escape,left", "menu_back", "Back", show=False),
-        Binding("q", "app.quit", "Quit"),
-        Binding("question_mark", "option_help", "Option help"),
+        Binding("s", "open_switch", mark("Switch accounts")),
+        Binding("w", "app.open_watch", mark("Watch")),
+        Binding("escape,left", "menu_back", mark("Back"), show=False),
+        Binding("q", "app.quit", mark("Quit")),
+        Binding("question_mark", "option_help", mark("Option help")),
         # Power shortcuts; the menu is the discoverable path.
-        Binding("g", "app.open_auto", "Auto view", show=False),
-        Binding("f", "app.refresh_full", "Refresh usage", show=False),
+        Binding("g", "app.open_auto", mark("Auto view"), show=False),
+        Binding("f", "app.refresh_full", mark("Refresh usage"), show=False),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
     ]
@@ -123,6 +126,7 @@ class DashboardScreen(Screen):
         yield Footer()
 
     async def on_mount(self) -> None:
+        localize_bindings(self, self.app.gettext)
         self.query_one("#menu", ListView).focus()
         await self._push_menu("menu", self._root_entries())
 
@@ -132,21 +136,21 @@ class DashboardScreen(Screen):
         # No "Refresh" entry: every view auto-refreshes, so a menu item would
         # wrongly imply the user has to. `f` stays as a hidden escape hatch.
         return [
-            ("Switch account…", "switch"),
-            ("Watch accounts", "watch"),
-            ("Auto-switch view…", "auto"),
-            ("Add account…", "add-menu"),
-            ("Disable / enable account…", "disable-menu"),
-            ("Remove account…", "remove-menu"),
-            ("Settings…", "settings-menu"),
-            ("Quit", "quit"),
+            (self.app.gettext("Switch account…"), "switch"),
+            (self.app.gettext("Watch accounts"), "watch"),
+            (self.app.gettext("Auto-switch view…"), "auto"),
+            (self.app.gettext("Add account…"), "add-menu"),
+            (self.app.gettext("Disable / enable account…"), "disable-menu"),
+            (self.app.gettext("Remove account…"), "remove-menu"),
+            (self.app.gettext("Settings…"), "settings-menu"),
+            (self.app.gettext("Quit"), "quit"),
         ]
 
     def _add_entries(self) -> MenuEntries:
         return [
-            ("Claude Code — current login", "add-login:claude"),
-            ("Claude Code — setup token or API key…", "add-token"),
-            ("Codex — current login", "add-login:codex"),
+            (self.app.gettext("Claude Code — current login"), "add-login:claude"),
+            (self.app.gettext("Claude Code — setup token or API key…"), "add-token"),
+            (self.app.gettext("Codex — current login"), "add-login:codex"),
             _BACK,
         ]
 
@@ -183,8 +187,12 @@ class DashboardScreen(Screen):
         entries: MenuEntries = []
         for provider, acc in iter_accounts(self.app.snapshots):
             name = self._account_label(acc)
-            action = "→ enable" if acc.disabled else "→ disable"
-            state = "  (disabled)" if acc.disabled else ""
+            action = (
+                self.app.gettext("→ enable")
+                if acc.disabled
+                else self.app.gettext("→ disable")
+            )
+            state = self.app.gettext("  (disabled)") if acc.disabled else ""
             entries.append(
                 (
                     f"{PROVIDER_LABELS[provider]} — {acc.number}  "
@@ -198,39 +206,90 @@ class DashboardScreen(Screen):
     def _settings_entries(self) -> MenuEntries:
         """Inline preference cycles keep settings one level deep."""
         view_labels = {
-            "combined": "Combined",
+            "combined": self.app.gettext("Combined"),
             "claude": PROVIDER_LABELS["claude"],
             "codex": PROVIDER_LABELS["codex"],
         }
         threshold = self.app.threshold_pct
-        threshold_value = (
-            threshold if threshold is not None else DEFAULT_THRESHOLD_PCT
-        )
+        threshold_value = threshold if threshold is not None else DEFAULT_THRESHOLD_PCT
         threshold_label = f"{threshold_value:g}"
         return [
-            (f"Theme: {self.app._theme_name}", "setting:theme"),
-            (f"Dashboard view: {view_labels[self.app._view]}", "setting:view"),
             (
-                f"Mask account info: {'on' if self.app.mask_accounts else 'off'}",
+                self.app.gettext("Theme: {theme_name}").format(
+                    theme_name=self.app._theme_name
+                ),
+                "setting:theme",
+            ),
+            (
+                self.app.gettext("Dashboard view: {view}").format(
+                    view=view_labels[self.app._view]
+                ),
+                "setting:view",
+            ),
+            (
+                self.app.gettext("Mask account info: {state}").format(
+                    state=self.app.gettext("on")
+                    if self.app.mask_accounts
+                    else self.app.gettext("off")
+                ),
                 "setting:mask",
             ),
-            (f"Auto-switch threshold: {threshold_label}%", "setting:threshold"),
             (
-                f"5h gate: {_gate_label(self.app._threshold_5h, threshold_value)}",
+                self.app.gettext("Auto-switch threshold: {threshold_label}%").format(
+                    threshold_label=threshold_label
+                ),
+                "setting:threshold",
+            ),
+            (
+                self.app.gettext("5h gate: {gate}").format(
+                    gate=_gate_label(
+                        self.app._threshold_5h, threshold_value, self.app.gettext
+                    )
+                ),
                 "setting:threshold5h",
             ),
             (
-                f"Weekly gate: {_gate_label(self.app._threshold_7d, threshold_value)}",
+                self.app.gettext("Weekly gate: {gate}").format(
+                    gate=_gate_label(
+                        self.app._threshold_7d, threshold_value, self.app.gettext
+                    )
+                ),
                 "setting:threshold7d",
             ),
             (
-                f"Fable gate: {_gate_label(_fable_pct(self.app._model_thresholds), threshold_value)}",
+                self.app.gettext("Fable gate: {gate}").format(
+                    gate=_gate_label(
+                        _fable_pct(self.app._model_thresholds),
+                        threshold_value,
+                        self.app.gettext,
+                    )
+                ),
                 "setting:fable",
             ),
-            (f"Auto-switch strategy: {self.app._strategy_name}", "setting:strategy"),
-            (f"Claude statusline: {self._claude_label('claude.statusline')}",
-             "claude:claude.statusline"),
-            (f"Claude Code mod: {self._claude_label('claude.mod')}", "claude:claude.mod"),
+            (
+                self.app.gettext("Auto-switch strategy: {strategy_name}").format(
+                    strategy_name=self.app._strategy_name
+                ),
+                "setting:strategy",
+            ),
+            (
+                self.app.gettext("Claude statusline: {state}").format(
+                    state=self._claude_label("claude.statusline")
+                ),
+                "claude:claude.statusline",
+            ),
+            (
+                self.app.gettext("Claude Code mod: {state}").format(
+                    state=self._claude_label("claude.mod")
+                ),
+                "claude:claude.mod",
+            ),
+            (
+                self.app.gettext("Language (restart): {language}").format(
+                    language=LANGUAGES[self.app._language_name]
+                ),
+                "setting:language",
+            ),
             _BACK,
         ]
 
@@ -238,7 +297,7 @@ class DashboardScreen(Screen):
         state = self._claude_state[key]
         if self._claude_busy or state is None:
             return "…"
-        return "on" if state else "off"
+        return self.app.gettext("on") if state else self.app.gettext("off")
 
     def _start_claude_work(self, key: str | None = None, on: bool = False) -> None:
         """Read (and with ``key``, first toggle) the Claude integrations off
@@ -261,7 +320,12 @@ class DashboardScreen(Screen):
                     self.app.switcher_for("claude").backup_dir, key, on
                 )
             except Exception as exc:  # surface any failure; never crash the UI
-                message, severity = f"Could not change {key}: {exc}", "error"
+                message, severity = (
+                    self.app.gettext("Could not change {key}: {exc}").format(
+                        key=key, exc=exc
+                    ),
+                    "error",
+                )
         state = {k: is_enabled(k) for k in self._claude_state}
         self.app.call_from_thread(self._claude_done, state, message, severity)
 
@@ -294,13 +358,27 @@ class DashboardScreen(Screen):
 
     async def _render_menu(self) -> None:
         title, entries = self._menu_stack[-1]
-        crumb = " › ".join(t for t, _ in self._menu_stack)
+        titles = {
+            "menu": mark("menu"),
+            "settings": mark("settings"),
+            "add account": mark("add account"),
+            "remove account": mark("remove account"),
+            "disable / enable": mark("disable / enable"),
+            "auto-switch view": mark("auto-switch view"),
+        }
+        crumb = " › ".join(
+            self.app.gettext(titles.get(t, t)) for t, _ in self._menu_stack
+        )
         self.query_one("#menu-title", Static).update(crumb)
         menu = self.query_one("#menu", ListView)
         await menu.clear()
         await menu.extend(
-            MenuItem(label, action_id, muted=(action_id == "back"),
-                     help_text=option_help(action_id))
+            MenuItem(
+                self.app.gettext("← back") if action_id == "back" else label,
+                action_id,
+                muted=(action_id == "back"),
+                help_text=option_help(action_id),
+            )
             for label, action_id in entries
         )
         menu.index = 0
@@ -309,7 +387,7 @@ class DashboardScreen(Screen):
         menu = self.query_one("#menu", ListView)
         item = menu.highlighted_child
         if isinstance(item, MenuItem) and (help_text := option_help(item.action_id)):
-            self.app.push_screen(OutputModal("Option help", help_text))
+            self.app.push_screen(OutputModal(self.app.gettext("Option help"), help_text))
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
@@ -346,7 +424,11 @@ class DashboardScreen(Screen):
             _, provider, number = action_id.split(":", 2)
             snap = app.snapshots[provider]
             email = next(
-                (a.email for a in (snap.accounts if snap else ()) if a.number == number),
+                (
+                    a.email
+                    for a in (snap.accounts if snap else ())
+                    if a.number == number
+                ),
                 "?",
             )
             app.confirm_remove(provider, number, email)
@@ -358,17 +440,25 @@ class DashboardScreen(Screen):
             key = action_id.split(":", 1)[1]
             state = self._claude_state[key]
             if self._claude_busy or state is None:
-                app.notify("Still checking Claude Code, try again in a moment")
+                app.notify(
+                    self.app.gettext(
+                        "Still checking Claude Code, try again in a moment"
+                    )
+                )
                 return
             self._start_claude_work(key, not state)
             await self._refresh_settings_menu()
         elif action_id.startswith("setting:"):
             key = action_id.split(":", 1)[1]
-            if key == "theme":
+            if key == "language":
+                order = tuple(LANGUAGES)
+                value = order[(order.index(app._language_name) + 1) % len(order)]
+                app.apply_language(value)
+            elif key == "theme":
                 order = ("dark", "light", "auto")
                 value = order[(order.index(app._theme_name) + 1) % len(order)]
                 app.apply_theme(value)
-                app.notify(f"Theme: {value}")
+                app.notify(self.app.gettext("Theme: {value}").format(value=value))
             elif key == "view":
                 order = ("combined", "claude", "codex")
                 value = order[(order.index(app._view) + 1) % len(order)]
@@ -484,11 +574,10 @@ class AccountListScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        localize_bindings(self, self.app.gettext)
         self.watch(self.app, "snapshots", self._on_snapshot)
 
-    async def _on_snapshot(
-        self, snapshots: dict[str, AccountsSnapshot | None]
-    ) -> None:
+    async def _on_snapshot(self, snapshots: dict[str, AccountsSnapshot | None]) -> None:
         rows = iter_accounts(
             snapshots,
             None if self.app._view == "combined" else self.app._view,
@@ -498,7 +587,9 @@ class AccountListScreen(Screen):
         children = []
         keys: list[tuple[str, str | None]] = []
         for provider in PROVIDERS:
-            provider_rows = [acc for row_provider, acc in rows if row_provider == provider]
+            provider_rows = [
+                acc for row_provider, acc in rows if row_provider == provider
+            ]
             if not provider_rows:
                 continue
             children.append(ProviderDivider(provider))
@@ -512,9 +603,7 @@ class AccountListScreen(Screen):
             await listview.extend(children)
             self._keys = keys
             listview.index = (
-                self._index_after_build(rows, first_build, previous)
-                if keys
-                else None
+                self._index_after_build(rows, first_build, previous) if keys else None
             )
         else:
             for item, (_provider, acc) in zip(listview.query(AccountItem), rows):
@@ -542,7 +631,9 @@ class AccountListScreen(Screen):
         indices: list[int] = []
         child_index = 0
         for provider in PROVIDERS:
-            provider_rows = [acc for row_provider, acc in rows if row_provider == provider]
+            provider_rows = [
+                acc for row_provider, acc in rows if row_provider == provider
+            ]
             if not provider_rows:
                 continue
             child_index += 1  # the ProviderDivider for this non-empty section
@@ -556,11 +647,7 @@ class AccountListScreen(Screen):
         # active_number as though it were globally unique.
         indices = self._account_child_indices(rows)
         return next(
-            (
-                index
-                for index, (_provider, acc) in zip(indices, rows)
-                if acc.is_active
-            ),
+            (index for index, (_provider, acc) in zip(indices, rows) if acc.is_active),
             indices[0] if indices else 0,
         )
 
@@ -578,9 +665,8 @@ class AccountListScreen(Screen):
                 if ts is not None and ts != self._stamps.get(num)
             }
             for item in listview.query(AccountItem):
-                if (
-                    (item.provider, item.number) in changed
-                    and not item.has_class("flash")
+                if (item.provider, item.number) in changed and not item.has_class(
+                    "flash"
                 ):
                     item.add_class("flash")
                     self.set_timer(FLASH_S, partial(item.remove_class, "flash"))
@@ -600,15 +686,18 @@ class SwitchScreen(AccountListScreen):
         # priority: outranks the focused ListView's own (hidden) enter binding
         # so "Switch" is visible in the footer; the action delegates right back
         # to the list cursor, so behavior is identical.
-        Binding("enter", "select_highlighted", "Switch", priority=True),
-        Binding("b", "switch_best", "Best / next"),
-        Binding("escape,q,s", "back", "Back"),
+        Binding("enter", "select_highlighted", mark("Switch"), priority=True),
+        Binding("b", "switch_best", mark("Best / next")),
+        Binding("escape,q,s", "back", mark("Back")),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
     ]
 
     def on_mount(self) -> None:
-        self.query_one("#list-title", Static).update("switch to which account?")
+        localize_bindings(self, self.app.gettext)
+        self.query_one("#list-title", Static).update(
+            self.app.gettext("switch to which account?")
+        )
         self.query_one("#accounts", ListView).focus()
         super().on_mount()
 
@@ -641,14 +730,14 @@ class WatchScreen(AccountListScreen):
     disarms selection first, then leaves the screen.
     """
 
-    _WATCH_TITLE = "watching all accounts"
-    _SELECT_TITLE = "switch to which account? · enter confirm · esc cancel"
+    _WATCH_TITLE = mark("watching all accounts")
+    _SELECT_TITLE = mark("switch to which account? · enter confirm · esc cancel")
 
     BINDINGS = [
-        Binding("s", "toggle_select", "Switch"),
-        Binding("enter", "select_highlighted", "Confirm", priority=True),
-        Binding("f", "app.refresh_full", "Refresh", show=False),
-        Binding("escape,q", "back", "Back"),
+        Binding("s", "toggle_select", mark("Switch")),
+        Binding("enter", "select_highlighted", mark("Confirm"), priority=True),
+        Binding("f", "app.refresh_full", mark("Refresh"), show=False),
+        Binding("escape,q", "back", mark("Back")),
         Binding("down,j", "nav_down", show=False),
         Binding("up,k", "nav_up", show=False),
     ]
@@ -658,6 +747,7 @@ class WatchScreen(AccountListScreen):
         self._selecting = False
 
     def on_mount(self) -> None:
+        localize_bindings(self, self.app.gettext)
         self.watch(self.app, "refresh_status", self._on_refresh_status)
         self.watch(self.app, "mask_accounts", self._on_refresh_status)
         self.query_one("#list-title", Static).update(self._title_text())
@@ -665,10 +755,10 @@ class WatchScreen(AccountListScreen):
 
     def _title_text(self) -> str:
         if self._selecting:
-            return self._SELECT_TITLE
-        title = self._WATCH_TITLE
+            return self.app.gettext(self._SELECT_TITLE)
+        title = self.app.gettext(self._WATCH_TITLE)
         if self.app.mask_accounts:
-            title += " · masked"
+            title += self.app.gettext(" · masked")
         status = self.app.refresh_status
         return f"{title} · {status}" if status else title
 

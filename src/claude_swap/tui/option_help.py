@@ -17,6 +17,7 @@ OPTION_HELP = {
     "setting:threshold5h": "Cycle the 5-hour gate, then inherit. Automatic switching can trigger when any configured gate reaches its threshold.",
     "setting:threshold7d": "Cycle the weekly gate, then inherit. Applies to Claude's 7-day window and Codex's weekly window.",
     "setting:fable": "Cycle the Claude-only Fable weekly-model gate, then inherit. Other model thresholds are preserved. Exact values and additional models are available through ccswap config set.",
+    "setting:language": "Cycle English, German and Greek. Restart the dashboard to apply the new language.",
     "setting:strategy": "Cycle best and consume-first. Best favors quota headroom; consume-first proactively uses available quota whose weekly window resets sooner, even below the threshold. This does not redeem banked resets.",
     "claude:claude.statusline": "Install or remove ccswap's Claude Code statusline. Turning it off restores the statusline configuration backed up during installation.",
     "claude:claude.mod": "Enable or disable the ccswap Claude Code plugin. This may invoke Claude's plugin manager; it does not change your account.",

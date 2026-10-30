@@ -31,6 +31,7 @@ from claude_swap.autoswitch import (
     pct_label,
 )
 from claude_swap.codex_autoswitch import CodexAutoSwitchEngine
+from claude_swap.i18n import localize_bindings, mark
 from claude_swap.models import AccountsSnapshot
 from claude_swap.settings import (
     SETTING_SPECS,
@@ -80,12 +81,12 @@ def event_text(
 
 class AutoScreen(Screen):
     BINDINGS = [
-        Binding("l", "toggle_live", "Go live / dry-run"),
-        Binding("t", "adjust_threshold", "Threshold"),
-        Binding("left", "threshold_step(-1)", "-1%"),
-        Binding("right", "threshold_step(1)", "+1%"),
-        Binding("enter", "adjust_done", "Done"),
-        Binding("escape,q", "back", "Back"),
+        Binding("l", "toggle_live", mark("Go live / dry-run")),
+        Binding("t", "adjust_threshold", mark("Threshold")),
+        Binding("left", "threshold_step(-1)", mark("-1%")),
+        Binding("right", "threshold_step(1)", mark("+1%")),
+        Binding("enter", "adjust_done", mark("Done")),
+        Binding("escape,q", "back", mark("Back")),
     ]
 
     app: "CswapApp"
@@ -122,7 +123,9 @@ class AutoScreen(Screen):
         )
         with Vertical(id="auto-top"):
             with Horizontal(id="auto-title-row"):
-                yield Static(" DRY-RUN ", id="mode-badge", classes="dry")
+                yield Static(
+                    self.app.gettext(" DRY-RUN "), id="mode-badge", classes="dry"
+                )
                 yield Static("", id="auto-summary")
             yield Static("", id="candidates")
         yield RichLog(id="event-log", highlight=False, markup=False, wrap=True)
@@ -131,6 +134,7 @@ class AutoScreen(Screen):
     # -- lifecycle ----------------------------------------------------------
 
     def on_mount(self) -> None:
+        localize_bindings(self, self.app.gettext)
         self.app.set_store_only(self.provider, True)
         switcher = self.app.switcher_for(self.provider)
         self._settings = load_settings(switcher.backup_dir)
@@ -179,9 +183,9 @@ class AutoScreen(Screen):
     def _adjust_categories(self) -> tuple[tuple[str, str], ...]:
         """Rows in the adjust popup. Codex has no per-window gates."""
         if self.provider != "claude":
-            return (("all", "threshold"),)
+            return (("all", self.app.gettext("threshold")),)
         return (
-            ("all", "threshold"),
+            ("all", self.app.gettext("threshold")),
             ("5h", "5h"),
             ("7d", "7d"),
             ("fable", "Fable"),
@@ -207,9 +211,7 @@ class AutoScreen(Screen):
         )
         self._update_summary()
         self.refresh_bindings()
-        self.app.push_screen(
-            ThresholdAdjustModal(self), self._on_adjust_dismiss
-        )
+        self.app.push_screen(ThresholdAdjustModal(self), self._on_adjust_dismiss)
 
     def _on_adjust_dismiss(self, _result: None) -> None:
         if self._adjusting:
@@ -297,11 +299,13 @@ class AutoScreen(Screen):
         if key == "all":
             label = f"{pct_label(self._settings.threshold)}%"
             if self._settings.threshold != self._configured_threshold:
-                label += "  session"
+                label += self.app.gettext("  session")
             return label
         value = self._explicit_gate(key)
         if value is None:
-            return f"inherit ({pct_label(self._settings.threshold)}%)"
+            return self.app.gettext("inherit ({threshold}%)").format(
+                threshold=pct_label(self._settings.threshold)
+            )
         return f"{pct_label(value)}%"
 
     def _end_adjust(self) -> None:
@@ -320,13 +324,18 @@ class AutoScreen(Screen):
             self._engine.wake()  # show a decision at the new value now
         if threshold_changed and not gates_changed:
             self._log_note(
-                f"— threshold set to {pct_label(self._settings.threshold)}% "
-                "for this session —"
+                self.app.gettext(
+                    "— threshold set to {threshold}{percent} for this session —"
+                ).format(threshold=pct_label(self._settings.threshold), percent="%")
             )
             return
         parts = []
         if threshold_changed:
-            parts.append(f"threshold {pct_label(self._settings.threshold)}% (session)")
+            parts.append(
+                self.app.gettext("threshold {percentage}% (session)").format(
+                    percentage=pct_label(self._settings.threshold)
+                )
+            )
         for key, label in self._adjust_categories():
             if key == "all":
                 continue
@@ -346,35 +355,52 @@ class AutoScreen(Screen):
     def _update_summary(self) -> None:
         palette = Palette.from_theme(self.app.current_theme)
         text = Text()
-        text.append("auto-switch · ")
+        text.append(self.app.gettext("auto-switch · "))
         text.append(
-            f"threshold {pct_label(self._settings.threshold)}%",
+            self.app.gettext("threshold {percentage}%").format(
+                percentage=pct_label(self._settings.threshold)
+            ),
             style=palette.accent if self._adjusting else "",
         )
         gates = []
         if self._settings.threshold_5h is not None:
-            gates.append(f"5h {pct_label(self._settings.threshold_5h)}%")
+            gates.append(
+                self.app.gettext("5h {percentage}%").format(
+                    percentage=pct_label(self._settings.threshold_5h)
+                )
+            )
         if self._settings.threshold_7d is not None:
-            gates.append(f"7d {pct_label(self._settings.threshold_7d)}%")
+            gates.append(
+                self.app.gettext("7d {percentage}%").format(
+                    percentage=pct_label(self._settings.threshold_7d)
+                )
+            )
         for name, pct in parse_model_thresholds(self._settings.model_thresholds):
             gates.append(f"{name} {pct_label(pct)}%")
         if gates:
             text.append(" · " + " ".join(gates))
         if self._settings.threshold != self._configured_threshold:
-            text.append(" (session)", style=palette.muted)
-        text.append(f" · poll every {self._settings.interval_seconds:.0f}s")
+            text.append(self.app.gettext(" (session)"), style=palette.muted)
+        text.append(
+            self.app.gettext(" · poll every {interval_seconds:.0f}s").format(
+                interval_seconds=self._settings.interval_seconds
+            )
+        )
         if self.app.mask_accounts:
-            text.append(" · masked", style=palette.muted)
+            text.append(self.app.gettext(" · masked"), style=palette.muted)
         if self._adjusting:
             text.append(
-                "   ↑↓ category · ←→ ±1% · enter done", style=palette.muted
+                self.app.gettext("   ↑↓ category · ←→ ±1% · enter done"),
+                style=palette.muted,
             )
         self.query_one("#auto-summary", Static).update(text)
 
     # -- engine -------------------------------------------------------------
 
     def _start_engine(self, *, dry_run: bool) -> None:
-        engine_type = AutoSwitchEngine if self.provider == "claude" else CodexAutoSwitchEngine
+        engine_type = (
+            AutoSwitchEngine if self.provider == "claude" else CodexAutoSwitchEngine
+        )
         engine = engine_type(
             self.app.switcher_for(self.provider),
             self._settings,
@@ -390,8 +416,11 @@ class AutoScreen(Screen):
             name=f"auto-engine-{'dry' if dry_run else 'live'}",
         )
         self._update_badge()
-        mode = "DRY-RUN (watching only)" if dry_run else "LIVE (will switch accounts)"
-        self._log_note(f"— engine started: {mode} —")
+        self._log_note(
+            self.app.gettext("— engine started: DRY-RUN (watching only) —")
+            if dry_run
+            else self.app.gettext("— engine started: LIVE (will switch accounts) —")
+        )
 
     def _emit_from_thread(self, event: AutoSwitchEvent) -> None:
         """Engine ``on_event`` callback — runs on the worker thread."""
@@ -424,9 +453,7 @@ class AutoScreen(Screen):
             log.write(Text(str(payload), style=palette.muted))
             return
         assert isinstance(payload, AutoSwitchEvent)
-        log.write(
-            event_text(payload, palette=palette, mask=self.app.mask_accounts)
-        )
+        log.write(event_text(payload, palette=palette, mask=self.app.mask_accounts))
 
     def _repaint_log(self) -> None:
         if not self.is_mounted:
@@ -447,11 +474,11 @@ class AutoScreen(Screen):
         if self._engine.dry_run:
             self.app.push_screen(
                 ConfirmModal(
-                    "Go live? ccswap will switch your active account "
-                    "automatically when the threshold is reached.\n\n"
-                    "(Same behavior as the provider's `ccswap auto` command.)",
-                    title="Go live",
-                    yes_label="Go live",
+                    self.app.gettext(
+                        "Go live? ccswap will switch your active account automatically when the threshold is reached.\n\n(Same behavior as the provider's `ccswap auto` command.)"
+                    ),
+                    title=self.app.gettext("Go live"),
+                    yes_label=self.app.gettext("Go live"),
                 ),
                 self._on_live_confirm,
             )
@@ -470,10 +497,10 @@ class AutoScreen(Screen):
     def _update_badge(self) -> None:
         badge = self.query_one("#mode-badge", Static)
         if self._engine is not None and not self._engine.dry_run:
-            badge.update(" LIVE ")
+            badge.update(self.app.gettext(" LIVE "))
             badge.set_classes("live")
         else:
-            badge.update(" DRY-RUN ")
+            badge.update(self.app.gettext(" DRY-RUN "))
             badge.set_classes("dry")
 
     # -- candidates -----------------------------------------------------------
@@ -485,9 +512,7 @@ class AutoScreen(Screen):
             self._candidates_text(snap, active_number=snap.active_number)
         )
 
-    def _on_snapshots(
-        self, snapshots: dict[str, AccountsSnapshot | None]
-    ) -> None:
+    def _on_snapshots(self, snapshots: dict[str, AccountsSnapshot | None]) -> None:
         self._on_snapshot(snapshots[self.provider])
 
     def _candidates_text(
@@ -520,7 +545,9 @@ class AutoScreen(Screen):
                 models,
                 windows,
                 gate_thresholds=overrides or None,
-                default_threshold=self._settings.threshold if claude and overrides else None,
+                default_threshold=self._settings.threshold
+                if claude and overrides
+                else None,
             )
             entry = Text()
             entry.append(f"\n  {acc.number:>2}  ", style=palette.foreground)
@@ -534,17 +561,25 @@ class AutoScreen(Screen):
                 )
                 ranked.append((998.0, acc.number))
             elif pct is None:
-                entry.append("  usage unknown", style=palette.muted)
+                entry.append(self.app.gettext("  usage unknown"), style=palette.muted)
                 ranked.append((999.0, acc.number))
             else:
-                entry.append(f"  {pct:3.0f}% used", style=palette.severity(pct))
+                entry.append(
+                    self.app.gettext("  {pct:3.0f}{percent} used").format(
+                        pct=pct, percent="%"
+                    ),
+                    style=palette.severity(pct),
+                )
                 ranked.append((pct, acc.number))
             lines[acc.number] = entry
 
         text = Text()
-        text.append("Next best", style=palette.muted)
+        text.append(self.app.gettext("Next best"), style=palette.muted)
         if not ranked:
-            text.append("\n  no other switchable accounts", style=palette.muted)
+            text.append(
+                self.app.gettext("\n  no other switchable accounts"),
+                style=palette.muted,
+            )
             return text
         for _pct, number in sorted(ranked):
             text.append(lines[number])
@@ -573,14 +608,15 @@ class ThresholdAdjustModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
-            yield Label("Adjust thresholds", classes="modal-title")
+            yield Label(self.app.gettext("Adjust thresholds"), classes="modal-title")
             yield Static("", id="adjust-body")
             yield Static(
-                "↑↓ category    ←→ ±1%    ⌫ inherit    enter done",
+                self.app.gettext("↑↓ category    ←→ ±1%    ⌫ inherit    enter done"),
                 classes="modal-hint",
             )
 
     def on_mount(self) -> None:
+        localize_bindings(self, self.app.gettext)
         self._redraw()
 
     def _redraw(self) -> None:

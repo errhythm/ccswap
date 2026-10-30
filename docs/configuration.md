@@ -8,6 +8,7 @@ Tool preferences live in `settings.json` in the backup root; `ccswap config` rea
 ccswap config                              # list effective settings ("(default)" = not set)
 ccswap config get autoswitch.threshold
 ccswap config set autoswitch.threshold 80  # validated: rejects out-of-range values loudly
+ccswap config set ui.language de            # en/de/el; restart the dashboard
 ccswap config set ui.view codex             # combined (default), claude, or codex
 ccswap config set ui.mask on                # hide emails and org names in the TUI, mod and statusline
 ccswap config set ui.starPrompt off          # stop asking for a GitHub star after a switch

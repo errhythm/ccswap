@@ -1,0 +1,4 @@
+# gettext writes a final message separator; keep source catalogs in UTF-8/LF.
+*.po text eol=lf whitespace=-blank-at-eof
+*.pot text eol=lf whitespace=-blank-at-eof
+*.mo binary
