@@ -1133,3 +1133,23 @@ def test_redeem_accepted_survives_confirmation_storage_errors(
     assert result["code"] == "reset" and result["confirmed"] is False
     assert result["usageAfter"] is None
     assert json.loads(capsys.readouterr().out) == result
+
+
+@pytest.mark.parametrize("status", [None, "token_expired"])
+def test_usage_expiry_warning_preserves_json_and_survives_status(switcher, monkeypatch, capsys, status):
+    from types import SimpleNamespace
+    from claude_swap.usage_store import UsageEntry
+    instance, _ = switcher
+    now = 1_700_000_000.0
+    usage = {"reset_credits": {"available": 1, "expires_at": "2023-11-14T22:43:20Z"}}
+    account = SimpleNamespace(number="1", email="fake@example.com", is_active=True,
+                              usage=UsageEntry(last_good=usage, sentinel=status))
+    monkeypatch.setattr(instance, "accounts_snapshot", lambda fetch: SimpleNamespace(accounts=[account]))
+    monkeypatch.setattr(codex.time, "time", lambda: now)
+    instance.usage_status()
+    text = capsys.readouterr().out
+    assert "⚠ Resets: 1 banked · earliest expires in 30m" in text
+    assert bool("last known" in text) == bool(status)
+    payload = instance.usage_status(json_output=True)
+    assert payload["accounts"][0]["usage"] == usage
+    assert "⚠" not in capsys.readouterr().out

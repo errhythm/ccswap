@@ -674,9 +674,7 @@ class TestUsageRows:
             usage_rows,
         )
 
-        # Keep the boundary exact across platforms: round-tripping an arbitrary
-        # time.time() value through ISO microseconds can land just below 48h,
-        # which the countdown correctly floors to "1d 23h".
+        # Fixed time keeps the countdown and local date deterministic.
         now = 1_700_000_000.0
         usage = {
             "weekly": {"pct": 42.0},
@@ -698,7 +696,7 @@ class TestUsageRows:
 
         assert [row[0] for row in usage_rows(usage, now)] == ["Weekly"]
         assert reset_credits_text(usage, now) == (
-            "3 banked · earliest expires 2d"
+            f"3 banked · earliest expires in 2d 0h ({datetime.fromtimestamp(now + 2 * 86400).astimezone().strftime('%Y-%m-%d %H:%M %Z (%z)')})"
         )
         assert credits_text(usage, now) == "2,500.00 available"
         assert credit_allowance_text(usage, now) == (
@@ -2922,3 +2920,50 @@ async def test_menu_hover_and_keyboard_help_do_not_activate_option(tmp_path):
         await pilot.pause()
         assert menu.highlighted_child is item
         assert not (tmp_path / "settings.json").exists()
+
+
+@pytest.mark.parametrize("sentinel", [None, USAGE_TOKEN_EXPIRED])
+def test_expiring_resets_stay_visible_in_both_themes_and_narrow_rows(sentinel):
+    from rich.console import Console
+    from claude_swap.tui.theme import CSWAP_LIGHT, Palette
+    from claude_swap.tui.widgets import account_card_text, mini_account_text
+    now = 1_700_000_000.0
+    expiry = datetime.fromtimestamp(now + 1800, timezone.utc).isoformat()
+    entry = UsageEntry(last_good={"reset_credits": {"available": 1, "expires_at": expiry}},
+                       fetched_at=now, sentinel=sentinel)
+    acc = make_account(1, entry=entry)
+    local = datetime.fromtimestamp(now + 1800).astimezone().strftime("%Y-%m-%d %H:%M %Z (%z)")
+    for palette in (Palette.DARK, Palette.from_theme(CSWAP_LIGHT)):
+        for text in (account_card_text(acc, 60, now=now, palette=palette),
+                     mini_account_text(acc, now, palette=palette)):
+            assert text.plain.count("earliest expires in 30m") == 1
+            assert local in text.plain
+            assert bool("last known" in text.plain) == bool(sentinel)
+            console = Console(width=40, record=True, force_terminal=False)
+            console.print(text)
+            rendered = console.export_text()
+            assert "…" not in rendered
+            assert "30m" in rendered
+            assert any(span.style == f"bold {palette.sev_crit}" for span in text.spans)
+
+
+@pytest.mark.asyncio
+async def test_two_expiring_minis_keep_local_times_in_narrow_panel(tmp_path):
+    from claude_swap.tui.widgets import AccountsPanel
+    now = time.time()
+    expiry = datetime.fromtimestamp(now + 1800, timezone.utc)
+    entry = UsageEntry(last_good={"reset_credits": {
+        "available": 1, "expires_at": expiry.isoformat()}}, fetched_at=now)
+    fake = FakeSwitcher([], tmp_path)
+    codex = FakeSwitcher([make_account(1, entry=entry), make_account(2, entry=entry)], tmp_path)
+    app = make_app(fake, codex=codex)
+    async with app.run_test(size=(40, 32)) as pilot:
+        await settle(pilot)
+        from textual.geometry import Region
+        widget = app.screen.query_one(AccountsPanel)
+        assert "\n\n 2" in widget.render().plain
+        strips = widget.render_lines(Region(0, 0, widget.outer_size.width, widget.outer_size.height))
+        visible = "".join("".join(strip.text for strip in strips).split())
+        clock = "".join(expiry.astimezone().strftime("%Y-%m-%d %H:%M %Z (%z)").split())
+        assert visible.count(clock) == 2
+        assert "usageunknown" not in visible

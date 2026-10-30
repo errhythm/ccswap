@@ -46,6 +46,7 @@ from claude_swap.models import AccountSnapshot, AccountsSnapshot
 from claude_swap.oauth import account_headroom, format_reset
 from claude_swap.paths import get_backup_root
 from claude_swap.poll_policy import parse_reset_ts
+from claude_swap.reset_credit_display import reset_credit_display
 from claude_swap.printer import accent, dimmed, warning
 from claude_swap.process_detection import is_codex_running
 from claude_swap.usage_store import SERVE_TTL_S, UsageEntry
@@ -1208,6 +1209,10 @@ class CodexAccountSwitcher:
         for account in accounts:
             marker = " (active)" if account["active"] else ""
             print(f"Codex Account {account['number']}: {account['email']}{marker}")
+            reset_display = reset_credit_display(account["usage"], time.time())
+            if reset_display and reset_display.urgent:
+                stale = " · last known" if account["status"] or account["error"] else ""
+                print(f"  ⚠ Resets: {reset_display.text}{stale}")
             if account["status"]:
                 print(f"  {account['status']}")
             elif account["usage"]:
@@ -1224,16 +1229,8 @@ class CodexAccountSwitcher:
                             countdown, clock = format_reset(resets_at)
                             line += f" · resets in {countdown} ({clock})"
                         print(line)
-                reset_credits = account["usage"].get("reset_credits")
-                if isinstance(reset_credits, dict):
-                    count = reset_credits.get("available")
-                    if isinstance(count, int):
-                        line = f"  Banked resets: {count}"
-                        expires_at = reset_credits.get("expires_at")
-                        if isinstance(expires_at, str) and expires_at:
-                            countdown, clock = format_reset(expires_at)
-                            line += f" · earliest expires in {countdown} ({clock})"
-                        print(line)
+                if reset_display and not reset_display.urgent:
+                    print(f"  Resets: {reset_display.text}")
                 credits = account["usage"].get("credits")
                 if isinstance(credits, dict):
                     if credits.get("limit_reached") is True:

@@ -17,6 +17,7 @@ from textual.widgets import ListItem, ListView, Static
 from claude_swap import pace
 from claude_swap.json_output import USAGE_API_KEY
 from claude_swap.models import AccountSnapshot
+from claude_swap.reset_credit_display import ResetCreditDisplay, reset_credit_display
 from claude_swap.switcher import ERROR_NOTES
 from claude_swap.usage_store import STALE_OK_S
 from claude_swap.tui import data
@@ -167,17 +168,15 @@ def usage_rows(
 
 
 def reset_credits_text(last_good: dict | None, now: float) -> str | None:
-    """Compact Codex banked-reset count and earliest expiry."""
-    if not isinstance(last_good, dict):
-        return None
-    resets = last_good.get("reset_credits")
-    if not isinstance(resets, dict) or not isinstance(resets.get("available"), int):
-        return None
-    text = f"{resets['available']} banked"
-    expiry = data.reset_text({"resets_at": resets.get("expires_at")}, now)
-    if expiry:
-        text += f" · earliest expires {expiry.removeprefix('resets ')}"
-    return text
+    """Compact Codex banked-reset count and earliest local expiry."""
+    display = reset_credit_display(last_good, now)
+    return display.text if display else None
+
+
+def _reset_style(display: ResetCreditDisplay, palette: Palette) -> str:
+    if display.severity in {"critical", "expired"}:
+        return f"bold {palette.sev_crit}"
+    return f"bold {palette.sev_warn}"
 
 
 def credits_text(
@@ -277,6 +276,13 @@ def account_card_text(
     if age:
         text.append(f"   {age}", style=palette.muted)
 
+    reset_display = reset_credit_display(acc.usage.last_good, now)
+    if reset_display and reset_display.urgent:
+        text.append("\n    ⚠ Resets ", style=_reset_style(reset_display, palette))
+        text.append(reset_display.text, style=_reset_style(reset_display, palette))
+        if acc.usage.sentinel or acc.usage.last_error:
+            text.append(" · last known", style=palette.muted)
+
     sentinel = acc.usage.sentinel
     if sentinel is not None:
         text.append("\n    ")
@@ -296,7 +302,7 @@ def account_card_text(
     rows = usage_rows(acc.usage.last_good, now, acc.usage.fetched_at)
     credits = credits_text(acc.usage.last_good, now)
     allowance = credit_allowance_text(acc.usage.last_good, now)
-    resets = reset_credits_text(acc.usage.last_good, now)
+    resets = reset_display.text if reset_display else None
     if not rows and not credits and not allowance and not resets:
         text.append("\n    ")
         text.append("usage unavailable", style=palette.muted)
@@ -342,7 +348,7 @@ def account_card_text(
         text.append("\n    ")
         text.append("Allowance ", style=palette.muted)
         text.append(allowance, style=palette.foreground)
-    if resets:
+    if resets and not (reset_display and reset_display.urgent):
         text.append("\n    ")
         text.append("Resets ", style=palette.muted)
         text.append(resets, style=palette.foreground)
@@ -366,6 +372,13 @@ def mini_account_text(
     alias, email, org = _identity(acc, mask=mask)
     text = Text(no_wrap=True, overflow="ellipsis")
     text.append(f"{acc.number:>2}  ", style=f"bold {palette.muted}")
+    reset_display = reset_credit_display(acc.usage.last_good, now)
+    if reset_display and reset_display.urgent:
+        text.no_wrap = False
+        text.overflow = "fold"
+        text.append(f"⚠ Resets {reset_display.text}\n    ", style=_reset_style(reset_display, palette))
+        if acc.usage.sentinel or acc.usage.last_error:
+            text.append("last known · ", style=palette.muted)
     if alias:
         text.append(alias, style=f"bold {palette.accent}")
         text.append(f" ({email})", style=palette.foreground)
@@ -431,13 +444,13 @@ def mini_account_text(
             text.append(" · ", style=palette.track)
         text.append(f"Allowance {allowance}", style=palette.muted)
         parts += 1
-    resets = reset_credits_text(last_good, now)
-    if resets:
+    resets = reset_display.text if reset_display else None
+    if resets and not (reset_display and reset_display.urgent):
         if parts:
             text.append(" · ", style=palette.track)
         text.append(f"Resets {resets}", style=palette.muted)
         parts += 1
-    if not parts:
+    if not parts and not (reset_display and reset_display.urgent):
         text.append("usage unknown", style=palette.muted)
     return text
 
@@ -473,6 +486,7 @@ class AccountsPanel(Static):
         self.watch(self.app, "snapshots", lambda _snap: self.refresh(layout=True))
         self.watch(self.app, "theme", lambda _t: self.refresh(layout=True))
         self.watch(self.app, "mask_accounts", lambda _on: self.refresh(layout=True))
+        self.set_interval(30.0, lambda: self.refresh(layout=True))
 
     def render(self) -> Text:
         app: "CswapApp" = self.app  # type: ignore[assignment]
@@ -562,6 +576,7 @@ class AccountCard(Static):
 
     def on_mount(self) -> None:
         self.watch(self.app, "mask_accounts", lambda _on: self.refresh(layout=True))
+        self.set_interval(30.0, lambda: self.refresh(layout=True))
 
     def render(self) -> Text:
         return account_card_text(
