@@ -1,6 +1,6 @@
 {
   "name": "ccswap",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "ccswap inside Claude Code: /ccswap to list and switch accounts, an accounts pane, a switch toast, and a quota band above the prompt",
   "author": {
     "name": "Ehsanur Rahman Rhythm"
