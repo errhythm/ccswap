@@ -1371,6 +1371,162 @@ class TestAutoCommand:
         assert "nope" in capsys.readouterr().err  # printer.error -> stderr
 
 
+class TestAutoService:
+    """`cswap auto --install-service` and friends drive launch_agent, not the engine."""
+
+    @pytest.fixture
+    def service(self, monkeypatch):
+        seen = {"menubar_loaded": False}
+
+        def _record(name, payload):
+            def _call(*a, **k):
+                seen["called"] = name
+                seen["label"] = k.get("label")
+                return payload
+
+            return _call
+
+        def _engine(*a, **k):
+            raise AssertionError("a service flag must not start the engine")
+
+        class _FakeSwitcher:
+            def __init__(self, *a, **k):
+                pass
+
+            def _is_running_in_container(self):
+                return False
+
+        monkeypatch.setattr(cli, "ClaudeAccountSwitcher", _FakeSwitcher)
+        monkeypatch.setattr(cli.os, "geteuid", lambda: 1000, raising=False)
+        monkeypatch.setattr("claude_swap.autoswitch.AutoSwitchEngine", _engine)
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(
+            "claude_swap.launch_agent.is_loaded",
+            lambda *a, **k: seen["menubar_loaded"],
+        )
+        monkeypatch.setattr(
+            "claude_swap.launch_agent.install",
+            _record(
+                "install",
+                {
+                    "label": "com.ccswap.auto",
+                    "plist": "/tmp/auto.plist",
+                    "program": ["/tmp/ccswap", "auto"],
+                    "stdout_log": "/tmp/auto.log",
+                    "stderr_log": "/tmp/auto.err",
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            "claude_swap.launch_agent.uninstall",
+            _record(
+                "uninstall",
+                {"label": "com.ccswap.auto", "was_loaded": True, "removed_plist": True},
+            ),
+        )
+        monkeypatch.setattr(
+            "claude_swap.launch_agent.status",
+            _record(
+                "status",
+                {
+                    "label": "com.ccswap.auto",
+                    "installed": True,
+                    "loaded": True,
+                    "state": "running",
+                    "pid": 4242,
+                    "plist": "/tmp/auto.plist",
+                },
+            ),
+        )
+        return seen
+
+    def _run(self, monkeypatch, *argv):
+        monkeypatch.setattr(sys, "argv", ["cswap", "auto", *argv])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        return exc.value.code
+
+    def test_install_targets_the_auto_label(self, monkeypatch, capsys, service):
+        assert self._run(monkeypatch, "--install-service") == 0
+        assert service["called"] == "install"
+        assert service["label"] == "com.ccswap.auto"
+        out = capsys.readouterr().out
+        assert "installed" in out and "/tmp/auto.plist" in out
+
+    def test_uninstall_targets_the_auto_label(self, monkeypatch, capsys, service):
+        assert self._run(monkeypatch, "--uninstall-service") == 0
+        assert service["called"] == "uninstall"
+        assert service["label"] == "com.ccswap.auto"
+        assert "removed" in capsys.readouterr().out
+
+    def test_status_reports_state_and_pid(self, monkeypatch, capsys, service):
+        assert self._run(monkeypatch, "--service-status") == 0
+        assert service["called"] == "status"
+        assert service["label"] == "com.ccswap.auto"
+        out = capsys.readouterr().out
+        assert "running" in out and "4242" in out
+
+    def test_status_when_not_installed_names_the_auto_flag(
+        self, monkeypatch, capsys, service
+    ):
+        monkeypatch.setattr(
+            "claude_swap.launch_agent.status",
+            lambda *a, **k: {
+                "label": "com.ccswap.auto",
+                "installed": False,
+                "loaded": False,
+                "state": None,
+                "pid": None,
+                "plist": "/tmp/auto.plist",
+            },
+        )
+        assert self._run(monkeypatch, "--service-status") == 0
+        assert "ccswap auto --install-service" in capsys.readouterr().out
+
+    def test_install_warns_when_the_menu_bar_service_is_also_loaded(
+        self, monkeypatch, capsys, service
+    ):
+        service["menubar_loaded"] = True
+        assert self._run(monkeypatch, "--install-service") == 0
+        captured = capsys.readouterr()
+        assert "menu bar" in (captured.out + captured.err).lower()
+
+    def test_install_stays_quiet_without_the_menu_bar_service(
+        self, monkeypatch, capsys, service
+    ):
+        assert self._run(monkeypatch, "--install-service") == 0
+        captured = capsys.readouterr()
+        assert "menu bar" not in (captured.out + captured.err).lower()
+
+    def test_a_tuning_flag_alongside_a_service_flag_is_rejected(
+        self, monkeypatch, capsys, service
+    ):
+        # The agent reads settings.json, so --threshold here would be dropped.
+        assert self._run(monkeypatch, "--install-service", "--threshold", "80") == 2
+        assert "called" not in service
+        assert "ccswap config set" in capsys.readouterr().err
+
+    def test_service_flags_together_are_rejected(self, monkeypatch, service):
+        assert self._run(monkeypatch, "--install-service", "--service-status") == 2
+        assert "called" not in service
+
+    def test_refuses_to_install_as_root(self, monkeypatch, capsys, service):
+        monkeypatch.setattr(cli.os, "geteuid", lambda: 0, raising=False)
+        assert self._run(monkeypatch, "--install-service") == 1
+        assert "called" not in service
+        assert "root" in capsys.readouterr().err
+
+    def test_refuses_off_macos(self, monkeypatch, capsys, service):
+        from claude_swap.exceptions import ClaudeSwitchError
+
+        def _refuse(*a, **k):
+            raise ClaudeSwitchError("only available on macOS")
+
+        monkeypatch.setattr("claude_swap.launch_agent.install", _refuse)
+        assert self._run(monkeypatch, "--install-service") == 1
+        assert "only available on macOS" in capsys.readouterr().err
+
+
 class TestUnclaimedCommand:
     """Minor 2: the operator escape hatch for a stash row.
 
