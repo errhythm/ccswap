@@ -332,6 +332,16 @@ def footer_labels(screen) -> list[str]:
     return [key.description for key in screen.query(FooterKey)]
 
 
+async def footer_after(pilot) -> list[str]:
+    """Footer labels once the footer has recomposed (slow on Windows CI)."""
+    for _ in range(50):
+        await pilot.pause()
+        labels = footer_labels(pilot.app.screen)
+        if labels:
+            return labels
+    return []
+
+
 async def menu_select(pilot, action_id: str) -> None:
     """Drive the dashboard menu: highlight the entry by id, press Enter."""
     from textual.widgets import ListView
@@ -2528,14 +2538,13 @@ class TestMaskToggle:
             assert json.loads((tmp_path / "settings.json").read_text())["ui"]["mask"] is True
 
             await pilot.press("w")
-            await pilot.pause()
             from textual.widgets import Static
 
-            assert "Mask on" in footer_labels(app.screen)
+            assert "Mask on" in await footer_after(pilot)
             assert "masked" in app.screen.query_one("#list-title", Static).render().plain
             await pilot.press("m")
             await pilot.pause()
-            assert "Mask off" in footer_labels(app.screen)
+            assert "Mask off" in await footer_after(pilot)
             assert "masked" not in app.screen.query_one("#list-title", Static).render().plain
 
     async def test_saved_mask_starts_on_in_the_footer(self, tmp_path):
