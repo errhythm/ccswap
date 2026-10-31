@@ -58,6 +58,31 @@ def test_build_plist_is_parseable_and_runs_the_menubar_subcommand(tmp_path):
     assert parsed["RunAtLoad"] is True
 
 
+def test_build_plist_for_auto_runs_the_auto_subcommand(tmp_path):
+    parsed = plistlib.loads(
+        launch_agent.build_plist(PROGRAM, label=launch_agent.AUTO_LABEL, home=tmp_path)
+    )
+    assert parsed["Label"] == "com.ccswap.auto"
+    assert parsed["ProgramArguments"] == [*PROGRAM, "auto"]
+    assert parsed["RunAtLoad"] is True
+
+
+def test_build_plist_for_auto_is_a_background_job(tmp_path):
+    parsed = plistlib.loads(
+        launch_agent.build_plist(PROGRAM, label=launch_agent.AUTO_LABEL, home=tmp_path)
+    )
+    assert parsed["ProcessType"] == "Background"
+
+
+def test_build_plist_for_auto_logs_apart_from_the_menu_bar(tmp_path):
+    parsed = plistlib.loads(
+        launch_agent.build_plist(PROGRAM, label=launch_agent.AUTO_LABEL, home=tmp_path)
+    )
+    logs = tmp_path / "Library" / "Logs"
+    assert parsed["StandardOutPath"] == str(logs / "com.ccswap.auto.log")
+    assert parsed["StandardErrorPath"] == str(logs / "com.ccswap.auto.err")
+
+
 def test_build_plist_keepalive_restarts_a_crash_but_respects_a_quit(tmp_path):
     """A bare `KeepAlive: True` would make the menu bar's Quit item a no-op.
 
@@ -141,6 +166,39 @@ def test_build_plist_keeps_an_empty_value_that_cancels_its_uppercase_twin(tmp_pa
     assert parsed["EnvironmentVariables"]["https_proxy"] == ""
 
 
+def test_build_plist_for_auto_forwards_the_claude_config_dir(tmp_path):
+    env = {
+        "CLAUDE_CONFIG_DIR": "/Users/x/.claude-work",
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR": "/Users/x/.claude-work",
+    }
+    parsed = plistlib.loads(
+        launch_agent.build_plist(
+            PROGRAM, label=launch_agent.AUTO_LABEL, home=tmp_path, env=env
+        )
+    )
+    assert parsed["EnvironmentVariables"]["CLAUDE_CONFIG_DIR"] == "/Users/x/.claude-work"
+    assert (
+        parsed["EnvironmentVariables"]["CLAUDE_SECURESTORAGE_CONFIG_DIR"]
+        == "/Users/x/.claude-work"
+    )
+
+
+def test_build_plist_for_auto_skips_a_session_profile_config_dir(tmp_path):
+    env = {"CLAUDE_CONFIG_DIR": "/Users/x/.claude-swap-backup/sessions/2-a_b.c"}
+    parsed = plistlib.loads(
+        launch_agent.build_plist(
+            PROGRAM, label=launch_agent.AUTO_LABEL, home=tmp_path, env=env
+        )
+    )
+    assert "CLAUDE_CONFIG_DIR" not in parsed["EnvironmentVariables"]
+
+
+def test_build_plist_for_the_menu_bar_does_not_forward_the_claude_config_dir(tmp_path):
+    env = {"CLAUDE_CONFIG_DIR": "/Users/x/.claude-work"}
+    parsed = plistlib.loads(launch_agent.build_plist(PROGRAM, home=tmp_path, env=env))
+    assert "CLAUDE_CONFIG_DIR" not in parsed["EnvironmentVariables"]
+
+
 def test_build_plist_env_without_allowlisted_keys_is_just_path(tmp_path):
     parsed = plistlib.loads(
         launch_agent.build_plist(PROGRAM, home=tmp_path, env={"HOME": "/Users/x"})
@@ -217,6 +275,17 @@ def test_install_writes_the_plist_and_bootstraps_it(tmp_path):
     assert written.exists()
     calls = [c.args[0] for c in run.call_args_list]
     assert ["launchctl", "bootstrap", f"gui/{UID}", str(written)] in calls
+
+
+def test_install_for_auto_reports_the_auto_command(tmp_path):
+    with patch.object(launch_agent.subprocess, "run") as run:
+        run.side_effect = _router({"print": _completed(1)})
+        result = launch_agent.install(
+            label=launch_agent.AUTO_LABEL, home=tmp_path, program=PROGRAM, uid=UID
+        )
+
+    assert Path(result["plist"]).name == "com.ccswap.auto.plist"
+    assert result["program"] == [*PROGRAM, "auto"]
 
 
 def test_install_creates_the_log_directory(tmp_path):

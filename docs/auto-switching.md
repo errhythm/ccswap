@@ -89,4 +89,14 @@ For cron/systemd timers, `--once` reports the outcome in its exit code (`0` swit
 */5 * * * * ccswap auto --once --json >> ~/.ccswap-auto.log 2>&1
 ```
 
+**Keep it running without a terminal (macOS).** `ccswap auto` runs in the foreground, so it stops with the terminal that started it. A per-user LaunchAgent starts it at login and restarts it if it crashes:
+
+```bash
+ccswap auto --install-service     # start now, and at every login
+ccswap auto --service-status      # installed? loaded? pid?
+ccswap auto --uninstall-service   # stop it and remove the plist
+```
+
+The agent lives at `~/Library/LaunchAgents/com.ccswap.auto.plist` and logs to `~/Library/Logs/com.ccswap.auto.{log,err}`. It runs a bare `ccswap auto`, so set thresholds with `ccswap config set` rather than on this command line. Settings are read at startup, so re-run `--install-service` after changing them or after an upgrade. A `CLAUDE_CONFIG_DIR` set in the installing shell is carried into the agent. The log gains a few lines per poll and is not rotated. Use this or the menu bar's Auto-switch toggle, not both: each runs its own engine.
+
 Defaults like the threshold and cooldown are configurable with `ccswap config set autoswitch.threshold 80` — flags override them (see [Configuration](configuration.md#configuration)).

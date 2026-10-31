@@ -18,7 +18,7 @@ Mutating:
 - `add`, `add-token`, `remove`, `disable NUM|EMAIL`, `enable NUM|EMAIL`
 - `map`, `unmap`, `swap`, `move`, `alias`, `export`, `import`, `purge`, `upgrade`
 - `unclaimed --purge`
-- `menubar --install-service`
+- `menubar --install-service`, `auto --install-service`
 - `run`
 - `config set`, `config unset`
 - `auto` (polling loop, no `--once`)

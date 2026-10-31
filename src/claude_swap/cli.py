@@ -874,6 +874,7 @@ Examples:
   ccswap auto --json                # one JSON event per line (for scripts)
   ccswap auto --once; echo $?       # single tick, outcome in exit code
   ccswap auto --dry-run             # log decisions, never actually switch
+  ccswap auto --install-service     # run at every login via launchd (macOS)
 
 Defaults live in settings.json in the backup root; flags override them.
         """,
@@ -981,7 +982,35 @@ Defaults live in settings.json in the backup root; flags override them.
         action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--install-service",
+        action="store_true",
+        help=(
+            "Install a launchd LaunchAgent so auto-switching starts at login "
+            "and restarts on crash (macOS)"
+        ),
+    )
+    parser.add_argument(
+        "--uninstall-service",
+        action="store_true",
+        help="Stop the LaunchAgent and remove its plist (macOS)",
+    )
+    parser.add_argument(
+        "--service-status",
+        action="store_true",
+        help="Report whether the LaunchAgent is installed and running",
+    )
     args = parser.parse_args(argv)
+
+    service_action = args.install_service or args.uninstall_service or args.service_status
+    if service_action:
+        # The agent runs a bare `auto`, so anything else on this command line
+        # would be dropped without a word.
+        if len(argv) != 1:
+            parser.error(
+                "service flags take no other options; the service reads "
+                "settings.json, so use 'ccswap config set' for thresholds"
+            )
 
     from claude_swap.autoswitch import AutoSwitchEngine, AutoSwitchEvent
     from claude_swap.printer import accent, yellowed
@@ -1007,6 +1036,9 @@ Defaults live in settings.json in the backup root; flags override them.
             if os.geteuid() == 0 and not switcher._is_running_in_container():
                 error("Error: Do not run this script as root (unless running in a container)")
                 sys.exit(1)
+
+        if service_action:
+            sys.exit(_auto_service(args))
 
         settings = merged_with_cli(load_settings(switcher.backup_dir), args)
         engine = AutoSwitchEngine(
@@ -1293,14 +1325,53 @@ def _menubar_service(args) -> int:
             print("Menu bar service was not installed.")
         return 0
 
-    result = launch_agent.status()
+    return _print_service_status(launch_agent.status(), "Menu bar", "menubar")
+
+
+def _auto_service(args) -> int:
+    """Handle ``auto --install-service|--uninstall-service|--service-status``."""
+    from claude_swap import launch_agent
+
+    label = launch_agent.AUTO_LABEL
+    if args.install_service:
+        result = launch_agent.install(label=label)
+        print(f"Auto-switch service installed ({result['label']}).")
+        print(f"  plist: {result['plist']}")
+        print(f"  logs:  {result['stdout_log']}")
+        print(
+            dimmed(
+                "It starts at login from now on. Re-run this after a ccswap "
+                "upgrade to point launchd at the new build."
+            )
+        )
+        if launch_agent.is_loaded():
+            # The menu bar's Auto-switch toggle runs an engine of its own.
+            warning(
+                "The menu bar service is also installed. If its Auto-switch "
+                "toggle is on, turn it off so only one engine is polling.",
+                file=sys.stderr,
+            )
+        return 0
+
+    if args.uninstall_service:
+        result = launch_agent.uninstall(label=label)
+        if result["was_loaded"] or result["removed_plist"]:
+            print("Auto-switch service removed.")
+        else:
+            print("Auto-switch service was not installed.")
+        return 0
+
+    return _print_service_status(launch_agent.status(label=label), "Auto-switch", "auto")
+
+
+def _print_service_status(result: dict, name: str, subcommand: str) -> int:
     if not result["installed"] and not result["loaded"]:
-        print("Menu bar service is not installed.")
-        print(dimmed("Install it with: ccswap menubar --install-service"))
+        print(f"{name} service is not installed.")
+        print(dimmed(f"Install it with: ccswap {subcommand} --install-service"))
         return 0
     state = result["state"] or ("loaded" if result["loaded"] else "stopped")
     pid = f" (pid {result['pid']})" if result["pid"] else ""
-    print(f"Menu bar service: {state}{pid}")
+    print(f"{name} service: {state}{pid}")
     print(f"  plist: {result['plist']}")
     if not result["installed"]:
         print(dimmed("launchd still has it loaded, but the plist is gone."))
@@ -1409,6 +1480,7 @@ Commands:
   %(prog)s watch                      dashboard, opened on the live watch page
   %(prog)s menubar                    macOS menu bar app
   %(prog)s menubar --install-service  keep the menu bar running via launchd
+  %(prog)s auto --install-service     keep auto-switch running via launchd
   %(prog)s upgrade                    self-upgrade to latest
   %(prog)s purge                      remove all ccswap data
 

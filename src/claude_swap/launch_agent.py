@@ -1,9 +1,9 @@
-"""Run ``cswap menubar`` as a launchd LaunchAgent instead of a foreground process.
+"""Run ``cswap menubar`` or ``cswap auto`` as a launchd LaunchAgent.
 
-``cswap menubar`` blocks the terminal that started it, so the status item dies
-with that terminal — and never comes back after a logout or reboot. launchd is
-the native macOS answer: a per-user LaunchAgent starts the menu bar at login and
-restarts it if it crashes. (The wrapper ``.app`` the menu bar runs inside is
+Both block the terminal that started them, so they die with that terminal — and
+never come back after a logout or reboot. launchd is the native macOS answer: a
+per-user LaunchAgent starts the command at login and restarts it if it crashes.
+(The wrapper ``.app`` the menu bar runs inside is
 ``claude_swap.app_bundle``'s business: ``cswap menubar`` builds it and execs
 into it itself, so launchd only ever needs the console script.)
 
@@ -41,6 +41,16 @@ from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.fsutil import atomic_write_bytes
 
 LABEL = "com.ccswap.menubar"
+AUTO_LABEL = "com.ccswap.auto"
+
+# Label -> (subcommand, launchd ProcessType). A menu bar owner is a UI process;
+# Background would have launchd apply throttled I/O and CPU bands to it. The
+# auto-switch loop sleeps between polls and has nobody waiting on it, so
+# Background is what it wants.
+_SERVICES = {
+    LABEL: ("menubar", "Interactive"),
+    AUTO_LABEL: ("auto", "Background"),
+}
 
 # launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin, which covers
 # `security` (Keychain reads) but not a Homebrew or ~/.local/bin `claude`. The
@@ -59,6 +69,10 @@ _FORWARDED_ENV_KEYS = (
     "no_proxy", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
 )
 
+# `auto` must manage the same profile the installing shell does, or a custom
+# config dir gets an agent that silently polls and switches ~/.claude instead.
+_AUTO_FORWARDED_ENV_KEYS = ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+
 # `launchctl bootout` can return before launchd has finished tearing the
 # job down, and a `bootstrap` inside that window fails with "Operation
 # already in progress". Poll until the job is really gone instead of
@@ -70,7 +84,7 @@ _UNLOAD_POLL_SECONDS = 0.1
 def _require_macos() -> None:
     if sys.platform != "darwin":
         raise ClaudeSwitchError(
-            "The menu bar service is only available on macOS."
+            "The launchd service is only available on macOS."
         )
 
 
@@ -134,6 +148,22 @@ def _path_env(program: list[str]) -> str:
     return ":".join(dirs)
 
 
+def _forwarded_env(label: str, env: Mapping[str, str]) -> dict[str, str]:
+    """Allowlisted variables of ``env`` for the agent."""
+    forwarded = {k: env[k] for k in _FORWARDED_ENV_KEYS if k in env}
+    if label == AUTO_LABEL:
+        # Inside `ccswap run` the config dir is a throwaway profile under
+        # <backup>/sessions/, which a login service must not pin itself to.
+        forwarded.update(
+            {
+                k: env[k]
+                for k in _AUTO_FORWARDED_ENV_KEYS
+                if k in env and Path(env[k]).parent.name != "sessions"
+            }
+        )
+    return forwarded
+
+
 def build_plist(
     program: list[str] | None = None,
     label: str = LABEL,
@@ -146,22 +176,22 @@ def build_plist(
     containing ``&`` or ``<`` cannot produce a plist launchd refuses to parse.
     """
     program = program or resolve_program()
+    subcommand, process_type = _SERVICES[label]
     out_log, err_log = log_paths(label, home)
     env = os.environ if env is None else env
-    forwarded = {k: env[k] for k in _FORWARDED_ENV_KEYS if k in env}
+    forwarded = _forwarded_env(label, env)
     return plistlib.dumps(
         {
             "Label": label,
-            "ProgramArguments": [*program, "menubar"],
+            "ProgramArguments": [*program, subcommand],
             "RunAtLoad": True,
             # Restart a crash, but respect a deliberate Quit. The menu bar's
             # quit handler calls rumps.quit_application(), a clean exit(0);
             # under a bare `KeepAlive: True` launchd would relaunch it at once
-            # and the Quit item would do nothing the user can see.
+            # and the Quit item would do nothing the user can see. `auto` also
+            # exits 0 on SIGTERM.
             "KeepAlive": {"SuccessfulExit": False},
-            # A menu bar owner is a UI process; Background would have launchd
-            # apply throttled I/O and CPU bands to it.
-            "ProcessType": "Interactive",
+            "ProcessType": process_type,
             "EnvironmentVariables": {"PATH": _path_env(program), **forwarded},
             "StandardOutPath": str(out_log),
             "StandardErrorPath": str(err_log),
@@ -274,7 +304,7 @@ def install(
     return {
         "label": label,
         "plist": str(target_plist),
-        "program": [*program, "menubar"],
+        "program": [*program, _SERVICES[label][0]],
         "stdout_log": str(out_log),
         "stderr_log": str(err_log),
     }

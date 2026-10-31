@@ -69,6 +69,7 @@ a stored key.
 ```bash
 ccswap run 2                     # Run an account in this terminal only (session mode)
 ccswap auto                      # Auto-switch when nearing rate limits (see [auto-switching.md](auto-switching.md))
+ccswap auto --install-service    # Keep auto-switch running via launchd (macOS)
 ccswap codex list                # List saved Codex CLI accounts
 ccswap codex switch 2            # Switch the file-backed Codex login
 ccswap config                    # Show or edit settings (see [configuration.md](configuration.md))
