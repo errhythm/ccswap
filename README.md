@@ -18,6 +18,7 @@ Multi-account and usage manager for Claude Code and OpenAI Codex. Save multiple 
 - `ccswap auto` switches to the account with the most quota left once the active one crosses 90%, before the rate limit hits.
 - `ccswap run 2` starts Claude Code as account 2 in one terminal only, so two accounts work in parallel.
 - A full-screen dashboard (`ccswap`) on macOS, Linux and Windows, and an optional macOS menu bar app.
+- A Raycast extension that lists accounts with their usage and switches with one keystroke.
 - `--json` output and exit codes for scripts and cron.
 
 ## Quick start
@@ -76,6 +77,19 @@ Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-wi
 ```bash
 npx skills add errhythm/ccswap --skill ccswap-orchestration
 ```
+
+## Raycast extension
+
+The extension in `raycast/` adds two commands. **Show Accounts** lists every Claude Code and Codex account with its 5-hour and 7-day usage. Enter switches to the selected account and ⌘B switches to the one with the most quota left. **Switch to Best Account** does the same for Claude Code without opening a window.
+
+It runs this CLI, so install ccswap first. Until it is in the Raycast Store, load it from a clone:
+
+```bash
+git clone https://github.com/errhythm/ccswap && cd ccswap/raycast
+npm install && npm run dev   # loads it into Raycast; stop with Ctrl+C, the commands stay
+```
+
+[Setup, binary path and restart notes](https://github.com/errhythm/ccswap/blob/main/raycast/README.md)
 
 ## Updating and uninstalling
 
