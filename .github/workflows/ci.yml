@@ -46,6 +46,23 @@ jobs:
         # runs on stock Windows, and this job is the proof.
         run: uv run pytest
 
+  raycast:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: raycast
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: raycast/package-lock.json
+
+      - name: Build, lint and test
+        run: npm ci && npm run build && npm run lint && npm test
+
   # The id stays `macos-keychain` although the job now runs everything: it is
   # the name branch protection matches on, and renaming it silently drops the
   # required check.

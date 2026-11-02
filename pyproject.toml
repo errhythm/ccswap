@@ -80,6 +80,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_swap"]
 
+# The Raycast extension ships through the Raycast Store, not PyPI.
+[tool.hatch.build.targets.sdist]
+exclude = ["raycast"]
+
 [dependency-groups]
 dev = [
     "babel>=2.18",
