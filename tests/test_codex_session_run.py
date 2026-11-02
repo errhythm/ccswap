@@ -609,6 +609,18 @@ def test_reused_home_credentials_made_private(run):
     assert stat.S_IMODE((run.home / "auth.json").stat().st_mode) == 0o600
 
 
+def test_shared_config_explicit_file_stores_launch_isolated_child(run):
+    config = run.switcher.codex_home / "config.toml"
+    config.write_text('cli_auth_credentials_store = "file"\n'
+                      'mcp_oauth_credentials_store = "file"\n')
+    assert run.invoke(require_session=True) == 0
+    argv, kwargs = run.spawned[0]
+    assert kwargs["env"]["CODEX_HOME"] == str(run.home)
+    assert argv.count('cli_auth_credentials_store="file"') == 1
+    assert argv.count('mcp_oauth_credentials_store="file"') == 1
+    assert (run.home / "config.toml").read_text() == config.read_text()
+
+
 def test_hard_linked_session_credentials_refused(run, tmp_path, capsys):
     os.link(run.home / "auth.json", tmp_path / "copy.json")
     assert run.invoke() == 1 and not run.spawned

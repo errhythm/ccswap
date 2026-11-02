@@ -291,6 +291,19 @@ def test_nonmanaged_config_routing_refused(tmp_path, key):
     assert 'synthetic-secret' not in str(error.value)
 
 
+@pytest.mark.parametrize('key', ['cli_auth_credentials_store', 'mcp_oauth_credentials_store'])
+@pytest.mark.parametrize('value', ['file', 'keyring', 'auto', 'ephemeral', None, True, {}])
+def test_nonmanaged_credential_store_requires_file(tmp_path, key, value):
+    source = tmp_path / 'shared' / 'config.toml'
+    layers = [(source, {key: value}, False)]
+    if value == 'file':
+        assert session.child_argv(['exec', 'hello'], tmp_path, config_layers=layers) == (
+            STORES + ['exec', 'hello'])
+    else:
+        with pytest.raises(SessionError, match=key):
+            session.child_argv(['exec', 'hello'], tmp_path, config_layers=layers)
+
+
 def test_managed_keys_are_left_to_policy_gate(tmp_path):
     layers = [(tmp_path / 'managed.toml', {'forced_login_method': 'chatgpt'}, True)]
     assert session.child_argv([], tmp_path, config_layers=layers) == ['--no-daemon'] + STORES

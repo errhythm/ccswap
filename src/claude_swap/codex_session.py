@@ -1534,6 +1534,11 @@ def _child_parse(
 def _child_config_keys(source: Path, table: dict[str, Any]) -> None:
     # All forbidden keys are top-level; nested tables may reuse such names harmlessly.
     for key in table:
+        # Shared configs may explicitly select the same private file stores
+        # that child_argv enforces. Other stores and CLI overrides stay refused.
+        if key in {"cli_auth_credentials_store", "mcp_oauth_credentials_store"} \
+                and table[key] == "file":
+            continue
         if key in _CHILD_FORBIDDEN:
             raise SessionError(f"Unsupported child config key in {source}: {key}")
 
