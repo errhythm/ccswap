@@ -7,6 +7,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Waits for the maintainer's approval in the `pypi` environment.
+    environment: pypi
     permissions:
       id-token: write
 
