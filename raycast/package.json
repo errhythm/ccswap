@@ -27,6 +27,7 @@
       "title": "Show Accounts",
       "subtitle": "ccswap",
       "description": "List Claude Code and Codex accounts with their usage, and switch between them",
+      "keywords": ["claude", "codex", "account", "usage", "quota", "rate limit"],
       "mode": "view"
     },
     {
@@ -34,6 +35,7 @@
       "title": "Switch to Best Account",
       "subtitle": "ccswap",
       "description": "Switch Claude Code to the account with the most quota left",
+      "keywords": ["claude", "account", "quota", "rate limit"],
       "mode": "no-view"
     }
   ],
