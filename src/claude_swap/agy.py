@@ -20,7 +20,7 @@ from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.fsutil import atomic_write_text
 from claude_swap.locking import FileLock
 from claude_swap.models import AccountSnapshot, AccountsSnapshot
-from claude_swap.usage_store import UsageEntry
+from claude_swap.usage_store import UsageEntry, UsageRecovery
 
 _SERVICE = "gemini"
 _ACCOUNT = "antigravity"
@@ -35,8 +35,15 @@ class AgyError(ClaudeSwitchError):
     """A fixed, secret-free diagnostic suitable for every interface."""
 
 
-class _RefreshConflict(AgyError):
-    pass
+class _RecoveryRequired(AgyError):
+    def __init__(self, recovery: UsageRecovery, *, attempted: bool = True) -> None:
+        self.recovery = recovery
+        self.attempted = attempted
+        super().__init__(recovery.instruction)
+
+
+class _UsageSkipped(Exception):
+    """The snapshot deadline passed before a child could start."""
 
 
 def _private_dir(path: Path) -> None:
@@ -323,12 +330,19 @@ class AgyAccountSwitcher:
             if login.credential is None:
                 raise AgyError("No Antigravity login found; sign in with agy first")
             number = self._capture(data, login.credential)
+            cached = self._usage_cache(number)
+            if cached["recovery"] is not None:
+                cached.update(recovery=None, error=None, attemptedAt=None)
+                self._write(self.backup_dir / f"usage-{number}.json", cached)
         print(f"Saved Antigravity account {number}: {login.credential.email}")
 
     def switch_to(self, identifier: str, json_output: bool = False) -> dict:
         with self._lock():
             data = self._roster()
             number = self._resolve(identifier, data)
+            recovery = self._usage_cache(number)["recovery"]
+            if recovery is not None:
+                raise _RecoveryRequired(UsageRecovery(**recovery))
             target = self._saved(number, data)
             original = self._native()
             previous = self._matching(data, original.credential)
@@ -419,21 +433,28 @@ class AgyAccountSwitcher:
                 return
             recovery = self.backup_dir / f"refresh-conflict-{number}-{time.time_ns()}.json"
             self._write(recovery, refreshed.document)
-            raise _RefreshConflict(
-                f"Antigravity saved credentials changed externally; private recovery file: {recovery}"
-            )
+            raise _RecoveryRequired(UsageRecovery("refresh-conflict", str(recovery.absolute())))
         self._write(path, refreshed.document)
 
-    def _invoke_usage(self, number: str, credential: Credential, active: bool) -> dict:
+    def _invoke_usage(self, number: str, credential: Credential, active: bool,
+                      timeout: float = _USAGE_TIMEOUT, *, deadline: float | None = None) -> dict:
+        if deadline is None:
+            deadline = time.monotonic() + timeout
+        cached = self._usage_cache(number)
+        if cached["recovery"] is not None:
+            raise _RecoveryRequired(UsageRecovery(**cached["recovery"]))
         binary = shutil.which("agy")
         if binary is None:
             raise AgyError("Antigravity CLI is not installed")
         binary = str(Path(binary).absolute())
         directory = tempfile.TemporaryDirectory(prefix="ccswap-agy-", delete=False)
         home = Path(directory.name)
+        auth_path = home / _RELATIVE_AUTH
+        pending = UsageRecovery("refresh-persistence", str(auth_path.absolute()))
         retain_state = False
         try:
             _private_dir(home)
+            self._write(auth_path, credential.document)
             env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR", "TMPDIR") if key in os.environ}
             if active:
                 env["HOME"] = str(Path.home())
@@ -442,33 +463,53 @@ class AgyAccountSwitcher:
                         env[key] = os.environ[key]
             else:
                 env.update(HOME=str(home), SSH_TTY="/dev/ccswap-usage")
-                self._write(home / _RELATIVE_AUTH, credential.document)
+            env["USERPROFILE"] = env["HOME"]
+            if deadline <= time.monotonic():
+                raise _UsageSkipped
+            # The child may rotate its refresh token before returning or crashing.
+            # Persist its private recovery location before granting it that chance.
+            journal = dict(cached, recovery={"kind": pending.kind, "path": pending.path})
+            self._write(self.backup_dir / f"usage-{number}.json", journal)
+            retain_state = True
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                try:
+                    self._write(self.backup_dir / f"usage-{number}.json", cached)
+                except (AgyError, OSError):
+                    raise _RecoveryRequired(pending, attempted=False) from None
+                retain_state = False
+                raise _UsageSkipped
             result = None
             failure = None
             try:
                 result = spawn.run([binary, "-p", "/usage", "--output-format", "json"],
                                    cwd=home, env=env, capture_output=True, text=True,
-                                   stdin=subprocess.DEVNULL, timeout=_USAGE_TIMEOUT)
+                                   stdin=subprocess.DEVNULL, timeout=timeout)
             except (OSError, subprocess.SubprocessError):
                 failure = "Antigravity usage command failed or timed out"
             finally:
                 try:
                     refreshed = (self._native().credential if active else
-                                 Credential.parse(_json_file(home / _RELATIVE_AUTH)))
+                                 Credential.parse(_json_file(auth_path)))
                     if refreshed is None:
                         raise AgyError("Antigravity login disappeared during usage refresh")
+                    if active:
+                        self._write(auth_path, refreshed.document)
                     self._persist_refresh(number, credential, refreshed)
-                except _RefreshConflict:
+                except _RecoveryRequired as exc:
+                    try:
+                        self._record_recovery(number, dict(cached), exc.recovery)
+                    except (AgyError, OSError):
+                        raise _RecoveryRequired(pending) from None
+                    retain_state = False
                     raise
                 except (AgyError, OSError):
-                    if active:
-                        raise
-                    retain_state = True
-                    raise AgyError(
-                        "Cannot save or verify refreshed Antigravity credentials; "
-                        f"private usage directory retained at {home}. "
-                        f"Expected recovery file: {home / _RELATIVE_AUTH}"
-                    ) from None
+                    raise _RecoveryRequired(pending) from None
+                try:
+                    self._write(self.backup_dir / f"usage-{number}.json", cached)
+                except (AgyError, OSError):
+                    raise _RecoveryRequired(pending) from None
+                retain_state = False
             if failure:
                 raise AgyError(failure)
             if result is None or result.returncode != 0:
@@ -480,31 +521,65 @@ class AgyAccountSwitcher:
             return parse_usage(document)
         finally:
             if not retain_state:
-                directory.cleanup()
+                try:
+                    directory.cleanup()
+                except OSError:
+                    # Saved auth or a durable conflict copy already owns custody.
+                    pass
 
-    def _usage_entry(self, number: str, credential: Credential, active: bool, fetch: bool) -> UsageEntry:
+    def _usage_cache(self, number: str) -> dict:
         path = self.backup_dir / f"usage-{number}.json"
         cached = _json_file(path) if path.exists() else {}
+        # Caches written before recovery state existed remain valid.
+        cached.setdefault("recovery", None)
         self._validate_cache(cached)
+        return cached
+
+    def _record_recovery(self, number: str, cached: dict, recovery: UsageRecovery) -> None:
+        cached.update(recovery={"kind": recovery.kind, "path": recovery.path},
+                      error="Antigravity usage unavailable")
+        self._write(self.backup_dir / f"usage-{number}.json", cached)
+
+    def _usage_entry(self, number: str, cached: dict, credential: Credential | None,
+                     active: bool, deadline: float | None) -> UsageEntry:
         now = time.time()
         fetched = cached.get("fetchedAt")
         attempted = cached.get("attemptedAt")
         diagnostic = cached.get("error")
-        if fetch and (not isinstance(attempted, (int, float)) or now - attempted >= _POLL_SECONDS):
-            cached["attemptedAt"] = now
+        if (credential is not None and cached["recovery"] is None and deadline is not None
+                and deadline > time.monotonic()
+                and (attempted is None or now - attempted >= _POLL_SECONDS)):
+            attempted_fetch = True
             try:
-                cached["lastGood"] = self._invoke_usage(number, credential, active)
+                cached["lastGood"] = self._invoke_usage(number, credential, active, deadline=deadline)
                 cached["fetchedAt"] = now
                 cached["error"] = None
                 diagnostic = None
+            except _RecoveryRequired as exc:
+                cached["recovery"] = {"kind": exc.recovery.kind, "path": exc.recovery.path}
+                attempted_fetch = exc.attempted
+                if attempted_fetch:
+                    cached["error"] = "Antigravity usage unavailable"
+            except _UsageSkipped:
+                return self._usage_entry(number, cached, None, active, None)
             except AgyError as exc:
                 diagnostic = str(exc)
                 cached["error"] = "Antigravity usage unavailable"
-            self._write(path, cached)
+            if attempted_fetch:
+                cached["attemptedAt"] = now
+            try:
+                self._write(self.backup_dir / f"usage-{number}.json", cached)
+            except (AgyError, OSError):
+                if cached["recovery"] is None:
+                    raise
             fetched = cached.get("fetchedAt")
+        recovery = UsageRecovery(**cached["recovery"]) if cached["recovery"] is not None else None
+        if recovery is not None:
+            diagnostic = recovery.instruction
         return UsageEntry(last_good=cached.get("lastGood"), fetched_at=fetched,
                           age_s=now - fetched if isinstance(fetched, (int, float)) else None,
-                          last_attempt_at=cached.get("attemptedAt"), last_error=diagnostic)
+                          last_attempt_at=cached.get("attemptedAt"), last_error=diagnostic,
+                          recovery=recovery)
 
     @staticmethod
     def _validate_cache(cached: dict) -> None:
@@ -515,6 +590,14 @@ class AgyAccountSwitcher:
                     raise ValueError
             if cached.get("error") not in (None, "Antigravity usage unavailable"):
                 raise ValueError
+            recovery = cached.get("recovery")
+            if recovery is not None:
+                if (not isinstance(recovery, dict) or set(recovery) != {"kind", "path"}
+                        or recovery["kind"] not in ("refresh-conflict", "refresh-persistence")
+                        or not isinstance(recovery["path"], str)
+                        or not Path(recovery["path"]).is_absolute()
+                        or any(ord(char) < 32 or ord(char) == 127 for char in recovery["path"])):
+                    raise ValueError
             last_good = cached.get("lastGood")
             if last_good is None:
                 return
@@ -538,19 +621,31 @@ class AgyAccountSwitcher:
         if not self.sequence_file.exists() and not self.sequence_file.is_symlink():
             return AccountsSnapshot(None, (), time.time())
         with self._lock():
+            deadline = time.monotonic() + _USAGE_TIMEOUT
             data = self._roster()
             login = self._native() if data["accounts"] else None
             active = self._matching(data, login.credential) if login else None
             accounts = []
-            for number, account in sorted(data["accounts"].items(), key=lambda pair: int(pair[0])):
-                saved = self._saved(number, data)
-                credential = login.credential if number == active and login else saved
-                if credential != saved:
-                    self._persist_refresh(number, saved, credential)
-                entry = self._usage_entry(number, credential, number == active, fetch is None or number in fetch)
+            caches = {number: self._usage_cache(number) for number in data["accounts"]}
+            ordered = sorted(data["accounts"], key=lambda number:
+                             (caches[number].get("attemptedAt") is not None,
+                              caches[number].get("attemptedAt") or 0, int(number)))
+            for number in ordered:
+                account, cached = data["accounts"][number], caches[number]
+                credential = None
+                if cached["recovery"] is None:
+                    saved = self._saved(number, data)
+                    credential = login.credential if number == active and login else saved
+                    if credential != saved:
+                        try:
+                            self._persist_refresh(number, saved, credential)
+                        except _RecoveryRequired as exc:
+                            self._record_recovery(number, cached, exc.recovery)
+                selected_deadline = deadline if fetch is None or number in fetch else None
+                entry = self._usage_entry(number, cached, credential, number == active, selected_deadline)
                 accounts.append(AccountSnapshot(number, account["email"], "Antigravity", "", number == active,
-                                                "oauth", True, entry))
-            return AccountsSnapshot(active, tuple(accounts), time.time())
+                                                "oauth", entry.recovery is None, entry))
+            return AccountsSnapshot(active, tuple(sorted(accounts, key=lambda account: int(account.number))), time.time())
 
     def usage_status(self, json_output: bool = False) -> dict:
         snapshot = self.accounts_snapshot()

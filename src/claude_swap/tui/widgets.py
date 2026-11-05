@@ -305,6 +305,8 @@ def account_card_text(
     age = data.format_age(acc.usage.age_s, tr=tr)
     if age:
         text.append(f"   {age}", style=palette.muted)
+    if acc.usage.recovery is not None:
+        text.append("\n    ⚠ " + acc.usage.recovery.instruction, style=palette.sev_warn)
 
     reset_display = reset_credit_display(acc.usage.last_good, now)
     if reset_display and reset_display.urgent:
@@ -422,6 +424,10 @@ def mini_account_text(
     text.append(f"  [{org}]", style=palette.muted)
     if acc.disabled:
         text.append(tr("  (disabled)"), style=palette.muted)
+    if acc.usage.recovery is not None:
+        text.no_wrap = False
+        text.overflow = "fold"
+        text.append("\n    ⚠ " + acc.usage.recovery.instruction, style=palette.sev_warn)
     text.append("   ")
 
     sentinel = acc.usage.sentinel

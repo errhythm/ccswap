@@ -46,11 +46,12 @@ def quota():
 def provider(monkeypatch, block_real_keychain):
     for key in (*agy._SSH_KEYS, "ANTIGRAVITY_GEMINI_DIR"):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(agy.sys, "platform", "darwin")
-    monkeypatch.setattr(agy.shutil, "which", lambda name: "/synthetic/agy")
+    monkeypatch.setattr(agy, "sys", SimpleNamespace(platform="darwin"))
+    fake_binary = str((Path.home() / "synthetic-agy").absolute())
+    monkeypatch.setattr(agy.shutil, "which", lambda name: fake_binary)
 
     def usage(argv, **kwargs):
-        assert argv == ["/synthetic/agy", "-p", "/usage", "--output-format", "json"]
+        assert argv == [fake_binary, "-p", "/usage", "--output-format", "json"]
         return SimpleNamespace(returncode=0, stdout=json.dumps(quota()), stderr="")
 
     monkeypatch.setattr(agy.spawn, "run", usage)
@@ -81,9 +82,10 @@ def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider):
     assert read_native() == auth()
     assert json.loads(provider._credential_path("3").read_text()) == outgoing
     assert provider.status()["activeAccountNumber"] == 1
-    assert provider.backup_dir.stat().st_mode & 0o777 == 0o700
-    for path in provider.backup_dir.iterdir():
-        assert path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert provider.backup_dir.stat().st_mode & 0o777 == 0o700
+        for path in provider.backup_dir.iterdir():
+            assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_add_decodes_go_keyring_value_without_changing_native_login(provider):
@@ -261,9 +263,10 @@ def test_inactive_refresh_persists_even_on_usage_failure(provider, monkeypatch, 
 
     def run(argv, **kwargs):
         env = kwargs["env"]
+        assert env["USERPROFILE"] == env["HOME"]
         assert "ANTIGRAVITY_API_KEY" not in env
         assert env["SSH_TTY"] == "/dev/ccswap-usage"
-        assert kwargs["timeout"] == 45
+        assert 0 < kwargs["timeout"] <= 45
         assert kwargs["stdin"] == subprocess.DEVNULL
         home = Path(env["HOME"])
         assert home == kwargs["cwd"]
@@ -348,7 +351,8 @@ def test_failed_refresh_persistence_retains_private_child_state(provider, monkey
         provider._invoke_usage("1", agy.Credential.parse(auth()), False)
     assert child_files[0].exists(), "the only refreshed credential copy must survive"
     assert json.loads(child_files[0].read_text()) == refreshed
-    assert child_files[0].stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert child_files[0].stat().st_mode & 0o777 == 0o600
     assert str(child_files[0]) in str(raised.value)
     assert "synthetic-recovery-only" not in str(raised.value)
     assert read_native()["id_token_email"] == "two@example.com"
@@ -535,3 +539,434 @@ def test_inactive_scoped_quota_keeps_each_group_when_one_is_exhausted(provider):
     assert len(rendered.splitlines()) == len(windows) + 1
     for line in rendered.splitlines()[1:]:
         assert sum(window["name"] in line for window in windows) == 1
+
+
+def test_snapshot_bounds_total_subprocess_time_and_rotates_persisted_order(provider, monkeypatch):
+    two_accounts(provider)
+    native(auth("three@example.com"))
+    provider.add_account()
+    clock = [1000.0]
+    monkeypatch.setattr(agy.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(agy.time, "time", lambda: clock[0])
+    calls = []
+
+    def run(argv, **kwargs):
+        email = (read_native()["id_token_email"] if kwargs["env"]["HOME"] == str(Path.home()) else
+                 json.loads((Path(kwargs["env"]["HOME"]) / agy._RELATIVE_AUTH).read_text())["id_token_email"])
+        calls.append((email, kwargs["timeout"]))
+        clock[0] += kwargs["timeout"]
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    snapshot = provider.accounts_snapshot()
+    assert [call[0] for call in calls] == ["one@example.com"]
+    assert sum(call[1] for call in calls) <= 45
+    assert [account.number for account in snapshot.accounts] == ["1", "2", "3"]
+    assert snapshot.accounts[1].usage.last_attempt_at is None
+    assert snapshot.accounts[1].usage.last_error is None
+    clock[0] += 61
+    agy.AgyAccountSwitcher().accounts_snapshot()
+    clock[0] += 61
+    agy.AgyAccountSwitcher().accounts_snapshot()
+    assert [call[0] for call in calls] == ["one@example.com", "two@example.com", "three@example.com"]
+
+
+def test_snapshot_passes_remaining_budget_and_preserves_fetch_selection(provider, monkeypatch):
+    two_accounts(provider)
+    clock = [100.0]
+    monkeypatch.setattr(agy.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(kwargs["timeout"])
+        clock[0] += 30 if len(calls) == 1 else kwargs["timeout"]
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    provider.accounts_snapshot()
+    assert calls == [45, 15]
+    provider.accounts_snapshot(fetch={"2"})
+    assert calls == [45, 15]
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_write_denial_after_refresh_keeps_durable_recovery(provider, monkeypatch, active):
+    two_accounts(provider)
+    if active:
+        native(auth())
+    write = provider._write
+    refreshed = auth(future_field="only-refreshed-copy")
+    child_files = []
+
+    def run(*args, **kwargs):
+        child_file = Path(kwargs["cwd"]) / agy._RELATIVE_AUTH
+        child_files.append(child_file)
+        assert provider._usage_cache("1")["recovery"]["path"] == str(child_file)
+        if active:
+            native(refreshed)
+        else:
+            write(child_file, refreshed)
+
+        def deny_backup(path, document):
+            if path.is_relative_to(provider.backup_dir):
+                raise agy.AgyError("Cannot save Antigravity account data")
+            write(path, document)
+
+        monkeypatch.setattr(provider, "_write", deny_backup)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    account = provider.accounts_snapshot(fetch={"1"}).accounts[0]
+    assert account.switchable is False
+    recovery = account.usage.recovery
+    assert recovery is not None and recovery.path in account.usage.last_error
+    assert json.loads(Path(recovery.path).read_text()) == refreshed
+    assert Path(recovery.path) == child_files[0]
+    monkeypatch.setattr(provider, "_write", write)
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("recovery refetched"))
+    restarted = agy.AgyAccountSwitcher()
+    assert restarted.accounts_snapshot(fetch={"1"}).accounts[0].usage.recovery == recovery
+    with pytest.raises(agy.AgyError, match="Recovery"):
+        restarted.switch_to("1", json_output=True)
+
+
+def test_usage_refuses_to_launch_without_durable_intent(provider, monkeypatch):
+    two_accounts(provider)
+    write = provider._write
+
+    def deny_journal(path, document):
+        if path == provider.backup_dir / "usage-1.json":
+            raise agy.AgyError("Cannot save Antigravity account data")
+        write(path, document)
+
+    monkeypatch.setattr(provider, "_write", deny_journal)
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("unjournaled child"))
+    with pytest.raises(agy.AgyError, match="Cannot save"):
+        provider._invoke_usage("1", agy.Credential.parse(auth()), False)
+
+
+@pytest.mark.parametrize("failure", ["conflict-marker", "clear-intent"])
+def test_failed_journal_finalization_keeps_recovery_copy(provider, monkeypatch, failure):
+    two_accounts(provider)
+    refreshed = auth(future_field="latest")
+    write = provider._write
+    children = []
+
+    def run(*args, **kwargs):
+        child = Path(kwargs["cwd"]) / agy._RELATIVE_AUTH
+        children.append(child)
+        write(child, refreshed)
+        if failure == "conflict-marker":
+            write(provider._credential_path("1"), auth(future_field="external"))
+
+        def deny_journal(path, document):
+            if path == provider.backup_dir / "usage-1.json":
+                raise agy.AgyError("Cannot save Antigravity account data")
+            write(path, document)
+
+        monkeypatch.setattr(provider, "_write", deny_journal)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    with pytest.raises(agy.AgyError) as raised:
+        provider._invoke_usage("1", agy.Credential.parse(auth()), False)
+    pending = agy.AgyAccountSwitcher()._usage_cache("1")["recovery"]
+    assert pending["path"] == str(children[0])
+    assert pending["path"] in str(raised.value)
+    assert json.loads(children[0].read_text()) == refreshed
+    if failure == "clear-intent":
+        assert json.loads(provider._credential_path("1").read_text()) == refreshed
+    else:
+        conflict = next(provider.backup_dir.glob("refresh-conflict-1-*.json"))
+        assert json.loads(conflict.read_text()) == refreshed
+
+
+def test_conflict_recovery_survives_temp_cleanup_failure(provider, monkeypatch):
+    two_accounts(provider)
+    refreshed = auth(future_field="rotated")
+    cleanup = agy.tempfile.TemporaryDirectory.cleanup
+    directories = []
+
+    def run(*args, **kwargs):
+        directories.append(Path(kwargs["cwd"]))
+        provider._write(Path(kwargs["cwd"]) / agy._RELATIVE_AUTH, refreshed)
+        provider._write(provider._credential_path("1"), auth(future_field="external"))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    def deny_cleanup(self):
+        raise PermissionError("synthetic cleanup failure")
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    monkeypatch.setattr(agy.tempfile.TemporaryDirectory, "cleanup", deny_cleanup)
+    with pytest.raises(agy.AgyError, match="Recovery") as raised:
+        provider._invoke_usage("1", agy.Credential.parse(auth()), False)
+    pending = provider._usage_cache("1")["recovery"]
+    assert pending["path"] in str(raised.value)
+    assert json.loads(Path(pending["path"]).read_text()) == refreshed
+    monkeypatch.setattr(agy.tempfile.TemporaryDirectory, "cleanup", cleanup)
+    for directory in directories:
+        agy.shutil.rmtree(directory)
+
+
+@pytest.mark.parametrize("slow_step", ["setup", "journal"])
+def test_expired_setup_never_launches_or_marks_an_attempt(provider, monkeypatch, slow_step):
+    two_accounts(provider)
+    clock = [100.0]
+    monkeypatch.setattr(agy.time, "monotonic", lambda: clock[0])
+    write = provider._write
+
+    def slow_write(path, document):
+        write(path, document)
+        if ((slow_step == "setup" and path.name == agy._RELATIVE_AUTH.name)
+                or (slow_step == "journal" and document.get("recovery") is not None)):
+            clock[0] += 50
+
+    monkeypatch.setattr(provider, "_write", slow_write)
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("expired child launched"))
+    account = provider.accounts_snapshot(fetch={"1"}).accounts[0]
+    assert account.usage.last_attempt_at is None
+    assert account.usage.last_error is None
+    assert account.usage.recovery is None
+    restarted = agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0]
+    assert restarted.usage.recovery is None
+
+
+def test_deadline_includes_setup_and_journal_time(provider, monkeypatch):
+    two_accounts(provider)
+    clock = [100.0]
+    monkeypatch.setattr(agy.time, "monotonic", lambda: clock[0])
+    write = provider._write
+    calls = []
+
+    def slow_write(path, document):
+        write(path, document)
+        if path.name == agy._RELATIVE_AUTH.name or document.get("recovery") is not None:
+            clock[0] += 5
+
+    def run(*args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    monkeypatch.setattr(provider, "_write", slow_write)
+    monkeypatch.setattr(agy.spawn, "run", run)
+    provider.accounts_snapshot(fetch={"1"})
+    assert calls == [35]
+
+
+def test_expired_journal_cleanup_failure_keeps_intent_without_attempt(provider, monkeypatch):
+    two_accounts(provider)
+    clock = [100.0]
+    monkeypatch.setattr(agy.time, "monotonic", lambda: clock[0])
+    write = provider._write
+
+    def fail_clear(path, document):
+        if path == provider.backup_dir / "usage-1.json":
+            if document.get("recovery") is None:
+                raise agy.AgyError("Cannot save Antigravity account data")
+            clock[0] += 50
+        write(path, document)
+
+    monkeypatch.setattr(provider, "_write", fail_clear)
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("expired child launched"))
+    account = provider.accounts_snapshot(fetch={"1"}).accounts[0]
+    assert account.usage.last_attempt_at is None
+    pending = provider._usage_cache("1")
+    assert pending.get("attemptedAt") is None and pending.get("error") is None
+    assert account.usage.recovery is not None
+    assert json.loads(Path(account.usage.recovery.path).read_text()) == auth()
+    assert agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0].switchable is False
+
+
+def test_success_saves_then_clears_intent_before_temp_cleanup(provider, monkeypatch):
+    two_accounts(provider)
+    refreshed = auth(future_field="latest")
+    write = provider._write
+    children = []
+    cleared = []
+
+    def observe_write(path, document):
+        if path == provider.backup_dir / "usage-1.json" and document.get("recovery") is None:
+            assert json.loads(provider._credential_path("1").read_text()) == refreshed
+            assert children[0].exists()
+            cleared.append(path)
+        write(path, document)
+
+    def run(*args, **kwargs):
+        child = Path(kwargs["cwd"]) / agy._RELATIVE_AUTH
+        children.append(child)
+        assert provider._usage_cache("1")["recovery"]["path"] == str(child)
+        write(child, refreshed)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    monkeypatch.setattr(provider, "_write", observe_write)
+    monkeypatch.setattr(agy.spawn, "run", run)
+    assert provider._invoke_usage("1", agy.Credential.parse(auth()), False)["scoped"]
+    assert cleared and not children[0].exists()
+    assert agy.AgyAccountSwitcher()._usage_cache("1")["recovery"] is None
+
+
+def test_queued_manual_switch_succeeds_after_bounded_refresh(provider, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from claude_swap.locking import FileLock
+
+    two_accounts(provider)
+    for email in ("three@example.com", "four@example.com"):
+        native(auth(email))
+        provider.add_account()
+    started, release, queued = Event(), Event(), Event()
+    monkeypatch.setattr(agy, "_USAGE_TIMEOUT", 0.12)
+    monkeypatch.setattr(agy.AgyAccountSwitcher, "_lock", lambda self: FileLock(self.lock_file, timeout=0.35))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(kwargs["timeout"])
+        started.set()
+        assert release.wait(2)
+        Event().wait(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+
+    def switch():
+        queued.set()
+        return agy.AgyAccountSwitcher().switch_to("1", json_output=True)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        refresh = pool.submit(provider.accounts_snapshot)
+        assert started.wait(2)
+        manual = pool.submit(switch)
+        assert queued.wait(2)
+        release.set()
+        assert manual.result(timeout=3)["to"]["number"] == 1
+        refresh.result(timeout=3)
+    assert len(calls) == 1
+    assert read_native()["id_token_email"] == "one@example.com"
+
+
+def induce_recovery(provider, monkeypatch, failure="conflict"):
+    two_accounts(provider)
+    provider.accounts_snapshot()
+    cache_path = provider.backup_dir / "usage-1.json"
+    cached = json.loads(cache_path.read_text())
+    cached["attemptedAt"] = 0
+    provider._write(cache_path, cached)
+    refreshed = auth(future_field="refreshed-recovery")
+
+    def run(argv, **kwargs):
+        provider._write(Path(kwargs["env"]["HOME"]) / agy._RELATIVE_AUTH, refreshed)
+        if failure == "missing":
+            provider._credential_path("1").unlink()
+        elif failure == "malformed":
+            provider._credential_path("1").write_text("{")
+        else:
+            provider._write(provider._credential_path("1"), auth(future_field="external"))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    return provider.accounts_snapshot(fetch={"1"}).accounts[0]
+
+
+@pytest.mark.parametrize("failure", ["conflict", "missing", "malformed"])
+def test_recovery_survives_cooldown_and_missing_saved_file(provider, monkeypatch, failure):
+    first = induce_recovery(provider, monkeypatch, failure)
+    assert first.switchable is False
+    assert first.usage.recovery is not None
+    recovery_path = first.usage.recovery.path
+    assert Path(recovery_path).is_absolute() and Path(recovery_path).is_file()
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("pending recovery refetched"))
+    monkeypatch.setattr(agy.time, "time", lambda: first.usage.last_attempt_at + 100)
+    native(auth(future_field="native-newer"))
+    fresh = agy.AgyAccountSwitcher()
+    account = fresh.accounts_snapshot(fetch={"1"}).accounts[0]
+    assert account.usage.recovery == first.usage.recovery
+    assert recovery_path in account.usage.last_error
+    assert account.usage.last_good == first.usage.last_good
+    assert account.switchable is False
+    with pytest.raises(agy.AgyError, match="Recovery"):
+        fresh.switch_to("1", json_output=True)
+    assert Path(recovery_path).is_file()
+
+
+def test_explicit_add_clears_only_matching_recovery_and_incidental_capture_preserves_it(provider, monkeypatch):
+    first = induce_recovery(provider, monkeypatch)
+    cache_path = provider.backup_dir / "usage-1.json"
+    before = json.loads(cache_path.read_text())
+    native(auth(future_field="signed-in"))
+    provider.switch_to("2", json_output=True)
+    assert json.loads(cache_path.read_text()) == before
+    provider.add_account()
+    assert json.loads(cache_path.read_text()) == before
+    native(auth(future_field="signed-in"))
+    provider.add_account()
+    healed = agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0]
+    assert healed.switchable is True
+    assert healed.usage.recovery is None
+    assert healed.usage.last_error is None
+    assert Path(first.usage.recovery.path).is_file()
+
+
+def test_failed_explicit_add_preserves_recovery(provider, monkeypatch):
+    first = induce_recovery(provider, monkeypatch)
+    native(auth(future_field="signed-in"))
+    before = (provider.backup_dir / "usage-1.json").read_text()
+    write = provider._write
+
+    def fail_roster(path, document):
+        if path == provider.sequence_file:
+            raise agy.AgyError("Cannot save Antigravity account data")
+        write(path, document)
+
+    monkeypatch.setattr(provider, "_write", fail_roster)
+    with pytest.raises(agy.AgyError, match="Cannot save"):
+        provider.add_account()
+    assert (provider.backup_dir / "usage-1.json").read_text() == before
+    assert Path(first.usage.recovery.path).is_file()
+
+
+@pytest.mark.parametrize("metadata", ["secret", {}, {"kind": "raw-secret", "path": "/tmp/file"},
+    {"kind": "refresh-conflict", "path": "relative"},
+    {"kind": "refresh-conflict", "path": "/tmp/bad\x1bpath"},
+    {"kind": "refresh-conflict", "path": 123}])
+def test_malformed_recovery_metadata_fails_without_leaking(provider, metadata):
+    native(auth())
+    provider.add_account()
+    provider._write(provider.backup_dir / "usage-1.json", {"recovery": metadata})
+    with pytest.raises(agy.AgyError) as raised:
+        provider.accounts_snapshot(fetch=set())
+    assert str(raised.value) == "Invalid Antigravity usage cache"
+
+
+def test_full_and_compact_cards_show_recovery_with_cached_quota(provider, monkeypatch):
+    from claude_swap.tui.widgets import account_card_text, mini_account_text
+
+    account = induce_recovery(provider, monkeypatch)
+    assert account.usage.last_good is not None
+    for text in (account_card_text(account, 100).plain, mini_account_text(account, 0).plain):
+        assert "Recovery required" in text
+        assert "ccswap agy add" in text
+        assert account.usage.recovery.path in text
+        assert "Gemini Models" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [False, True])
+async def test_dashboard_shows_pending_recovery_with_cached_quota(provider, monkeypatch, tmp_path, active):
+    from claude_swap.tui.app import CswapApp
+    from claude_swap.tui.widgets import AccountsPanel
+    from tests.test_tui import FakeSwitcher, settle
+
+    account = induce_recovery(provider, monkeypatch)
+    if active:
+        native(auth())
+    monkeypatch.setattr("claude_swap.claude_integration.mod_installed", lambda: False)
+    app = CswapApp(FakeSwitcher([], tmp_path), codex_switcher=FakeSwitcher([], tmp_path),
+                   agy_switcher=provider)
+    app.title = "ccswap · synthetic recovery test data"
+    async with app.run_test(size=(120, 48)) as pilot:
+        await settle(pilot)
+        panel = app.screen.query_one(AccountsPanel).render().plain
+        assert "Recovery required" in panel and "ccswap agy add" in panel
+        assert account.usage.recovery.path in panel
+        assert "Gemini Models" in panel
+        app.save_screenshot(f"agy-recovery-{'full' if active else 'compact'}.svg", path=str(tmp_path))

@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from typing import Literal
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -270,6 +271,19 @@ class FetchRecord:
 
 
 @dataclass(frozen=True)
+class UsageRecovery:
+    """A retained private credential copy that needs explicit recovery."""
+
+    kind: Literal["refresh-conflict", "refresh-persistence"]
+    path: str
+
+    @property
+    def instruction(self) -> str:
+        return ("Recovery required. Sign in again and run ccswap agy add. "
+                f"Keep private recovery file: {self.path}")
+
+
+@dataclass(frozen=True)
 class UsageEntry:
     """Read model of one account's usage state at collect time.
 
@@ -314,6 +328,7 @@ class UsageEntry:
     # import-usage``) keeps every collector off this slot. Appended for the
     # same positional compatibility as ``claim_until``.
     held_until: float | None = None
+    recovery: UsageRecovery | None = None
 
     def fresh(self, now: float, ttl: float = SERVE_TTL_S) -> bool:
         return self.fetched_at is not None and (now - self.fetched_at) <= ttl
