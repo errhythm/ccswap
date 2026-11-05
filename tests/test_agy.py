@@ -395,6 +395,73 @@ def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, 
     assert "synthetic-access" not in output.out + output.err
 
 
+@pytest.mark.parametrize("diagnostic", [
+    "Antigravity CLI is not installed",
+    "Antigravity usage command failed",
+    "Antigravity usage command failed or timed out",
+    "Antigravity returned invalid quota JSON",
+    "Antigravity returned invalid or unavailable quota data",
+    "Antigravity usage unavailable",
+])
+def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, capsys, diagnostic):
+    native(auth())
+    provider.add_account()
+    capsys.readouterr()
+    attempts = []
+
+    def fail_usage(*args, **kwargs):
+        attempts.append(args)
+        raise agy.AgyError(diagnostic)
+
+    monkeypatch.setattr(provider, "_invoke_usage", fail_usage)
+    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
+    cli._agy_command(["usage"])
+    assert diagnostic in capsys.readouterr().out
+    for _ in range(2):
+        cli._agy_command(["usage", "--json"])
+        assert json.loads(capsys.readouterr().out)["accounts"][0]["error"] == diagnostic
+        cli._agy_command(["usage"])
+        assert diagnostic in capsys.readouterr().out
+    assert len(attempts) == 1
+
+
+def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypatch, capsys):
+    native(auth())
+    provider.add_account()
+    capsys.readouterr()
+    lookups = []
+
+    def missing_cli(name):
+        lookups.append(name)
+        return None
+
+    monkeypatch.setattr(agy.shutil, "which", missing_cli)
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("missing CLI started"))
+    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
+    for _ in range(2):
+        cli._agy_command(["usage", "--json"])
+        diagnostic = json.loads(capsys.readouterr().out)["accounts"][0]["error"]
+        assert "Antigravity CLI is not installed" in diagnostic
+        assert "Install" in diagnostic
+        assert "https://antigravity.google/docs/getting-started/" in diagnostic
+        cli._agy_command(["usage"])
+        assert diagnostic in capsys.readouterr().out
+    assert lookups == ["agy"]
+
+
+def test_unknown_usage_diagnostic_is_not_persisted(provider, monkeypatch):
+    native(auth())
+    provider.add_account()
+
+    def fail_usage(*args, **kwargs):
+        raise agy.AgyError("synthetic-unrecognized-error")
+
+    monkeypatch.setattr(provider, "_invoke_usage", fail_usage)
+    assert provider.accounts_snapshot().accounts[0].usage.last_error == "synthetic-unrecognized-error"
+    assert provider.accounts_snapshot().accounts[0].usage.last_error == "Antigravity usage unavailable"
+    assert "synthetic-unrecognized-error" not in (provider.backup_dir / "usage-1.json").read_text()
+
+
 def test_cli_subprocess_file_backend_round_trip(tmp_path):
     home = tmp_path / "child-home"
     native_path = home / agy._RELATIVE_AUTH
