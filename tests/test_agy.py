@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -252,6 +253,23 @@ def test_scoped_usage_preserves_every_bucket_and_accepts_expired_refreshable_aut
         assert set(account["usage"]) == {"scoped"}
         assert account["usage"]["scoped"][1]["pct"] == 25
         assert account["usage"]["scoped"][1]["window"] == "5h"
+
+
+def test_usage_timeout_never_exceeds_budget_on_a_stalled_clock(provider, monkeypatch):
+    two_accounts(provider)
+    # (t + 45) - t rounds to 45.0000000000001 here; Windows' coarse clock often returns the same t twice.
+    frozen = SimpleNamespace(monotonic=lambda: 1017.3252014074263, time=time.time, time_ns=time.time_ns)
+    monkeypatch.setattr(agy, "time", frozen)
+    timeouts = []
+
+    def run(argv, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    with pytest.raises(agy.AgyError):
+        provider._invoke_usage("1", agy.Credential.parse(auth()), False)
+    assert timeouts == [45]
 
 
 @pytest.mark.parametrize("failure", ["exit", "timeout", "malformed"])

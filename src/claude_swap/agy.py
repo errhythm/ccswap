@@ -484,7 +484,8 @@ class AgyAccountSwitcher:
             journal = dict(cached, recovery={"kind": pending.kind, "path": pending.path})
             self._write(self.backup_dir / f"usage-{number}.json", journal)
             retain_state = True
-            timeout = deadline - time.monotonic()
+            # Float rounding can push this past the budget when a coarse clock hasn't ticked.
+            timeout = min(deadline - time.monotonic(), timeout)
             if timeout <= 0:
                 try:
                     self._write(self.backup_dir / f"usage-{number}.json", cached)
