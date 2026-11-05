@@ -8,6 +8,7 @@ and a dashboard selecting the wrong provider or inventing a weekly pace for 5h.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -83,6 +84,35 @@ def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider):
     assert provider.backup_dir.stat().st_mode & 0o777 == 0o700
     for path in provider.backup_dir.iterdir():
         assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_add_decodes_go_keyring_value_without_changing_native_login(provider):
+    document = auth(future_field={"preserve": "non-ASCII 雪"})
+    encoded = "go-keyring-base64:" + base64.b64encode(
+        json.dumps(document, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    macos_keychain.set_password("gemini", "antigravity", encoded)
+
+    provider.add_account()
+
+    assert json.loads(provider._credential_path("1").read_text()) == document
+    assert provider.status()["activeAccountNumber"] == 1
+    assert macos_keychain.get_password("gemini", "antigravity") == encoded
+
+
+@pytest.mark.parametrize("encoded", [
+    "go-keyring-base64:not-base64!",
+    "go-keyring-base64:/w==",
+    "go-keyring-base64:" + base64.b64encode(b"synthetic-not-json").decode(),
+    "go-keyring-base64:" + base64.b64encode(b"[]").decode(),
+])
+def test_invalid_go_keyring_value_does_not_save_or_leak(provider, encoded):
+    macos_keychain.set_password("gemini", "antigravity", encoded)
+    with pytest.raises(agy.AgyError) as raised:
+        provider.add_account()
+    assert str(raised.value) == "Invalid Antigravity native credentials"
+    assert not provider.sequence_file.exists()
+    assert macos_keychain.get_password("gemini", "antigravity") == encoded
 
 
 def test_remove_deletes_only_backup_and_leaves_native_login(provider):
