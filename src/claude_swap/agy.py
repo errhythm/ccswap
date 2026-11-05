@@ -29,6 +29,19 @@ _RELATIVE_AUTH = Path(".gemini/antigravity-cli/antigravity-oauth-token")
 _SSH_KEYS = ("SSH_TTY", "SSH_CLIENT", "SSH_CONNECTION")
 _USAGE_TIMEOUT = 45
 _POLL_SECONDS = 60
+_CLI_MISSING = (
+    "Antigravity CLI is not installed. Install it from "
+    "https://antigravity.google/docs/getting-started/"
+)
+_USAGE_ERRORS = (
+    _CLI_MISSING,
+    "Antigravity CLI is not installed",
+    "Antigravity usage command failed",
+    "Antigravity usage command failed or timed out",
+    "Antigravity returned invalid quota JSON",
+    "Antigravity returned invalid or unavailable quota data",
+    "Antigravity usage unavailable",
+)
 
 
 class AgyError(ClaudeSwitchError):
@@ -445,7 +458,7 @@ class AgyAccountSwitcher:
             raise _RecoveryRequired(UsageRecovery(**cached["recovery"]))
         binary = shutil.which("agy")
         if binary is None:
-            raise AgyError("Antigravity CLI is not installed")
+            raise AgyError(_CLI_MISSING)
         binary = str(Path(binary).absolute())
         directory = tempfile.TemporaryDirectory(prefix="ccswap-agy-", delete=False)
         home = Path(directory.name)
@@ -564,7 +577,7 @@ class AgyAccountSwitcher:
                 return self._usage_entry(number, cached, None, active, None)
             except AgyError as exc:
                 diagnostic = str(exc)
-                cached["error"] = "Antigravity usage unavailable"
+                cached["error"] = diagnostic if diagnostic in _USAGE_ERRORS else "Antigravity usage unavailable"
             if attempted_fetch:
                 cached["attemptedAt"] = now
             try:
@@ -588,7 +601,7 @@ class AgyAccountSwitcher:
                 value = cached.get(key)
                 if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value < 0):
                     raise ValueError
-            if cached.get("error") not in (None, "Antigravity usage unavailable"):
+            if cached.get("error") is not None and cached["error"] not in _USAGE_ERRORS:
                 raise ValueError
             recovery = cached.get("recovery")
             if recovery is not None:

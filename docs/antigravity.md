@@ -25,6 +25,8 @@ Switching changes the shared native Antigravity login. Restart existing CLI, App
 
 Usage runs only the native `/usage` command. Each Gemini, Claude/GPT or Argon quota bucket keeps its own group, window and reset time. No account-wide quota is inferred. Reads are cached for 60 seconds. A failed request keeps the last successful measurements.
 
+The Antigravity App alone is not sufficient for usage reads. Native `/usage` requires the separate [Antigravity CLI installation](https://antigravity.google/docs/getting-started/).
+
 Each snapshot has one 45-second subprocess refresh budget after it acquires the Antigravity custody lock. Each child receives the time remaining after temporary storage setup and recovery journal writes. Accounts with the oldest persisted attempt run first, with never-attempted accounts first and account number breaking ties. Accounts skipped when the budget runs out keep their previous attempt and error state. Keychain operations have separate timeouts, so this is a bounded subprocess budget, not a 45-second limit on total lock time.
 
 The supported native store is macOS Keychain. An SSH environment explicitly selects Antigravity's file backend. Other native keyrings, config-root overrides, ADC, Gemini API-key mode and enterprise auth contexts are rejected. A conflicting fallback file or keyring-unavailable marker also blocks shared switching. Empty inventories remain safe to list on other platforms.
