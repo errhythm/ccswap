@@ -28,12 +28,12 @@ from claude_swap.snapshot_source import SnapshotSource
 from claude_swap.switcher import SENTINEL_NOTES, last_seen_note
 
 
-PROVIDERS = ("claude", "codex")
-PROVIDER_LABELS = {"claude": "Claude Code", "codex": "Codex"}
+PROVIDERS = ("claude", "codex", "agy")
+PROVIDER_LABELS = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}
 
 # Plan labels and the personal fallback are not an account's identity.
 # Organization names are, so masking leaves only the generic tags alone.
-_PLAIN_TAGS = frozenset({"personal"})
+_PLAIN_TAGS = frozenset({"personal", "antigravity"})
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 

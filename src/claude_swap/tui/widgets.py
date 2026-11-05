@@ -112,6 +112,8 @@ def _pace_suffix(
     window: dict, fetched_at: float | None, *, tr: Callable[[str], str] = str
 ) -> str:
     """ "(ahead of pace)" when a weekly window is meaningfully ahead, else ""."""
+    if window.get("window") == "5h":
+        return ""
     result = pace.compute_pace(window, fetched_at=fetched_at)
     return tr("(ahead of pace)") if result and result.ahead else ""
 
@@ -456,16 +458,23 @@ def mini_account_text(
             if result and result.ahead:
                 text.append(tr(" (ahead)"), style=palette.sev_warn)
         parts += 1
-    maxed = [
-        w["name"]
-        for w in (last_good.get("scoped") or [] if isinstance(last_good, dict) else [])
-        if float(w["pct"]) >= 100
-    ]
-    for name in maxed:
-        if parts:
+    scoped = last_good.get("scoped") or [] if isinstance(last_good, dict) else []
+    if parts:
+        for window in scoped:
+            if float(window["pct"]) < 100:
+                continue
             text.append(" · ", style=palette.track)
-        text.append(f"{name} (!)", style=palette.sev_crit)
-        parts += 1
+            text.append(f"{window['name']} (!)", style=palette.sev_crit)
+            parts += 1
+    else:
+        for window in scoped:
+            text.append("\n    ")
+            pct = float(window["pct"])
+            text.append(f"{window['name']} ", style=palette.muted)
+            text.append(f"{pct:.0f}%", style=palette.severity(pct))
+            if pct >= 100:
+                text.append(" (!)", style=palette.sev_crit)
+            parts += 1
     credits = credits_text(last_good, now, compact=True, tr=tr)
     if credits:
         if parts:

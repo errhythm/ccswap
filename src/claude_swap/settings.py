@@ -243,8 +243,8 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         ),
         SettingSpec(
             "ui", "view", "view", "choice",
-            choices=("combined", "claude", "codex"),
-            help="Dashboard view: both providers, or only one",
+            choices=("combined", "claude", "codex", "agy"),
+            help="Dashboard view: all providers, or only one",
         ),
         SettingSpec(
             "ui", "mask", "mask", "bool",

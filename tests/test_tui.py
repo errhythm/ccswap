@@ -1042,7 +1042,7 @@ class TestDashboard:
             await pilot.press("down", "down", "down", "enter")
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
-            assert ids == ["add-login:claude", "add-token", "add-login:codex", "back"]
+            assert ids == ["add-login:claude", "add-token", "add-login:codex", "add-login:agy", "back"]
             await pilot.press("escape")
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
@@ -2185,7 +2185,7 @@ class TestAutoScreen:
             codex.fetch_sets.clear()
             await pilot.press("g")  # hidden binding uses remembered Claude default
             await settle(pilot)
-            assert app._store_only == {"claude": True, "codex": False}
+            assert app._store_only == {"claude": True, "codex": False, "agy": False}
             assert claude.fetch_sets and claude.fetch_sets[-1] == set()
             assert codex.fetch_sets and codex.fetch_sets[-1] is None
 
