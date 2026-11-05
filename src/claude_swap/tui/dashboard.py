@@ -151,6 +151,7 @@ class DashboardScreen(Screen):
             (self.app.gettext("Claude Code — current login"), "add-login:claude"),
             (self.app.gettext("Claude Code — setup token or API key…"), "add-token"),
             (self.app.gettext("Codex — current login"), "add-login:codex"),
+            (self.app.gettext("Antigravity — current login"), "add-login:agy"),
             _BACK,
         ]
 
@@ -158,7 +159,7 @@ class DashboardScreen(Screen):
         entries = [
             (PROVIDER_LABELS[provider], f"auto:{provider}")
             for provider in PROVIDERS
-            if (snapshot := self.app.snapshots[provider]) is not None
+            if provider != "agy" and (snapshot := self.app.snapshots[provider]) is not None
             and snapshot.accounts
         ]
         entries.append(_BACK)
@@ -186,6 +187,8 @@ class DashboardScreen(Screen):
         # not an account scope, so administrative menus must not hide accounts.
         entries: MenuEntries = []
         for provider, acc in iter_accounts(self.app.snapshots):
+            if provider == "agy":
+                continue
             name = self._account_label(acc)
             action = (
                 self.app.gettext("→ enable")
@@ -209,6 +212,7 @@ class DashboardScreen(Screen):
             "combined": self.app.gettext("Combined"),
             "claude": PROVIDER_LABELS["claude"],
             "codex": PROVIDER_LABELS["codex"],
+            "agy": PROVIDER_LABELS["agy"],
         }
         threshold = self.app.threshold_pct
         threshold_value = threshold if threshold is not None else DEFAULT_THRESHOLD_PCT
@@ -460,7 +464,7 @@ class DashboardScreen(Screen):
                 app.apply_theme(value)
                 app.notify(self.app.gettext("Theme: {value}").format(value=value))
             elif key == "view":
-                order = ("combined", "claude", "codex")
+                order = ("combined", *PROVIDERS)
                 value = order[(order.index(app._view) + 1) % len(order)]
                 app.apply_view(value)
             elif key == "threshold":
@@ -710,8 +714,18 @@ class SwitchScreen(AccountListScreen):
     def action_switch_best(self) -> None:
         listview = self.query_one("#accounts", ListView)
         item = listview.highlighted_child
-        if isinstance(item, AccountItem):
+        if isinstance(item, AccountItem) and item.provider != "agy":
             self.app.do_switch_best(item.provider)
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "switch_best":
+            item = self.query_one("#accounts", ListView).highlighted_child
+            if isinstance(item, AccountItem) and item.provider == "agy":
+                return False
+        return True
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        self.refresh_bindings()
 
     def action_select_highlighted(self) -> None:
         listview = self.query_one("#accounts", ListView)

@@ -10,6 +10,7 @@ import sys
 
 from claude_swap import __version__, paths, printer
 from claude_swap.codex import CodexAccountSwitcher
+from claude_swap.agy import AgyAccountSwitcher
 from claude_swap.exceptions import ClaudeSwitchError, ConfigError
 from claude_swap.json_output import error_envelope
 from claude_swap.models import Platform
@@ -622,6 +623,48 @@ class _CodexRunParser(argparse.ArgumentParser):
         super().error("Invalid Codex run arguments; wrapper options must precede --.")
 
 
+def _agy_command(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog=f"{_prog_name()} agy")
+    commands = parser.add_subparsers(dest="action", required=True)
+    for action in ("list", "status", "usage"):
+        commands.add_parser(action).add_argument("--json", action="store_true")
+    commands.add_parser("add")
+    switch = commands.add_parser("switch")
+    switch.add_argument("account", metavar="NUM|EMAIL")
+    switch.add_argument("--json", action="store_true")
+    remove = commands.add_parser("remove")
+    remove.add_argument("account", metavar="NUM|EMAIL")
+    remove.add_argument("--yes", action="store_true")
+    args = parser.parse_args(argv)
+    switcher = AgyAccountSwitcher()
+    try:
+        if args.action == "add":
+            switcher.add_account()
+        elif args.action == "remove":
+            switcher.remove_account(args.account, assume_yes=args.yes)
+        elif args.action == "switch":
+            payload = switcher.switch_to(args.account, json_output=args.json)
+            if args.json:
+                print(json.dumps(payload, indent=2))
+        else:
+            method = {"list": switcher.list_accounts, "status": switcher.status,
+                      "usage": switcher.usage_status}[args.action]
+            method(json_output=args.json)
+    except ClaudeSwitchError as exc:
+        if getattr(args, "json", False):
+            print(json.dumps(error_envelope(exc)))
+        else:
+            error(f"Error: {exc}")
+        sys.exit(1)
+    except OSError:
+        exc = ClaudeSwitchError("Cannot access Antigravity account storage")
+        if getattr(args, "json", False):
+            print(json.dumps(error_envelope(exc)))
+        else:
+            error(str(exc))
+        sys.exit(1)
+
+
 def _codex_command(argv: list[str]) -> None:
     """Handle ``cswap codex`` account management commands."""
     is_run = next((arg for arg in argv if not arg.startswith("-")), None) == "run"
@@ -769,7 +812,10 @@ def _codex_command(argv: list[str]) -> None:
             if args.json:
                 print(json.dumps(result, indent=2))
     except ClaudeSwitchError as exc:
-        error(f"Error: {exc}")
+        if getattr(args, "json", False):
+            print(json.dumps(error_envelope(exc)))
+        else:
+            error(f"Error: {exc}")
         sys.exit(1)
     except OSError:
         if args.action != "run":
@@ -783,11 +829,17 @@ def _list_dispatch(claude_switcher: "ClaudeAccountSwitcher", args) -> dict | Non
 
     A single provider in ``--json`` mode returns that provider's bare payload,
     so scripts on the old Claude-only ``list --json`` migrate by adding
-    ``--provider claude``. ``all`` (the default) nests both under
-    ``claude``/``codex`` keys. Human mode prints one section per provider and
+    ``--provider claude``. ``all`` (the default) nests providers under
+    ``claude``/``codex``/``agy`` keys. Human mode prints one section per provider and
     never triggers Claude's interactive first-run inside the merged view.
     """
     provider = args.provider
+    if provider == "agy":
+        agy = AgyAccountSwitcher()
+        if args.json:
+            return agy.list_payload()
+        agy.list_accounts()
+        return None
     if provider == "claude":
         return claude_switcher.list_accounts(
             show_token_status=args.token_status, json_output=args.json
@@ -800,12 +852,12 @@ def _list_dispatch(claude_switcher: "ClaudeAccountSwitcher", args) -> dict | Non
         codex_switcher.list_accounts(json_output=False)
         return None
 
-    # provider == "all": merge both providers.
     if args.json:
         claude_payload = claude_switcher.list_accounts(
             show_token_status=args.token_status, json_output=True
         )
-        return {"claude": claude_payload, "codex": codex_switcher.list_payload()}
+        return {"claude": claude_payload, "codex": codex_switcher.list_payload(),
+                "agy": AgyAccountSwitcher().list_payload()}
 
     print(bolded("Claude Code"))
     if claude_switcher.sequence_file.exists():
@@ -817,6 +869,9 @@ def _list_dispatch(claude_switcher: "ClaudeAccountSwitcher", args) -> dict | Non
     print()
     print(bolded("Codex"))
     codex_switcher.list_accounts(json_output=False)
+    print()
+    print(bolded("Antigravity"))
+    AgyAccountSwitcher().list_accounts()
     return None
 
 
@@ -1407,6 +1462,9 @@ def main() -> None:
     if argv and argv[0] == "codex":
         _codex_command(argv[1:])
         return
+    if argv and argv[0] == "agy":
+        _agy_command(argv[1:])
+        return
     if argv and argv[0] == "auto":
         _auto_command(argv[1:])
         return  # only reachable in tests where sys.exit is mocked
@@ -1446,7 +1504,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog=_prog_name(),
         usage="%(prog)s <command> [args] [options]",
-        description="""Multi-Account Switcher for Claude Code and Codex
+        description="""Multi-Account Switcher for Claude Code, Codex and Antigravity
 
 Commands:
   %(prog)s help                       show this help
@@ -1532,14 +1590,14 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     )
     parser.add_argument(
         "--provider",
-        choices=["claude", "codex", "all"],
+        choices=["claude", "codex", "agy", "all"],
         default="all",
-        metavar="{claude,codex,all}",
+        metavar="{claude,codex,agy,all}",
         help=(
             "Which provider 'list' covers. 'all' (default) merges Claude Code "
-            "and Codex; 'claude' or 'codex' restricts to one. In --json mode a "
+            "and Codex with Antigravity; 'claude', 'codex' or 'agy' restricts to one. In --json mode a "
             "single provider emits that provider's bare payload; 'all' nests "
-            "both under 'claude'/'codex' keys."
+            "them under 'claude'/'codex'/'agy' keys."
         ),
     )
     parser.add_argument(
@@ -1763,8 +1821,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     if args.provider != "all" and not args.list:
         parser.error("--provider can only be used with 'list'")
 
-    if args.token_status and args.provider == "codex":
-        parser.error("--token-status applies to Claude Code, not '--provider codex'")
+    if args.token_status and args.provider in ("codex", "agy"):
+        parser.error("--token-status applies only to Claude Code")
 
     if args.json and not (args.list or args.status or args.switch or args.switch_to):
         parser.error("--json can only be used with 'list', 'status', or 'switch'")

@@ -19,6 +19,7 @@ from textual.worker import WorkerState
 
 from claude_swap import printer
 from claude_swap.codex import CodexAccountSwitcher
+from claude_swap.agy import AgyAccountSwitcher
 from claude_swap.i18n import LANGUAGES, localize_bindings, mark, translator
 from claude_swap.models import AccountsSnapshot
 from claude_swap.settings import (
@@ -91,12 +92,14 @@ class CswapApp(App):
         switcher: ClaudeAccountSwitcher,
         *,
         codex_switcher: CodexAccountSwitcher | None = None,
+        agy_switcher: AgyAccountSwitcher | None = None,
         start: str = "dashboard",
         detected: str | None = None,
     ) -> None:
         super().__init__()
         codex = codex_switcher if codex_switcher is not None else CodexAccountSwitcher()
-        self.switchers = {"claude": switcher, "codex": codex}
+        agy = agy_switcher if agy_switcher is not None else AgyAccountSwitcher()
+        self.switchers = {"claude": switcher, "codex": codex, "agy": agy}
         # Both sources live for the app's lifetime. In particular, Codex keeps
         # its usage cache in memory, so rebuilding it on a view change would
         # discard measurements.
@@ -438,7 +441,8 @@ class CswapApp(App):
                         number=to.get("number")
                     )
                 self.notify(
-                    self.gettext("Switched to {target}").format(target=target),
+                    self.gettext("Switched to {target}").format(target=target)
+                    + (f"\n{payload['note']}" if payload.get("note") else ""),
                     title=self.gettext("Switch"),
                 )
             else:
@@ -463,6 +467,8 @@ class CswapApp(App):
         )
 
     def do_switch_best(self, provider: str) -> None:
+        if provider == "agy":
+            return
         self._start_action(
             self.gettext("Switch (best)")
             if provider == "claude"
@@ -477,6 +483,8 @@ class CswapApp(App):
     def do_toggle_disabled(self, provider: str, number: str) -> None:
         """Hold the account out of auto-rotation, or return it — reads its
         current state from the live snapshot to pick the direction."""
+        if provider == "agy":
+            return
         snap = self.snapshots[provider]
         acc = next(
             (a for a in (snap.accounts if snap else ()) if a.number == number), None
@@ -604,7 +612,7 @@ class CswapApp(App):
         eligible = [
             provider
             for provider in PROVIDERS
-            if (snapshot := self.snapshots[provider]) is not None and snapshot.accounts
+            if provider != "agy" and (snapshot := self.snapshots[provider]) is not None and snapshot.accounts
         ]
         provider = (
             self._last_auto_provider
@@ -614,7 +622,7 @@ class CswapApp(App):
         self.open_auto(provider)
 
     def open_auto(self, provider: str) -> None:
-        if isinstance(self.screen, AutoScreen):
+        if provider == "agy" or isinstance(self.screen, AutoScreen):
             return
         self._last_auto_provider = provider
         self.push_screen(AutoScreen(provider))

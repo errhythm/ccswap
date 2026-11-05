@@ -1021,6 +1021,32 @@ class TestSubcommandAliases:
         )
         assert json.loads(capsys.readouterr().out) == {"switched": True}
 
+    def test_codex_switch_missing_account_returns_json_error(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["ccswap", "codex", "switch", "missing", "--json"])
+        with pytest.raises(SystemExit) as raised:
+            cli.main()
+        assert raised.value.code == 1
+        output = capsys.readouterr()
+        assert output.err == ""
+        payload = json.loads(output.out)
+        assert payload["schemaVersion"] == 1
+        assert payload["error"]["type"] == "AccountNotFoundError"
+        assert "missing" in payload["error"]["message"]
+
+    def test_codex_auto_startup_error_is_one_json_line(self, capsys):
+        from claude_swap.exceptions import ConfigError
+
+        with patch.object(cli, "CodexAccountSwitcher", side_effect=ConfigError("Invalid settings")):
+            with pytest.raises(SystemExit) as raised:
+                cli._codex_command(["auto", "--once", "--json"])
+        assert raised.value.code == 1
+        output = capsys.readouterr()
+        assert output.err == ""
+        assert len(output.out.splitlines()) == 1
+        assert json.loads(output.out)["error"] == {
+            "type": "ConfigError", "message": "Invalid settings",
+        }
+
     @pytest.mark.parametrize("strategy", ["best", "next-available", "consume-first"])
     def test_codex_switch_strategy_dispatch(self, strategy):
         argv = ["ccswap", "codex", "switch", "--strategy", strategy, "--json"]
@@ -1139,6 +1165,7 @@ class TestJsonOutputCli:
         assert json.loads(capsys.readouterr().out) == {
             "claude": claude_payload,
             "codex": codex_payload,
+            "agy": {"provider": "agy", "activeAccountNumber": None, "accounts": []},
         }
 
     def test_switch_json_forwarded_and_serialized(self, capsys):
@@ -2223,7 +2250,7 @@ def test_codex_redeem_dispatch():
     )
 
 
-def test_codex_redeem_error_uses_existing_handler(capsys):
+def test_codex_redeem_error_uses_json_envelope(capsys):
     from claude_swap.exceptions import SwitchError
     with patch.object(cli, "CodexAccountSwitcher") as switcher:
         switcher.return_value.redeem_reset.side_effect = SwitchError("unknown code")
@@ -2231,5 +2258,8 @@ def test_codex_redeem_error_uses_existing_handler(capsys):
             cli._codex_command(["redeem-reset", "1", "--yes", "--json"])
     assert exc.value.code == 1
     output = capsys.readouterr()
-    assert output.out == ""
-    assert "unknown code" in output.err
+    assert output.err == ""
+    assert json.loads(output.out) == {
+        "schemaVersion": 1,
+        "error": {"type": "SwitchError", "message": "unknown code"},
+    }
