@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -257,6 +258,11 @@ class AgyAccountSwitcher:
         credential = None
         if raw is not None:
             try:
+                # Antigravity's Go keyring client wraps macOS values in prefixed base64.
+                raw = raw.strip()
+                prefix = "go-keyring-base64:"
+                if raw.startswith(prefix):
+                    raw = base64.b64decode(raw[len(prefix):], validate=True).decode("utf-8")
                 document = json.loads(raw)
                 if not isinstance(document, dict):
                     raise ValueError

@@ -1,6 +1,6 @@
 """Synthetic custody and CLI tests, with no real Antigravity process or store.
 
-Failure cases include malformed roster/auth/cache, unsafe slots and backends,
+Failure cases include encoded Keychain values, malformed roster/auth/cache, unsafe slots and backends,
 write denial/timeout/uncertainty, external writers, lost refreshed credentials,
 malformed quota groups, expired access tokens, secret diagnostics, combined JSON,
 and a dashboard selecting the wrong provider or inventing a weekly pace for 5h.
@@ -503,19 +503,23 @@ async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider
         app.do_toggle_disabled("agy", "1")
         app.open_auto("agy")
         assert app.screen is screen
-        native(auth("three@example.com"))
+        encoded = "go-keyring-base64:" + base64.b64encode(
+            json.dumps(auth("three@example.com")).encode()
+        ).decode()
+        macos_keychain.set_password("gemini", "antigravity", encoded)
         app.do_add_current("agy")
         await pilot.pause()
         await pilot.press("y")
         await settle(pilot)
         assert provider._roster()["accounts"]["3"]["email"] == "three@example.com"
+        app.save_screenshot("agy-add-encoded.svg", path=str(tmp_path))
         await pilot.press("escape")
         app.confirm_remove("agy", "3", "three@example.com")
         await pilot.pause()
         await pilot.press("y")
         await settle(pilot)
         assert "3" not in provider._roster()["accounts"]
-        assert read_native()["id_token_email"] == "three@example.com"
+        assert macos_keychain.get_password("gemini", "antigravity") == encoded
 
 
 def test_inactive_scoped_quota_keeps_each_group_when_one_is_exhausted(provider):
