@@ -350,7 +350,7 @@ class VendorService:
         Ownership comes from the adapter comparing the identity the tool reported for this
         reading with each registered account (``owner_of``), never from a display string.
         The tool-level (``@active``) reading falls back to its last value only on a
-        *transient* failure: a definitive answer such as "pay-as-you-go key" or "signed
+        *transient* failure: a definitive answer such as "API-key sign-in" or "signed
         in as someone else" means the credential changed, so older numbers do not apply.
         """
         owner = None

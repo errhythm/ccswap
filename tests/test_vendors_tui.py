@@ -200,7 +200,7 @@ async def test_muse_accounts_each_show_their_own_usage(tmp_path):
     async with app.run_test(size=(110, 40)) as pilot:
         await goto(pilot, "3")
         rows = {r.view.alias: r for r in app.screen.query(AccountRow)}
-        assert "pay-as-you-go" in rows["payg"].usage.reason  # its own key, measured in isolation
+        assert "API-key sign-in" in rows["payg"].usage.reason  # its own key, measured in isolation
         assert rows["me"].usage.windows == ()  # never the active credential's numbers
         payg_call = next(c for c in runner.calls if c.argv[1:2] == ("usage",) and c.env)
         assert payg_call.env == {"META_API_KEY": KEY}

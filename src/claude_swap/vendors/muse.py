@@ -198,7 +198,7 @@ class MuseAdapter(ToolAdapter):
                 S.SUPPORTED,
                 "`muse usage --json` (no model turn): tier, 5-hour and weekly used % with reset "
                 "times. Per account for API-key accounts (META_API_KEY child env); browser "
-                "logins: the active credential only. Pay-as-you-go keys report no allowance",
+                "logins: the active credential only. An API-key sign-in reports no allowance",
             ),
             Capability.RATE_LIMIT_DETECTION: cap(S.UNSUPPORTED, "no stable muse interface"),
             Capability.AUTO_SWITCH: cap(
@@ -513,7 +513,9 @@ class MuseAdapter(ToolAdapter):
         if not isinstance(allowance, dict):
             reason = str(doc.get("reason") or "")
             message = {
-                "api_key": "This is a pay-as-you-go API key; it has no subscription allowance",
+                "api_key": "Muse does not report usage for an API-key sign-in. The Muse Code "
+                "subscription key and pay-as-you-go keys look the same here; "
+                "dev.meta.ai/api-keys says which one this is",
                 "server_sent_no_usage": "The connected account returned no allowance data "
                 "(this happens before the first use in a new window)",
             }.get(reason, redact(reason or "no allowance reported", secrets)[:120])
