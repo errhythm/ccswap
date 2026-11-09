@@ -1465,6 +1465,13 @@ def main() -> None:
     if argv and argv[0] == "agy":
         _agy_command(argv[1:])
         return
+    if argv and argv[0] in ("vendors", "muse", "opencode", "kiro"):
+        from claude_swap.vendors.cli import tool_command, vendors_command
+
+        code = (
+            vendors_command(argv[1:]) if argv[0] == "vendors" else tool_command(argv[0], argv[1:])
+        )
+        sys.exit(code)
     if argv and argv[0] == "auto":
         _auto_command(argv[1:])
         return  # only reachable in tests where sys.exit is mocked
