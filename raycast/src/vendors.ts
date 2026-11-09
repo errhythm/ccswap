@@ -48,7 +48,11 @@ export function parseVendors(stdout: string): VendorSummary[] {
 }
 
 export function parseVendorAccounts(stdout: string): VendorAccount[] {
-  const data = JSON.parse(stdout) as { schemaVersion?: number; error?: { message: string }; accounts?: VendorAccount[] };
+  const data = JSON.parse(stdout) as {
+    schemaVersion?: number;
+    error?: { message: string };
+    accounts?: VendorAccount[];
+  };
   checkSchema(data);
   return (data.accounts ?? []).map((a) => ({
     alias: a.alias,

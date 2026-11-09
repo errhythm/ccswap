@@ -13,7 +13,8 @@ import {
 } from "./vendors";
 
 function accountAccessories(account: VendorAccount): List.Item.Accessory[] {
-  if (account.active === true) return [{ icon: { source: Icon.CheckCircle, tintColor: Color.Green }, tooltip: "Active" }];
+  if (account.active === true)
+    return [{ icon: { source: Icon.CheckCircle, tintColor: Color.Green }, tooltip: "Active" }];
   if (account.active === null) return [{ tag: "Unknown", tooltip: "This tool cannot confirm which account is active" }];
   return [];
 }
@@ -68,7 +69,11 @@ export default function Command() {
   if (!bin) {
     return (
       <List>
-        <List.EmptyView icon={Icon.Terminal} title="ccswap Not Found" description="Install it with `uv tool install ccswap`." />
+        <List.EmptyView
+          icon={Icon.Terminal}
+          title="ccswap Not Found"
+          description="Install it with `uv tool install ccswap`."
+        />
       </List>
     );
   }
@@ -80,12 +85,20 @@ export default function Command() {
           key={vendor.tool}
           icon={vendor.installed ? Icon.CheckCircle : Icon.XMarkCircle}
           title={vendor.label}
-          subtitle={vendor.installed ? `${vendor.version ?? "unknown version"} · ${vendor.accounts} registered` : "Not installed"}
+          subtitle={
+            vendor.installed
+              ? `${vendor.version ?? "unknown version"} · ${vendor.accounts} registered`
+              : "Not installed"
+          }
           accessories={vendor.error ? [{ tag: { value: "Error", color: Color.Red }, tooltip: vendor.error }] : []}
           actions={
             <ActionPanel>
               {vendor.installed && (
-                <Action.Push title="Show Accounts" icon={Icon.List} target={<VendorAccounts bin={bin} vendor={vendor} />} />
+                <Action.Push
+                  title="Show Accounts"
+                  icon={Icon.List}
+                  target={<VendorAccounts bin={bin} vendor={vendor} />}
+                />
               )}
               <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={revalidate} />
             </ActionPanel>
