@@ -222,3 +222,31 @@ def test_concurrent_adds_lose_nothing(store):
     assert not errors
     assert len(store.records("muse")) == 8
     assert len(list(store.secrets_dir.iterdir())) == 8
+
+
+def test_installer_directory_is_found_when_not_on_path(tmp_path, monkeypatch):
+    from claude_swap.vendors.core import SubprocessRunner
+    from claude_swap.vendors.opencode import OpenCodeAdapter
+
+    home = tmp_path / "home"
+    binary = home / ".opencode" / "bin" / "opencode"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\necho 1.2.3\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+
+    class NoPath(SubprocessRunner):
+        def which(self, name):
+            return None
+
+    info = OpenCodeAdapter(NoPath()).detect()
+    if sys.platform != "win32":
+        assert info.installed and info.path == str(binary) and info.version == "1.2.3"
+
+
+def test_injected_runners_never_probe_the_real_filesystem(tmp_path, monkeypatch):
+    from claude_swap.vendors.opencode import OpenCodeAdapter
+    from tests.vendor_helpers import FakeRunner
+
+    assert OpenCodeAdapter(FakeRunner()).detect().installed is False

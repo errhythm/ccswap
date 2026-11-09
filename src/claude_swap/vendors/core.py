@@ -555,6 +555,9 @@ class ToolAdapter:
     docs: str = ""
     # Which accounts-kinds ``add`` can register, for help text and the TUI.
     kinds: tuple[str, ...] = ()
+    # Where the vendor's own installer puts the binary when it is not on PATH (launchd
+    # services such as the menu bar get a minimal PATH).  ``~`` is expanded.
+    install_dirs: tuple[str, ...] = ("~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin")
 
     DETECT_TTL = 5.0  # a status pass asks several times; the answer cannot change that fast
 
@@ -566,10 +569,20 @@ class ToolAdapter:
         now = time.monotonic()
         if self._detected and now - self._detected[0] < self.DETECT_TTL:
             return self._detected[1]
-        path = self.runner.which(self.binary)
+        path = self.runner.which(self.binary) or self._installed_elsewhere()
         info = ToolInfo(True, path, self._version(path)) if path else ToolInfo(False)
         self._detected = (now, info)
         return info
+
+    def _installed_elsewhere(self) -> str | None:
+        """The binary in its installer's directory, for the real process runner only."""
+        if not isinstance(self.runner, SubprocessRunner):
+            return None  # injected runners (tests) define the whole world
+        for directory in self.install_dirs:
+            candidate = os.path.join(os.path.expanduser(directory), self.binary)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return None
 
     def _version(self, path: str) -> str | None:
         result = self.runner.run([path, "--version"], timeout=10)

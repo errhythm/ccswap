@@ -182,6 +182,8 @@ class OpenCodeAdapter(ToolAdapter):
     binary = "opencode"
     docs = "https://opencode.ai/docs/cli/providers"
     kinds = ("provider-account",)
+    # The official install script (opencode.ai/install) uses ~/.opencode/bin.
+    install_dirs = ("~/.opencode/bin", "~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin")
 
     def __init__(self, runner=None) -> None:
         super().__init__(runner)

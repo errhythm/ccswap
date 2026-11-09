@@ -225,6 +225,7 @@ _S = Support
 class ClaudeTool(LegacyTool):
     key, label, binary = "claude", "Claude Code", "claude"
     docs = "https://docs.claude.com/en/docs/claude-code"
+    install_dirs = ("~/.local/bin", "~/.claude/local", "/opt/homebrew/bin", "/usr/local/bin")
     CAPS: ClassVar[dict[Capability, CapabilityStatus]] = {
         Capability.ACCOUNT_ENUMERATION: cap(_S.SUPPORTED, "ccswap account store (`ccswap list`)"),
         Capability.SWITCH: cap(_S.SUPPORTED, "`ccswap switch` (credential swap, verified)"),
