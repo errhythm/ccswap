@@ -72,6 +72,14 @@ def parse_whoami(text: str) -> dict[str, str] | None:
     return {k: str(v) for k, v in doc.items() if isinstance(v, (str, int)) and v != ""}
 
 
+def _signed_out_json(text: str) -> bool:
+    try:
+        doc, _ = json.JSONDecoder().raw_decode((text or "").lstrip())
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and "account" in doc and doc["account"] is None and len(doc) == 1
+
+
 def _same_login(identity: Mapping[str, str], current: Mapping[str, str]) -> bool:
     """Same login = same email, same Identity Center start URL and, when both say, same type.
 
@@ -146,7 +154,13 @@ def parse_usage_report(text: str, today: datetime.date | None = None) -> UsageRe
     clean = re.sub(r"[┃┏┓┗┛┣┫━│║█▓▒░]+", " ", _ANSI.sub("", text or ""))
     lines = [re.sub(r"\s+", " ", line).strip() for line in clean.splitlines()]
     body = "\n".join(line for line in lines if line)
-    if not re.search(r"covered in plan|credits used|Estimated Usage|Plan:", body, re.IGNORECASE):
+    # Only the report's own shapes count; a free-form reply that merely mentions "plan" (e.g.
+    # a model answer, if a harness ever forwarded the text) is rejected.
+    if not re.search(
+        r"covered in plan|credits used, expires|^Estimated Usage \||^Plan: [^|\n]+\| \d+ usage breakdowns?",
+        body,
+        re.IGNORECASE | re.MULTILINE,
+    ):
         return None
     plan = None
     head = re.search(r"Estimated Usage\s*\|[^|\n]*\|\s*([^\n|]+)", body)
@@ -275,8 +289,9 @@ class KiroAdapter(ToolAdapter):
     def whoami_state(self) -> tuple[str, dict[str, str] | None]:
         """("in", identity) | ("out", None) | ("error", None).
 
-        Only an explicit "not logged in" counts as logged out. A timeout, crash or
-        unparseable output is "error", and destructive steps must not run on it.
+        Only an explicit signed-out answer counts as logged out: the text "not logged in",
+        or kiro-cli 3.1's ``{"account": null}`` (exit 1, verified with an empty HOME).  A
+        timeout, crash or unparseable output is "error"; destructive steps never run on it.
         """
         info = self.detect()
         if not info.installed:
@@ -285,8 +300,10 @@ class KiroAdapter(ToolAdapter):
         if result.ok:
             who = parse_whoami(result.stdout)
             return ("in", who) if who else ("error", None)
+        if result.timed_out or result.missing:
+            return "error", None
         text = f"{result.stdout}\n{result.stderr}".lower()
-        if not result.timed_out and not result.missing and "not logged in" in text:
+        if "not logged in" in text or _signed_out_json(result.stdout):
             return "out", None
         return "error", None
 
@@ -504,7 +521,9 @@ class KiroAdapter(ToolAdapter):
     def _supports_v2(self, exe: str) -> bool:
         if self._v2 is None:
             result = self.runner.run([exe, "chat", "--help"], timeout=15)
-            self._v2 = result.ok and "--v2" in help_text(result)
+            if not result.ok:
+                return False  # transient: ask again next time, never cache a failure
+            self._v2 = "--v2" in help_text(result)
         return self._v2
 
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
@@ -527,6 +546,7 @@ class KiroAdapter(ToolAdapter):
             )
         env: dict[str, str] | None = None
         unset: tuple[str, ...] = (ENV_KEY,)
+        current: dict[str, str] | None = None
         if record is not None and record.kind == "api-key":
             if secret is None:
                 return UsageResult(
@@ -564,7 +584,26 @@ class KiroAdapter(ToolAdapter):
         parsed = parse_usage_report(text)
         if parsed is None:
             return UsageResult(UsageState.ERROR, "Kiro /usage printed an unrecognised report")
-        return dataclasses.replace(parsed, attributed_to=who)
+        identity: dict[str, str] = {}
+        if env is None:
+            # The probe takes seconds; a login switch in between would make these another
+            # account's numbers.  Only keep them if the same login is still signed in.
+            state_after, after = self.whoami_state()
+            if state_after != "in" or not after or not current or not _same_login(current, after):
+                return UsageResult(
+                    UsageState.ERROR, "The Kiro login changed during the usage check; not recorded"
+                )
+            identity = {
+                k: v
+                for k, v in after.items()
+                if k in ("accountType", "email", "startUrl", "region")
+            }
+        return dataclasses.replace(parsed, attributed_to=who, identity=identity)
+
+    @staticmethod
+    def owner_of(record: AccountRecord, identity: Mapping[str, str]) -> bool:
+        """Is this reading (taken for ``identity``) the registered ``record``'s?"""
+        return record.kind == "login" and _same_login(record.identity, identity)
 
     # ---- sessions -------------------------------------------------------
 

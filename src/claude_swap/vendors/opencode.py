@@ -607,8 +607,10 @@ class OpenCodeAdapter(ToolAdapter):
     def _db_supported(self, exe: str) -> bool:
         if self._db is None:
             result = self.runner.run([exe, "db", "--help"], timeout=15)
+            if not result.ok:
+                return False  # transient: ask again next time, never cache a failure
             text = help_text(result)
-            self._db = result.ok and "--format" in text and "query" in text
+            self._db = "--format" in text and "query" in text
         return self._db
 
     def local_stats(self) -> UsageResult:

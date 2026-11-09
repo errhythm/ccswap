@@ -40,6 +40,7 @@ from claude_swap.vendors.usage_cache import ACTIVE_KEY, UsageCache
 
 USAGE_TTL_OK = 60.0
 USAGE_TTL_FAIL = 15.0
+LOCK_WAIT_S = 50.0  # longest wait behind another refresh of the same account
 # Per-tool (success, failure) freshness: each probe spawns a CLI, OpenCode's aggregate
 # scans every local message, so these are polled less often than a cheap status call.
 USAGE_TTLS: dict[str, tuple[float, float]] = {
@@ -210,6 +211,7 @@ class VendorService:
         record = self.resolve(tool, selector, provider)
         removed = self.store.remove(tool, record.alias, record.provider)
         self.usage_store.drop(tool, removed.alias)
+        self._usage_cache.pop((tool, removed.alias), None)
         return removed
 
     def switch(
@@ -260,7 +262,12 @@ class VendorService:
     # ---- usage ------------------------------------------------------------
 
     def usage(
-        self, tool: str, selector: str | None = None, *, refresh: bool = False
+        self,
+        tool: str,
+        selector: str | None = None,
+        *,
+        refresh: bool = False,
+        fresh_since: float | None = None,
     ) -> UsageResult:
         """One tool/account's usage: in-memory TTL cache, request coalescing, and the
         persistent last-good fallback (returned as ``STALE`` with the new error)."""
@@ -269,13 +276,30 @@ class VendorService:
         record = self.resolve(tool, selector) if selector else None
         account_key = record.alias if record else ACTIVE_KEY
         key = (tool, account_key)
-        with self._key_lock(key):  # concurrent askers share one vendor call
+        lock = self._key_lock(key)
+        # Concurrent askers share one vendor call.  A bounded wait: an orphaned worker that
+        # is still inside a hung CLI must not wedge every later refresh.
+        if not lock.acquire(timeout=LOCK_WAIT_S):
+            cached = self._usage_cache.get(key)
+            if cached:
+                return cached[1]
+            return UsageResult(
+                UsageState.ERROR, "Another usage refresh for this account is still running"
+            )
+        try:
             now = self._clock()
             cached = self._usage_cache.get(key)
-            if cached and not refresh:
+            if cached:
                 ttl_ok, ttl_fail = USAGE_TTLS.get(tool, (USAGE_TTL_OK, USAGE_TTL_FAIL))
                 ttl = ttl_ok if cached[1].state is UsageState.AVAILABLE else ttl_fail
-                if now - cached[0] < ttl:
+                # A forced refresh only reuses readings taken during the same collection
+                # pass (``fresh_since``), e.g. the tool-level probe that already measured
+                # this account; a user's refresh otherwise always asks the tool again.
+                if refresh:
+                    reuse = fresh_since is not None and cached[0] >= fresh_since
+                else:
+                    reuse = now - cached[0] < ttl
+                if reuse:
                     result = cached[1]
                     return dataclasses.replace(
                         result,
@@ -287,47 +311,63 @@ class VendorService:
                 fresh = adapter.usage(record, self._secret(record) if record else None)  # type: ignore[attr-defined]
             except ClaudeSwitchError as exc:
                 fresh = UsageResult(UsageState.ERROR, str(exc))
-            result = self._settle(tool, account_key, fresh)
+            try:
+                result, owner = self._settle(adapter, tool, account_key, fresh)
+            except ClaudeSwitchError:  # e.g. the cache lock: never lose a good reading
+                result, owner = fresh, None
             self._usage_cache[key] = (now, result)
-            if account_key == ACTIVE_KEY and result.state is UsageState.AVAILABLE:
-                owner = result.attributed_to
-                if owner and any(r.alias == owner for r in self.store.records(tool)):
-                    # Same reading, same owner: an account-level ask is answered without a
-                    # second vendor call.
-                    self._usage_cache[(tool, owner)] = (now, result)
+            if owner is not None:
+                # Same reading, same verified owner: an account-level ask is answered
+                # without a second vendor call.
+                self._usage_cache[(tool, owner)] = (now, result)
             return result
+        finally:
+            lock.release()
 
-    def _settle(self, tool: str, account_key: str, fresh: UsageResult) -> UsageResult:
-        """Persist good data under the account it belongs to; fall back to it when stale."""
+    def _settle(
+        self, adapter: ToolAdapter, tool: str, account_key: str, fresh: UsageResult
+    ) -> tuple[UsageResult, str | None]:
+        """Persist good data under the account it belongs to; fall back to it when stale.
+
+        Ownership comes from the adapter comparing the identity the tool reported for this
+        reading with each registered account (``owner_of``), never from a display string.
+        The tool-level (``@active``) reading falls back to its last value only on a
+        *transient* failure: a definitive answer such as "pay-as-you-go key" or "signed
+        in as someone else" means the credential changed, so older numbers do not apply.
+        """
+        owner = None
         if fresh.state is UsageState.AVAILABLE:
             self.usage_store.put(tool, account_key, fresh)
-            if account_key == ACTIVE_KEY and fresh.attributed_to:
-                # The tool told us whose numbers these are (e.g. Kiro's whoami email): file
-                # them under that registered account too, never under any other.
-                owner = self._owner(tool, fresh.attributed_to)
+            if account_key == ACTIVE_KEY:
+                owner = self._owner(adapter, tool, fresh)
                 if owner is not None:
                     self.usage_store.put(tool, owner, fresh)
                     fresh = dataclasses.replace(fresh, attributed_to=owner)
-            return fresh
-        if fresh.state in (UsageState.UNSUPPORTED, UsageState.UNAUTHENTICATED):
-            return fresh
+            return fresh, owner
+        transient = fresh.state is UsageState.ERROR
+        if account_key != ACTIVE_KEY:
+            # An account's own last reading: still that account's, whatever happened now.
+            transient = transient or fresh.state is UsageState.UNAVAILABLE
+        if not transient:
+            return fresh, None
         last = self.usage_store.get(tool, account_key)
         if last is None:
-            return fresh
-        return dataclasses.replace(
-            last,
-            state=UsageState.STALE,
-            error=fresh.reason or fresh.error or "refresh failed",
-            hint=last.hint,
+            return fresh, None
+        return (
+            dataclasses.replace(
+                last,
+                state=UsageState.STALE,
+                error=fresh.reason or fresh.error or "refresh failed",
+                hint=last.hint,
+            ),
+            None,
         )
 
-    def _owner(self, tool: str, attributed: str) -> str | None:
-        wanted = attributed.lower()
-        matches = [
-            r.alias
-            for r in self.store.records(tool)
-            if r.alias.lower() == wanted or r.identity.get("email", "").lower() == wanted
-        ]
+    def _owner(self, adapter: ToolAdapter, tool: str, result: UsageResult) -> str | None:
+        matcher = getattr(adapter, "owner_of", None)
+        if matcher is None or not result.identity:
+            return None
+        matches = [r.alias for r in self.store.records(tool) if matcher(r, result.identity)]
         return matches[0] if len(matches) == 1 else None
 
     def _key_lock(self, key: tuple[str, str]) -> threading.Lock:
@@ -335,7 +375,7 @@ class VendorService:
             return self._locks.setdefault(key, threading.Lock())
 
     def accounts_usage(
-        self, tool: str, *, refresh: bool = False
+        self, tool: str, *, refresh: bool = False, fresh_since: float | None = None
     ) -> list[tuple[AccountView, UsageResult]]:
         """Every registered account with *its own* usage (never the active one's)."""
         out = []
@@ -343,7 +383,7 @@ class VendorService:
             if not view.registered:
                 continue
             try:
-                result = self.usage(tool, view.alias, refresh=refresh)
+                result = self.usage(tool, view.alias, refresh=refresh, fresh_since=fresh_since)
             except ClaudeSwitchError as exc:
                 result = UsageResult(UsageState.ERROR, str(exc))
             out.append((view, result))

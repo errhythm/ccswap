@@ -55,9 +55,17 @@ is computed only from a `used`/`limit` pair in one unit.
 
 `VendorService.usage` adds per-tool TTLs (Muse 60 s, Kiro 180 s, OpenCode 300 s), request
 coalescing (one vendor call for concurrent askers), and a persistent last-good cache
-(`vendors/usage.json`, usage figures only). A failed or impossible refresh returns the
-earlier reading as `stale` with the new error. Readings are filed under the account they
-were *attributed to when observed* (for Kiro, the `whoami` login), never under another.
+(`vendors/usage.json`, usage figures only). A failed refresh returns the earlier reading
+as `stale` with the new error. For the tool-level "active credential" reading, that only
+happens on a transient failure: a definitive answer (a pay-as-you-go key, signed out)
+means the credential changed, so older numbers never carry over. Readings are filed under
+a registered account only when the adapter's `owner_of` matches the identity the tool
+reported for that reading (for Kiro, `email` + start URL + account type from `whoami`,
+re-checked after the probe, so a login change mid-probe discards the reading). A forced
+refresh always asks the tool again, except for readings taken in the same collection pass.
+
+All tools are collected on daemon threads with one deadline, and the TUI pages run vendor
+calls on daemon threads too, so a hung CLI never delays quitting.
 
 ## Auto-switching
 

@@ -306,6 +306,9 @@ class UsageResult:
     attributed_to: str | None = None  # alias / identity the numbers belong to, when known
     observed_at: float | None = None  # when the vendor measured (or ccswap fetched) it
     error: str | None = None  # last refresh failure, kept beside stale data
+    # Non-secret identity the tool reported *for this reading* (e.g. Kiro's whoami).  Used
+    # only to file the reading under the matching registered account; never serialized.
+    identity: Mapping[str, str] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def has_data(self) -> bool:

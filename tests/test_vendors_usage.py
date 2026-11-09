@@ -563,3 +563,133 @@ def test_tool_usage_subcommand_includes_every_account(tmp_path, capsys):
     doc = json.loads(capsys.readouterr().out)
     assert doc["state"] == "available" and doc["accounts"][0]["alias"] == "me"
     assert doc["accounts"][0]["usage"]["windows"] == []  # not the active credential's
+
+
+# ---- Regressions from the independent review -------------------------------------
+
+
+def test_new_credential_never_inherits_the_previous_credentials_numbers(tmp_path):
+    svc, r = muse_world(tmp_path, ok(json.dumps({"allowance": MUSE_14})))
+    assert svc.usage("muse").windows
+    # The user now uses a pay-as-you-go key: a definitive "no allowance", not a failure.
+    r.on(MUSE, "usage", "--json", result=ok(json.dumps({"allowance": None, "reason": "api_key"})))
+    now = svc.usage("muse", refresh=True)
+    assert now.state is UsageState.UNAVAILABLE and now.windows == ()
+
+
+def test_same_email_on_another_identity_center_is_not_attributed(tmp_path):
+    elsewhere = {**IDC, "startUrl": "https://other.awsapps.com/start"}
+    svc, _ = kiro_world(tmp_path, who=elsewhere)
+    svc.store.add(AccountRecord("kiro", "work", "login", identity=IDC))
+    tool = svc.usage("kiro")
+    assert tool.attributed_to != "work"
+    assert svc.usage_store.get("kiro", "work") is None
+    assert svc.usage("kiro", "work").windows == ()
+
+
+def test_an_alias_that_looks_like_an_email_never_captures_readings(tmp_path):
+    svc, _ = kiro_world(tmp_path)
+    svc.store.add(AccountRecord("kiro", "a@c.com", "api-key"), "ksk_abcdef123456")
+    tool = svc.usage("kiro")
+    assert tool.attributed_to == "a@c.com"  # the whoami email, as a label only
+    assert svc.usage_store.get("kiro", "a@c.com") is None
+
+
+def test_login_change_during_the_probe_discards_the_reading(tmp_path):
+    svc, r = kiro_world(tmp_path)
+    svc.store.add(AccountRecord("kiro", "a", "login", identity=IDC))
+    answers = iter([ok(json.dumps(IDC)), ok(json.dumps(OTHER))])  # before, after the probe
+    r.on(KIRO, "whoami", result=lambda c: next(answers, ok(json.dumps(OTHER))))
+    result = svc.usage("kiro", "a")
+    assert result.state is UsageState.ERROR and "changed during" in result.reason
+    assert svc.usage_store.get("kiro", "a") is None
+
+
+def test_kiro_31_signed_out_json_is_unauthenticated(tmp_path):
+    svc, r = kiro_world(tmp_path)
+    r.on(KIRO, "whoami", result=RunResult(1, stdout='{"account":null}\n'))
+    assert svc.adapter("kiro").whoami_state() == ("out", None)
+    assert svc.usage("kiro").state is UsageState.UNAUTHENTICATED
+
+
+def test_free_text_mentioning_a_plan_is_not_a_usage_report():
+    assert parse_usage_report("Sure! Your Plan: Pro looks fine. Estimated usage is low.") is None
+
+
+def test_cache_lock_failure_does_not_lose_a_good_reading(tmp_path, monkeypatch):
+    from claude_swap.exceptions import LockError
+    from claude_swap.vendors import usage_cache
+
+    class Busy:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            raise LockError("busy")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(usage_cache, "FileLock", Busy)
+    svc, _ = muse_world(tmp_path, ok(json.dumps({"allowance": MUSE_14})))
+    assert svc.usage("muse").state is UsageState.AVAILABLE
+
+
+def test_transient_help_failures_are_not_cached(tmp_path):
+    svc, r = kiro_world(tmp_path)
+    r.on(KIRO, "chat", "--help", result=RunResult(124, timed_out=True))
+    assert svc.usage("kiro").state is UsageState.UNSUPPORTED
+    r.on(KIRO, "chat", "--help", result=ok("--no-interactive --v2"))
+    assert svc.usage("kiro", refresh=True).state is UsageState.AVAILABLE
+
+
+def test_numbers_beside_a_problem_are_labelled_as_last_reading():
+    from claude_swap.vendors.overview import usage_headline
+
+    window = UsageWindow("five-hour", "5-hour window", "percent", used_percent=40.0)
+    assert usage_headline(UsageResult(UsageState.UNAUTHENTICATED, "x", windows=(window,))) == (
+        "sign-in required · last 5h 40%"
+    )
+    assert usage_headline(UsageResult(UsageState.STALE, windows=(window,))) == "stale · 5h 40%"
+
+
+def test_overview_threads_never_block_exit(tmp_path, monkeypatch):
+    import claude_swap.vendors.overview as ov_mod
+
+    monkeypatch.setattr(ov_mod, "TOOL_TIMEOUT_S", 0.2)
+    gate = threading.Event()
+    svc, _ = muse_world(tmp_path, lambda c: (gate.wait(5), ok("{}"))[1])
+    Overview(svc, legacy=[]).collect(["muse"])
+    stragglers = [t for t in threading.enumerate() if t.name.startswith("ccswap-usage-")]
+    assert stragglers and all(t.daemon for t in stragglers)
+    gate.set()
+
+
+def test_removed_account_does_not_keep_its_in_memory_reading(tmp_path):
+    svc, _ = kiro_world(tmp_path)
+    svc.store.add(AccountRecord("kiro", "a", "login", identity=IDC))
+    svc.usage("kiro", "a")
+    svc.remove("kiro", "a")
+    svc.store.add(AccountRecord("kiro", "a", "login", identity=OTHER))
+    assert svc.usage("kiro", "a").windows == ()  # the new 'a' is not signed in
+
+
+def test_claude_namespace_rejects_other_tools_and_passes_claude_verbs():
+    from claude_swap.vendors.cli import claude_argv
+
+    for other in ("codex", "kiro", "muse", "opencode", "agy", "vendors"):
+        with pytest.raises(ValueError):
+            claude_argv([other, "list"])
+    assert claude_argv(["run", "1"]) == ["run", "1"]
+    assert claude_argv(["--status"]) == ["--status"]
+
+
+def test_forced_refresh_reuses_only_this_passes_readings(tmp_path):
+    svc, r = kiro_world(tmp_path)
+    svc.store.add(AccountRecord("kiro", "a", "login", identity=IDC))
+    summary = Overview(svc, legacy=[]).collect_one("kiro", refresh=True)
+    probes = [c for c in r.calls if "/usage" in c.argv]
+    assert len(probes) == 1  # tool-level probe answered the active account too
+    assert summary.accounts[0][1].windows == summary.tool_usage.windows
+    svc.usage("kiro", "a", refresh=True)
+    assert len([c for c in r.calls if "/usage" in c.argv]) == 2  # a user refresh asks again

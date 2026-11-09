@@ -1,8 +1,10 @@
 """Claude Code, Codex and Antigravity seen through the shared usage model.
 
-These are *read-only bridges*: their switchers (``switcher.py``, ``codex.py``,
-``agy.py``) keep owning credentials, switching, pacing and usage fetching,
-unchanged.  A bridge only turns a switcher's structured
+These are *bridges, not new mechanisms*: their switchers (``switcher.py``,
+``codex.py``, ``agy.py``) keep owning credentials, switching, pacing and usage
+fetching, unchanged.  A collect with fetching allowed does exactly what
+``ccswap list`` does (the switchers' own paced fetch, which may refresh an
+OAuth token as it always has); a store-only collect touches nothing.  A bridge only turns a switcher's structured
 :class:`~claude_swap.models.AccountsSnapshot` into :class:`AccountView` and
 :class:`UsageResult`, so the overview, ``ccswap usage``, the menu bar and Raycast
 can show all six tools as peers from one model without a second implementation

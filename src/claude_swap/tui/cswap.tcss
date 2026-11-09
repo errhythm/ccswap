@@ -69,7 +69,7 @@ MenuItem Static.menu-item-muted { color: $secondary; }
 
 /* -- tool pages (Muse, Kiro, OpenCode, overview) and the peer row ------------ */
 
-#tool-strip { height: 1; margin-top: 1; padding: 0 2; overflow: hidden; }
+#tool-strip { height: auto; max-height: 3; margin-top: 1; padding: 0 2; }  /* wraps when narrow */
 #tool-head { height: auto; max-height: 8; padding: 1 3 0 3; }
 #tool-usage { height: auto; max-height: 10; padding: 1 3 0 3; }
 #accounts-title { height: 1; margin-top: 1; padding: 0 3; color: $secondary; }

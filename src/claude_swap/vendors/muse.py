@@ -60,16 +60,16 @@ def _config_dir() -> Path:
     return Path.home() / ".config" / "muse"
 
 
-def _scalars(value: Any, depth: int = 0) -> Any:
+def _scalars(value: Any, depth: int = 0, secrets: Sequence[str] = ()) -> Any:
     """Pass vendor JSON through, keeping only plain scalars/containers."""
     if depth > 4:
         return None
     if isinstance(value, dict):
-        return {str(k): _scalars(v, depth + 1) for k, v in list(value.items())[:50]}
+        return {str(k): _scalars(v, depth + 1, secrets) for k, v in list(value.items())[:50]}
     if isinstance(value, list):
-        return [_scalars(v, depth + 1) for v in value[:50]]
+        return [_scalars(v, depth + 1, secrets) for v in value[:50]]
     if isinstance(value, (str, int, float, bool)) or value is None:
-        return redact(value) if isinstance(value, str) else value
+        return redact(value, secrets) if isinstance(value, str) else value
     return None
 
 
@@ -77,7 +77,11 @@ _WINDOWS = (("window", "five-hour", "5-hour window"), ("weekly", "weekly", "Week
 
 
 def parse_allowance(
-    allowance: dict, *, attributed_to: str | None, account_scoped: bool
+    allowance: dict,
+    *,
+    attributed_to: str | None,
+    account_scoped: bool,
+    secrets: Sequence[str] = (),
 ) -> UsageResult:
     """Map Muse 1.4's allowance (verified live) to independent windows.
 
@@ -120,7 +124,7 @@ def parse_allowance(
                 "muse usage --json",
                 True,
                 scope=scope,
-                data=_scalars(extra),
+                data=_scalars(extra, secrets=secrets),
                 fetched_at=observed,
             ),
         )
@@ -136,7 +140,7 @@ def parse_allowance(
         UsageState.AVAILABLE,
         windows=tuple(windows),
         observations=observations,
-        plan=redact(tier)[:80] if isinstance(tier, str) else None,
+        plan=redact(tier, secrets)[:80] if isinstance(tier, str) else None,
         source="muse usage --json",
         authoritative=True,
         attributed_to=attributed_to,
@@ -331,12 +335,11 @@ class MuseAdapter(ToolAdapter):
                 "be attributed to this alias",
                 hint="The tool-level usage shows the active credential",
             )
+        # An API-key account's key overrides any exported META_API_KEY for this child.  The
+        # tool-level reading deliberately keeps an exported key: that *is* the credential
+        # Muse uses in this environment, and it is labelled so.
         env = {ENV_KEY: secret} if secret else None
-        # An exported META_API_KEY would otherwise silently answer for every lookup.
-        unset: tuple[str, ...] = ()
-        result = self.runner.run(
-            [info.exe, "usage", "--json"], timeout=20, env=env, unset_env=unset
-        )
+        result = self.runner.run([info.exe, "usage", "--json"], timeout=20, env=env)
         secrets = [secret] if secret else []
         who = (
             record.alias
@@ -355,8 +358,10 @@ class MuseAdapter(ToolAdapter):
                 source="muse usage --json",
             )
         if not result.ok:
-            state = UsageState.ERROR if not result.timed_out else UsageState.UNAVAILABLE
-            return UsageResult(state, f"muse usage failed: {short_detail(result, secrets)}")
+            # A failure or timeout is transient: the service may show the last reading as stale.
+            return UsageResult(
+                UsageState.ERROR, f"muse usage failed: {short_detail(result, secrets)}"
+            )
         try:
             doc = json.loads(result.stdout)
         except ValueError:
@@ -378,7 +383,9 @@ class MuseAdapter(ToolAdapter):
                 source="muse usage --json",
                 attributed_to=who,
             )
-        return parse_allowance(allowance, attributed_to=who, account_scoped=record is not None)
+        return parse_allowance(
+            allowance, attributed_to=who, account_scoped=record is not None, secrets=secrets
+        )
 
     # ---- sessions --------------------------------------------------------
 

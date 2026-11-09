@@ -430,6 +430,32 @@ def usage_command(argv: list[str], overview=None) -> int:
     return 0
 
 
+# Claude commands that already live at the top level and pass through unchanged.  Other
+# tools' namespaces (codex, kiro, ...) are deliberately not reachable via `claude`.
+_CLAUDE_PASSTHROUGH = frozenset(
+    {
+        "status",
+        "switch",
+        "add",
+        "add-token",
+        "remove",
+        "rm",
+        "disable",
+        "enable",
+        "alias",
+        "run",
+        "swap",
+        "move",
+        "map",
+        "unmap",
+        "unclaimed",
+        "auto",
+        "export",
+        "import",
+        "import-usage",
+        "purge",
+    }
+)
 _CLAUDE_VERBS = {
     "list": ["--list", "--provider", "claude"],
     "ls": ["--list", "--provider", "claude"],
@@ -449,4 +475,9 @@ def claude_argv(argv: list[str]) -> list[str]:
     verb, rest = argv[0], argv[1:]
     if verb in _CLAUDE_VERBS:
         return [*_CLAUDE_VERBS[verb], *rest]
-    return argv
+    if verb.startswith("-") or verb in _CLAUDE_PASSTHROUGH:
+        return argv
+    raise ValueError(
+        f"'{verb}' is not a Claude Code command. Try: ccswap claude "
+        + "|".join(sorted({*_CLAUDE_VERBS, *_CLAUDE_PASSTHROUGH}))
+    )

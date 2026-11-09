@@ -9,7 +9,7 @@ with its own deadline: one hung CLI never delays the others.
 
 from __future__ import annotations
 
-import concurrent.futures as cf
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -33,7 +33,6 @@ LABELS = {
     "agy": "Antigravity",
 }
 TOOL_TIMEOUT_S = 75.0
-MAX_WORKERS = 4
 
 
 @dataclass
@@ -92,24 +91,39 @@ class Overview:
     def collect(
         self, tools: Iterable[str] | None = None, *, refresh: bool = False
     ) -> list[ToolSummary]:
+        """Every tool at once, each on its own daemon thread with one shared deadline.
+
+        Daemon threads (not an executor) so a tool stuck in a hung CLI never holds up the
+        caller's exit; its late result is discarded.  The service's locks and caches stay
+        correct if such a straggler finishes later.
+        """
         wanted = list(tools) if tools is not None else self.tools()
         results: dict[str, ToolSummary] = {}
-        pool = cf.ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="ccswap-usage")
-        try:
-            futures = {pool.submit(self.collect_one, t, refresh=refresh): t for t in wanted}
-            deadline = time.monotonic() + TOOL_TIMEOUT_S
-            for future, tool in futures.items():
-                try:
-                    results[tool] = future.result(timeout=max(0.1, deadline - time.monotonic()))
-                except cf.TimeoutError:
-                    results[tool] = ToolSummary(tool, LABELS.get(tool, tool), error="timed out")
-                except Exception as exc:  # noqa: BLE001 - one tool must never break the others
-                    results[tool] = ToolSummary(
-                        tool, LABELS.get(tool, tool), error=_safe_error(exc)
-                    )
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        return [results[t] for t in wanted]
+        guard = threading.Lock()
+
+        def run(tool: str) -> None:
+            try:
+                summary = self.collect_one(tool, refresh=refresh)
+            except Exception as exc:  # noqa: BLE001 - one tool must never break the others
+                summary = ToolSummary(tool, LABELS.get(tool, tool), error=_safe_error(exc))
+            with guard:
+                results.setdefault(tool, summary)
+
+        threads = [
+            threading.Thread(target=run, args=(t,), name=f"ccswap-usage-{t}", daemon=True)
+            for t in wanted
+        ]
+        for thread in threads:
+            thread.start()
+        deadline = time.monotonic() + TOOL_TIMEOUT_S
+        for thread in threads:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        with guard:
+            for tool in wanted:
+                results.setdefault(
+                    tool, ToolSummary(tool, LABELS.get(tool, tool), error="timed out")
+                )
+            return [results[t] for t in wanted]
 
     # ---- per kind ----------------------------------------------------------
 
@@ -137,12 +151,13 @@ class Overview:
             summary.auth = adapter.auth_summary()
         except (ClaudeSwitchError, OSError) as exc:
             summary.error = _safe_error(exc)
+        started = service._clock()
         try:
             summary.tool_usage = service.usage(tool, refresh=refresh)
         except ClaudeSwitchError as exc:
             summary.tool_usage = UsageResult(UsageState.ERROR, _safe_error(exc))
         try:
-            summary.accounts = service.accounts_usage(tool, refresh=refresh)
+            summary.accounts = service.accounts_usage(tool, refresh=refresh, fresh_since=started)
             # Discovered-but-unregistered accounts (e.g. OpenCode provider accounts,
             # Kiro's current login) are shown too, without usage of their own.
             registered = {v.alias for v, _ in summary.accounts}
@@ -192,7 +207,7 @@ def _safe_error(exc: BaseException) -> str:
 _SHORT = {"five-hour": "5h", "weekly": "wk", "monthly-credits": "credits", "bonus-credits": "bonus"}
 
 
-def _num(value: float) -> str:
+def number_text(value: float) -> str:
     return f"{value:,.0f}" if abs(value) >= 100 or value == int(value) else f"{value:,.2f}"
 
 
@@ -203,12 +218,12 @@ def window_text(window: UsageWindow, *, short: bool = False) -> str:
         unit = "" if window.unit in ("percent",) else f" {window.unit}"
         pct = f" ({window.used_percent:g}%)" if window.used_percent is not None else ""
         if short:
-            return f"{label} {_num(window.used)}/{_num(window.limit)}{pct}"
-        return f"{label}: {_num(window.used)} of {_num(window.limit)}{unit} used{pct}"
+            return f"{label} {number_text(window.used)}/{number_text(window.limit)}{pct}"
+        return f"{label}: {number_text(window.used)} of {number_text(window.limit)}{unit} used{pct}"
     if window.used_percent is not None:
         return f"{label} {window.used_percent:g}%" + ("" if short else " used")
     if window.used is not None:
-        return f"{label} {_num(window.used)} {window.unit} used"
+        return f"{label} {number_text(window.used)} {window.unit} used"
     return f"{label}: not reported"
 
 
@@ -241,7 +256,12 @@ def usage_headline(result: UsageResult | None) -> str:
         return "no active account"
     if result.windows:
         text = " · ".join(window_text(w, short=True) for w in result.windows[:2])
-        return f"stale · {text}" if result.state is UsageState.STALE else text
+        if result.state is UsageState.AVAILABLE:
+            return text
+        if result.state is UsageState.STALE:
+            return f"stale · {text}"
+        # Numbers kept beside a problem are the *last* reading, never presented as live.
+        return f"{_STATE_WORDS.get(result.state, result.state.value)} · last {text}"
     local = local_cost_line(result)
     if local:
         return local
@@ -300,7 +320,15 @@ def overview_json(summaries: list[ToolSummary]) -> dict[str, Any]:
 def tool_usage_title(summary: ToolSummary) -> str:
     if summary.tool == "opencode":
         return "local usage, all providers"
-    who = summary.tool_usage.attributed_to if summary.tool_usage else None
+    usage = summary.tool_usage
+    who = usage.attributed_to if usage else None
+    if usage is not None and usage.state is UsageState.STALE:
+        when = (
+            datetime.fromtimestamp(usage.observed_at).strftime("%H:%M")
+            if usage.observed_at
+            else "?"
+        )
+        return f"last reading ({who or 'active credential'}, {when}); refresh failed"
     if who and who != "active credential":
         return f"signed-in account ({who})"
     return "active credential (the tool does not report whose)"

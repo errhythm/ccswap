@@ -1455,6 +1455,18 @@ def main() -> None:
     except Exception:
         pass  # theme is cosmetic; never block the CLI on it
 
+    # `ccswap claude <verb>` is the established top-level Claude command, so rewrite it
+    # before any other dispatch (`claude run 1` must reach `run`).
+    if argv and argv[0] == "claude":
+        from claude_swap.vendors.cli import claude_argv
+
+        try:
+            argv = claude_argv(argv[1:])
+        except ValueError as exc:
+            error(f"Error: {exc}")
+            sys.exit(2)
+        sys.argv = [sys.argv[0], *argv]
+
     # `run` and `auto` keep their dedicated pre-dispatch parsers.
     if argv and argv[0] == "run":
         _run_command(argv[1:])
@@ -1469,11 +1481,6 @@ def main() -> None:
         from claude_swap.vendors.cli import usage_command
 
         sys.exit(usage_command(argv[1:]))
-    if argv and argv[0] == "claude":
-        from claude_swap.vendors.cli import claude_argv
-
-        argv = claude_argv(argv[1:])
-        sys.argv = [sys.argv[0], *argv]
     if argv and argv[0] in ("vendors", "tools", "muse", "opencode", "kiro"):
         from claude_swap.vendors.cli import tool_command, vendors_command
 

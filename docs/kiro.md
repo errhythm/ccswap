@@ -37,7 +37,9 @@ the plan is managed by an organization. Kiro reports a reset *date*, not a time,
 invented. Each probe leaves an empty V2 session behind; ccswap runs it from its own
 `vendors/kiro-probe` directory, so those sessions never show up in your projects.
 
-Only the signed-in login can be measured. A registered login that isn't active keeps
+Only the signed-in login can be measured. ccswap checks `whoami` before and after the probe
+and drops the reading if the login changed in between. kiro-cli 3.1 reports a signed-out
+state as `{"account": null}`, which is shown as "sign-in required". A registered login that isn't active keeps
 showing **its own** last reading, marked stale with its age, and never another account's.
 API-key accounts are measured with `KIRO_API_KEY` set for that child only.
 

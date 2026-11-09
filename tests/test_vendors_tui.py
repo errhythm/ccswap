@@ -126,10 +126,21 @@ def text_of(screen, selector):
     return str(screen.query_one(selector, Static).render())
 
 
+async def drain(pilot):
+    """Wait for the tool pages' daemon threads, then let their UI updates apply."""
+    import asyncio
+
+    from claude_swap.tui import tools
+
+    for _ in range(3):
+        for thread in list(tools.BACKGROUND):
+            await asyncio.to_thread(thread.join, 5)
+        await settle(pilot)
+
+
 async def goto(pilot, key):
     await pilot.press(key)
-    await settle(pilot)
-    await settle(pilot)
+    await drain(pilot)
 
 
 @pytest.mark.asyncio
@@ -227,7 +238,7 @@ async def test_opencode_page_separates_local_stats_from_quota_and_switches(tmp_p
         app.screen.query_one("#taccounts", ListView).index = 1
         await pilot.pause()
         await goto(pilot, "s")
-        await settle(pilot)
+        await drain(pilot)
         assert (OC, "auth", "switch", "anthropic", "c2") in runner.argvs()
         assert [r.view.active for r in app.screen.query(AccountRow)] == [False, True]
 
@@ -244,13 +255,12 @@ async def test_muse_switch_needs_confirmation_and_never_shows_the_key(tmp_path):
         assert isinstance(app.screen, ConfirmModal)
         assert not any(c.argv[1:3] == ("auth", "set") for c in runner.calls)
         await pilot.press("n")
-        await settle(pilot)
+        await drain(pilot)
         assert not any(c.argv[1:3] == ("auth", "set") for c in runner.calls)
         await pilot.press("s")
         await pilot.pause()
         await pilot.press("y")
-        await settle(pilot)
-        await settle(pilot)
+        await drain(pilot)
         call = next(c for c in runner.calls if c.argv[1:3] == ("auth", "set"))
         assert call.input_text == KEY + "\n" and KEY not in " ".join(call.argv)
         for sel in ("#tool-head", "#tool-usage", "#tool-detail"):
@@ -284,8 +294,7 @@ async def test_remove_forgets_registration_only_after_confirm(tmp_path):
         await pilot.pause()
         assert isinstance(app.screen, ConfirmModal)
         await pilot.press("y")
-        await settle(pilot)
-        await settle(pilot)
+        await drain(pilot)
         assert svc.store.records("muse") == []
         assert not any(c.argv[1:2] == ("logout",) for c in runner.calls)
 
@@ -310,7 +319,7 @@ async def test_failed_refresh_keeps_last_good_data_marked_stale(tmp_path):
         assert "34%" in text_of(app.screen, "#tool-usage")
         runner.on(MUSE, "usage", "--json", result=fail("network down"))
         await goto(pilot, "r")
-        await settle(pilot)
+        await drain(pilot)
         usage = text_of(app.screen, "#tool-usage")
         assert "34%" in usage and "refresh failed" in usage and "network down" in usage
 
@@ -345,7 +354,7 @@ async def test_narrow_terminal_pages_render(tmp_path):
         for key in ("3", "4", "5", "0"):
             await goto(pilot, key)
         await pilot.press("c")
-        await settle(pilot)
+        await drain(pilot)
 
 
 @pytest.mark.asyncio
@@ -356,6 +365,6 @@ async def test_masking_hides_emails_on_tool_pages(tmp_path):
     async with app.run_test(size=(110, 40)) as pilot:
         await goto(pilot, "4")
         await pilot.press("m")
-        await settle(pilot)
+        await drain(pilot)
         app.screen._paint()
         assert "a@c.com" not in text_of(app.screen, "#tool-head")

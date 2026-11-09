@@ -13,7 +13,10 @@ Raycast.  Every vendor call runs in a thread worker; unknown values stay unknown
 
 from __future__ import annotations
 
+import contextvars
+import threading
 import time
+import weakref
 from datetime import datetime
 from typing import ClassVar
 
@@ -37,14 +40,17 @@ from claude_swap.vendors.overview import (
     Overview,
     ToolSummary,
     headline,
+    number_text,
     render_usage_lines,
     reset_text,
     summary_from_snapshot,
     tool_usage_title,
     usage_headline,
-    window_text,
 )
 from claude_swap.vendors.service import VendorService
+
+# Background threads started by tool pages (tests join them; the app never waits on them).
+BACKGROUND: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
 
 DASHBOARD_TOOLS = ("claude", "codex", "agy")  # their page is the filtered dashboard
 TOOL_KEYS = {str(i): tool for i, tool in enumerate(TOOL_ORDER, 1)}  # 1..6
@@ -123,9 +129,7 @@ def usage_renderable(result: UsageResult | None, palette: Palette, width: int = 
         pct = w.used_percent
         suffix_bits = []
         if w.used is not None and w.limit is not None:
-            suffix_bits.append(
-                window_text(w, short=True).split(" ", 1)[-1].split(" (")[0] + f" {w.unit}"
-            )
+            suffix_bits.append(f"{number_text(w.used)}/{number_text(w.limit)} {w.unit}")
         reset = reset_text(w)
         if reset:
             suffix_bits.append(reset)
@@ -165,11 +169,34 @@ class AccountRow(ListItem):
 class _ToolPage(Screen):
     """Shared plumbing: number-key navigation, masking, safe worker hand-off."""
 
-    def _post(self, fn, *args) -> None:
-        try:
-            self.app.call_from_thread(lambda: fn(*args) if self.is_attached else None)
-        except RuntimeError:
-            pass
+    def _spawn(self, group: str, work) -> None:
+        """Run blocking vendor work on a daemon thread; deliver only the newest result.
+
+        Not ``run_worker``: Textual joins thread workers on quit, so a tool stuck in a slow
+        CLI would hold ``q`` for up to a minute.  ``work(post)`` calls ``post(fn, *args)``
+        to hand its result to the UI thread; a result superseded by a newer call of the
+        same group, or arriving after the page closed, is dropped.
+        """
+        generations = self.__dict__.setdefault("_generations", {})
+        generation = generations[group] = generations.get(group, 0) + 1
+        app = self.app
+        context = contextvars.copy_context()  # keeps Textual's active-app lookup working
+
+        def post(fn, *args) -> None:
+            def apply() -> None:
+                if self.is_attached and generations.get(group) == generation:
+                    fn(*args)
+
+            try:
+                app.call_from_thread(apply)
+            except RuntimeError:  # the app already stopped
+                pass
+
+        thread = threading.Thread(
+            target=context.run, args=(work, post), name=f"ccswap-tui-{group}", daemon=True
+        )
+        BACKGROUND.add(thread)
+        thread.start()
 
     def _mask(self, text: str) -> str:
         return mask_emails_in_text(text) if getattr(self.app, "mask_accounts", False) else text
@@ -239,16 +266,16 @@ class ToolScreen(_ToolPage):
         self._message = "refreshing…" if force else self._message
         self._render_detail()
 
-        def work() -> None:
+        service = self.service
+
+        def work(post) -> None:
             try:
-                summary = Overview(self.service, legacy=[]).collect_one(tool, refresh=force)
+                summary = Overview(service, legacy=[]).collect_one(tool, refresh=force)
             except (ClaudeSwitchError, OSError) as exc:
                 summary = ToolSummary(tool, LABELS.get(tool, tool), error=str(exc))
-            self._post(self._loaded, summary, force)
+            post(self._loaded, summary, force)
 
-        self.run_worker(
-            work, thread=True, group=f"tool-{tool}", exclusive=True, exit_on_error=False
-        )
+        self._spawn(f"tool-{tool}", work)
 
     def _loaded(self, summary: ToolSummary, forced: bool) -> None:
         self.summary = summary
@@ -378,20 +405,20 @@ class ToolScreen(_ToolPage):
     def action_capabilities(self) -> None:
         tool = self.tool
 
-        def work() -> None:
-            adapter = self.service.adapter(tool)
+        service = self.service
+
+        def work(post) -> None:
+            adapter = service.adapter(tool)
             try:
-                table = self.service.capability_table(adapter)
+                table = service.capability_table(adapter)
                 text = "\n".join(
                     f"{n:<22} {c['support']:<12} {c['mechanism']}" for n, c in table.items()
                 )
             except (ClaudeSwitchError, OSError) as exc:
                 text = str(exc)
-            self._post(
-                lambda: self.app.push_screen(OutputModal(f"{adapter.label} — capabilities", text))
-            )
+            post(lambda: self.app.push_screen(OutputModal(f"{adapter.label} — capabilities", text)))
 
-        self.run_worker(work, thread=True, group="tool-caps", exit_on_error=False)
+        self._spawn("tool-caps", work)
 
     def action_add_help(self) -> None:
         howto = {
@@ -417,15 +444,17 @@ class ToolScreen(_ToolPage):
             if not confirmed:
                 return
 
-            def work() -> None:
+            service = self.service
+
+            def work(post) -> None:
                 try:
-                    self.service.remove(tool, view.alias, view.provider)
+                    service.remove(tool, view.alias, view.provider)
                     message = f"Removed '{view.alias}' from ccswap; the {LABELS.get(tool, tool)} login was not touched"
                 except (ClaudeSwitchError, OSError) as exc:
                     message = f"remove failed: {exc}"
-                self._post(self._action_done, message)
+                post(self._action_done, message)
 
-            self.run_worker(work, thread=True, group="tool-remove", exit_on_error=False)
+            self._spawn("tool-remove", work)
 
         self.app.push_screen(
             ConfirmModal(
@@ -481,9 +510,11 @@ class ToolScreen(_ToolPage):
         )
         provider = view.provider if tool == "opencode" else None
 
-        def work() -> None:
+        service = self.service
+
+        def work(post) -> None:
             try:
-                outcome, _ = self.service.switch(
+                outcome, _ = service.switch(
                     tool, selector, provider=provider, assume_yes=assume_yes, raw=raw
                 )
                 message = outcome.message + (
@@ -493,9 +524,9 @@ class ToolScreen(_ToolPage):
                 message = f"switch failed: {exc}"
             except Exception as exc:  # noqa: BLE001 - never leave the page stuck busy
                 message = f"switch failed unexpectedly: {type(exc).__name__}"
-            self._post(self._action_done, message)
+            post(self._action_done, message)
 
-        self.run_worker(work, thread=True, group="tool-switch", exit_on_error=False)
+        self._spawn("tool-switch", work)
 
     def _action_done(self, message: str) -> None:
         self._busy = False
@@ -553,17 +584,16 @@ class OverviewScreen(_ToolPage):
         if force and hasattr(self.app, "action_refresh_full"):
             self.app.action_refresh_full()  # Claude/Codex/Antigravity: their own paced refresh
         for tool in self._vendor_tools():
+            overview = self._ov()
 
-            def work(tool: str = tool) -> None:
+            def work(post, tool: str = tool, overview: Overview = overview) -> None:
                 try:
-                    summary = self._ov().collect_one(tool, refresh=force)
+                    summary = overview.collect_one(tool, refresh=force)
                 except (ClaudeSwitchError, OSError) as exc:
                     summary = ToolSummary(tool, LABELS.get(tool, tool), error=str(exc))
-                self._post(self._loaded, summary)
+                post(self._loaded, summary)
 
-            self.run_worker(
-                work, thread=True, group=f"overview-{tool}", exclusive=True, exit_on_error=False
-            )
+            self._spawn(f"overview-{tool}", work)
 
     def _loaded(self, summary: ToolSummary) -> None:
         self.summaries[summary.tool] = summary

@@ -100,7 +100,11 @@ export function ToolSection({ bin, tool, revalidate }: { bin: string; tool: Tool
 
 export function ToolsList({ tools }: { tools: ToolId[] }) {
   const bin = resolveBinary(getPreferenceValues<Preferences>().ccswapPath || undefined);
-  const { data, error, isLoading, revalidate } = useCachedPromise(listUsage, [bin ?? "", tools], { execute: !!bin });
+  const { data, error, isLoading, mutate } = useCachedPromise(listUsage, [bin ?? "", tools], { execute: !!bin });
+  // "Refresh" asks every tool again (`ccswap usage --refresh`), not just the short-lived cache.
+  const revalidate = () => {
+    if (bin) void mutate(listUsage(bin, tools, true));
+  };
   if (!bin) {
     return (
       <List>

@@ -14,6 +14,7 @@ import json
 import time
 from pathlib import Path
 
+from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.fsutil import atomic_write_text
 from claude_swap.locking import FileLock
 from claude_swap.vendors.core import UsageResult, UsageState
@@ -57,30 +58,25 @@ class UsageCache:
     def put(self, tool: str, account: str, result: UsageResult) -> None:
         if result.state is not UsageState.AVAILABLE or not result.has_data:
             return
+        self._update(
+            lambda entries: entries.__setitem__(self._key(tool, account), result.to_json())
+        )
+
+    def drop(self, tool: str, account: str) -> None:
+        self._update(lambda entries: entries.pop(self._key(tool, account), None))
+
+    def _update(self, change) -> None:
         try:
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
             with FileLock(self.root / ".usage.lock", timeout=5.0):
                 entries = self._read()
-                entries[self._key(tool, account)] = result.to_json()
+                change(entries)
                 atomic_write_text(
                     self.file,
                     json.dumps(
                         {"schemaVersion": SCHEMA_VERSION, "entries": entries}, sort_keys=True
                     ),
+                    follow_symlinks=False,  # never write through a planted link
                 )
-        except OSError:
-            pass  # a cache that cannot be written only costs freshness
-
-    def drop(self, tool: str, account: str) -> None:
-        try:
-            with FileLock(self.root / ".usage.lock", timeout=5.0):
-                entries = self._read()
-                if entries.pop(self._key(tool, account), None) is not None:
-                    atomic_write_text(
-                        self.file,
-                        json.dumps(
-                            {"schemaVersion": SCHEMA_VERSION, "entries": entries}, sort_keys=True
-                        ),
-                    )
-        except OSError:
-            pass
+        except (OSError, ClaudeSwitchError):
+            pass  # a cache that cannot be written (or locked) only costs freshness
