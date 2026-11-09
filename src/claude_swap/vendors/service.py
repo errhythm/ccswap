@@ -347,8 +347,19 @@ class VendorService:
             if account_key == ACTIVE_KEY:
                 owner = self._owner(adapter, tool, fresh)
                 if owner is not None:
+                    # Verified owner: the windows now belong to that account, not to an
+                    # anonymous "active credential".
+                    fresh = dataclasses.replace(
+                        fresh,
+                        attributed_to=owner,
+                        windows=tuple(
+                            dataclasses.replace(w, scope="account")
+                            if w.scope == "active-credential"
+                            else w
+                            for w in fresh.windows
+                        ),
+                    )
                     self.usage_store.put(tool, owner, fresh)
-                    fresh = dataclasses.replace(fresh, attributed_to=owner)
             return fresh, owner
         transient = fresh.state is UsageState.ERROR
         if account_key != ACTIVE_KEY:

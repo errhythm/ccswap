@@ -424,11 +424,11 @@ def render_usage_lines(result: UsageResult, indent: str = "    ") -> list[str]:
         elif obs.data:
             pairs = ", ".join(f"{k}={v}" for k, v in list(obs.data.items())[:6])
             lines.append(f"{indent}{obs.kind.value}: {pairs}")
-    if result.state is not UsageState.AVAILABLE:
+    if result.state is UsageState.STALE:
+        lines.append(f"{indent}last reading (stale): {result.error or 'refresh failed'}")
+    elif result.state is not UsageState.AVAILABLE:
         word = _STATE_WORDS.get(result.state, result.state.value)
         lines.append(f"{indent}{word}: {result.reason or result.error or ''}".rstrip(": "))
-        if result.state is UsageState.STALE and result.error:
-            lines.append(f"{indent}refresh failed: {result.error}")
     if result.observed_at:
         age = max(0, int(time.time() - result.observed_at))
         stamp = datetime.fromtimestamp(result.observed_at).strftime("%H:%M:%S")

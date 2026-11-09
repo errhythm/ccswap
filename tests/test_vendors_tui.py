@@ -321,7 +321,7 @@ async def test_failed_refresh_keeps_last_good_data_marked_stale(tmp_path):
         await goto(pilot, "r")
         await drain(pilot)
         usage = text_of(app.screen, "#tool-usage")
-        assert "34%" in usage and "refresh failed" in usage and "network down" in usage
+        assert "34%" in usage and "last reading (stale)" in usage and "network down" in usage
 
 
 @pytest.mark.asyncio
