@@ -702,5 +702,5 @@ def test_unregistered_current_login_gets_the_reading_only_for_its_own_identity(t
     assert not view.registered and view.active and usage.windows == summary.tool_usage.windows
     svc2, _ = kiro_world(tmp_path / "x")
     svc2.store.add(AccountRecord("kiro", "b", "login", identity=OTHER))
-    rows = dict((v.alias, u) for v, u in Overview(svc2, legacy=[]).collect_one("kiro").accounts)
+    rows = {v.alias: u for v, u in Overview(svc2, legacy=[]).collect_one("kiro").accounts}
     assert rows["b"].windows == ()  # a registered, inactive login never gets it
