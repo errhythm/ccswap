@@ -1028,11 +1028,11 @@ class TestDashboard:
                 "switch",
                 "watch",
                 "auto",
-                "vendors",
                 "add-menu",
                 "disable-menu",
                 "remove-menu",
                 "settings-menu",
+                "vendors",
                 "quit",
             ]
             from textual.widgets import Static

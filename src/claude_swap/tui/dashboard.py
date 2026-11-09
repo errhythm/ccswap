@@ -140,11 +140,11 @@ class DashboardScreen(Screen):
             (self.app.gettext("Switch account…"), "switch"),
             (self.app.gettext("Watch accounts"), "watch"),
             (self.app.gettext("Auto-switch view…"), "auto"),
-            (self.app.gettext("Muse / OpenCode / Kiro…"), "vendors"),
             (self.app.gettext("Add account…"), "add-menu"),
             (self.app.gettext("Disable / enable account…"), "disable-menu"),
             (self.app.gettext("Remove account…"), "remove-menu"),
             (self.app.gettext("Settings…"), "settings-menu"),
+            (self.app.gettext("Muse / OpenCode / Kiro…"), "vendors"),
             (self.app.gettext("Quit"), "quit"),
         ]
 

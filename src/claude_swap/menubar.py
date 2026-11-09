@@ -38,6 +38,7 @@ REFRESH_CHOICES: tuple[int, ...] = (30, 60, 300)
 AUTO_THRESHOLD_CHOICES: tuple[int, ...] = (80, 90, 95, 98)
 TITLE_PCT_CHOICES: tuple[str, ...] = ("off", "5h", "7d", "both")
 SWITCH_HISTORY_LIMIT = 10
+VENDOR_REFRESH_SECONDS = 120  # vendor CLIs are subprocesses; poll them sparingly
 NOTIFICATION_BUNDLE_ID = "com.ccswap.menubar"
 
 
@@ -638,6 +639,8 @@ def run(switcher) -> int:
             self._dirty = False
             self._snapshot_at = 0.0
             self._refreshing = False
+            self.vendor_rows = {}  # tool -> [MenuRow]; filled by the refresh worker
+            self._vendor_at = 0.0
             self._config_path = switcher._get_claude_config_path()
             self._config_mtime = 0.0
             self._last_usage_log: dict = {}  # (provider, account num) -> last-logged (5h, 7d) key
@@ -731,6 +734,18 @@ def run(switcher) -> int:
                         self._log_usage(codex_snap, "codex")
                         self.codex_snapshot = codex_snap
                         dirty = True
+                if time.time() - self._vendor_at > VENDOR_REFRESH_SECONDS:
+                    # Vendor CLIs are spawned processes: poll them far less often
+                    # than the usage snapshot, and never let them break the pass.
+                    self._vendor_at = time.time()
+                    try:
+                        from claude_swap.vendors.menu import collect
+                        from claude_swap.vendors.service import VendorService
+
+                        self.vendor_rows = collect(VendorService())
+                        dirty = True
+                    except Exception:
+                        self.switcher._logger.debug("menubar vendor refresh failed", exc_info=True)
                 if dirty:
                     self._dirty = True  # picked up by on_sync_tick on the main thread
             finally:
@@ -998,6 +1013,7 @@ def run(switcher) -> int:
                 rumps.MenuItem("Next available", callback=self._switch("next-available")),
                 None,
                 self._codex_menu(rumps),
+                self._vendors_menu(rumps),
                 None,
                 self._add_menu(rumps),
                 self._disable_menu(rumps),
@@ -1009,6 +1025,34 @@ def run(switcher) -> int:
                 rumps.MenuItem("Refresh now", callback=self.on_refresh_now),
                 rumps.MenuItem("Quit", callback=self.on_quit),
             ]
+
+        def _vendors_menu(self, rumps):
+            menu = rumps.MenuItem("Muse / OpenCode / Kiro")
+            if not self.vendor_rows:
+                menu.add(rumps.MenuItem("Loading…", callback=None))
+                return menu
+            for rows in self.vendor_rows.values():
+                for row in rows:
+                    cb = self._make_vendor_switch(row) if row.selector else None
+                    menu.add(rumps.MenuItem(row.label, callback=cb))
+                menu.add(None)
+            return menu
+
+        def _make_vendor_switch(self, row):
+            def cb(_sender):
+                threading.Thread(target=self._vendor_switch_work, args=(row,), daemon=True).start()
+            return cb
+
+        def _vendor_switch_work(self, row):
+            from claude_swap.vendors.service import VendorService
+
+            try:
+                outcome, _ = VendorService().switch(row.tool, row.selector, provider=row.provider)
+                rumps.notification("ccswap", "OpenCode account switched", outcome.message)
+            except ClaudeSwitchError as e:
+                rumps.notification("ccswap", "Switch failed", str(e))
+            self._vendor_at = 0.0  # re-read on the next refresh
+            self.refresh_async()
 
         def _add_menu(self, rumps):
             menu = rumps.MenuItem("Add account")

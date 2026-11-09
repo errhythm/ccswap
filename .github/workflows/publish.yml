@@ -6,6 +6,9 @@ on:
 
 jobs:
   publish:
+    # Fork guard: only the upstream project publishes the `ccswap` PyPI package.
+    # Fork builds use a local version (+vendors) that PyPI rejects anyway.
+    if: github.repository == 'errhythm/ccswap'
     runs-on: ubuntu-latest
     # Waits for the maintainer's approval in the `pypi` environment.
     environment: pypi

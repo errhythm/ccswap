@@ -1885,8 +1885,12 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     # Self-upgrade runs before switcher init so we don't touch config/keychain
     # just to upgrade the tool itself.
     if args.upgrade:
-        from claude_swap.update_check import run_self_upgrade
+        from claude_swap.update_check import fork_upgrade_refusal, run_self_upgrade
 
+        refusal = fork_upgrade_refusal(__version__)
+        if refusal:
+            error(refusal)
+            sys.exit(1)
         try:
             sys.exit(run_self_upgrade())
         except KeyboardInterrupt:
