@@ -616,11 +616,18 @@ class KiroAdapter(ToolAdapter):
             if state == "error" or not current:
                 return UsageResult(UsageState.ERROR, "`kiro-cli whoami` failed; usage not read")
             if record is not None and not _same_login(record.identity, current):
-                return UsageResult(
-                    UsageState.UNAVAILABLE,
-                    f"'{record.alias}' is not the signed-in Kiro login; Kiro only reports the "
-                    "active login's usage",
-                )
+                if _same_person(record.identity, current):
+                    reason = (
+                        f"'{record.alias}' is not the active Kiro profile; Kiro reports only the "
+                        f"active profile's credits. `ccswap kiro switch {record.alias} --login` "
+                        "selects it, after which its usage is recorded"
+                    )
+                else:
+                    reason = (
+                        f"'{record.alias}' is not the signed-in Kiro login; Kiro only reports the "
+                        "active login's usage"
+                    )
+                return UsageResult(UsageState.UNAVAILABLE, reason)
             who = record.alias if record is not None else current.get("email", "active login")
         result = self.runner.run(
             [info.exe, "chat", "--no-interactive", "--v2", "/usage"],
