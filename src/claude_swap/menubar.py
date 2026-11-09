@@ -1181,6 +1181,7 @@ def run(switcher) -> int:
                 subprocess.Popen(["/usr/bin/open", url])  # nosec B603 - fixed binary, https only
 
         def _vendor_switch_work(self, row):
+            self.switcher._logger.info("menubar: switching %s to %s", row.tool, row.selector)
             try:
                 outcome, _ = self._vendor_service().switch(
                     row.tool,
@@ -1189,9 +1190,13 @@ def run(switcher) -> int:
                     raw=row.raw,
                     assume_yes=True,  # an explicit click, like switching a Claude account
                 )
+                self.switcher._logger.info("menubar: %s", outcome.message)
                 rumps.notification("ccswap", "Account switched", outcome.message)
             except ClaudeSwitchError as e:
+                self.switcher._logger.warning("menubar: %s switch failed: %s", row.tool, e)
                 rumps.notification("ccswap", "Switch failed", str(e))
+            except Exception:  # noqa: BLE001 - surface unexpected failures in the log
+                self.switcher._logger.exception("menubar: %s switch crashed", row.tool)
             self._maybe_refresh_vendors(force_tools={row.tool})
 
         def _add_menu(self, rumps):

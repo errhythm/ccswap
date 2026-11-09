@@ -21,6 +21,23 @@ details and evidence: [vendor-compatibility.md](vendor-compatibility.md#muse-cod
   different `HOME` sees it) and never says whose it is. The tool-level reading is therefore
   labelled "active credential", and browser aliases show no numbers of their own.
 
+## Switching browser logins
+
+ccswap switches Muse browser logins itself, the way it switches Claude Code accounts. It
+keeps each registered login in its 0600 store (captured by `ccswap muse add <alias>
+--browser`, or imported from a saved file with `--from-file`), and a switch replaces
+Muse's `auth.json`:
+
+1. The live login is saved back to its own account first, because Muse refreshes tokens
+   in place.
+2. ccswap refuses if the live login isn't registered, so it is never lost.
+3. The file is written atomically with mode 0600.
+4. The switch is verified by the login's recorded email and by `muse usage` accepting it.
+   If either check fails, the previous login is restored.
+
+Running Muse sessions keep the old login until restarted. The menu bar, the TUI
+(`3`, then `s`) and `ccswap muse switch <alias>` all use this path.
+
 ## Commands
 
 ```sh

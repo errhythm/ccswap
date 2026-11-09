@@ -37,7 +37,8 @@ of the account's identity.
 ```sh
 ccswap kiro add work-a                         # the active profile
 ccswap kiro add work-b --profile-arn arn:aws:codewhisperer:us-east-1:<account>:profile/<id>
-ccswap kiro switch work-b --login              # opens Kiro's own `kiro-cli profile` picker; no logout
+ccswap kiro switch work-b                      # Kiro's own `kiro-cli profile` picker, driven by ccswap; no logout
+ccswap kiro switch work-b --login              # the same picker, shown to you to choose by hand
 ```
 
 The switch is verified with `whoami`. Picking the wrong profile is reported, never
