@@ -693,3 +693,14 @@ def test_forced_refresh_reuses_only_this_passes_readings(tmp_path):
     assert summary.accounts[0][1].windows == summary.tool_usage.windows
     svc.usage("kiro", "a", refresh=True)
     assert len([c for c in r.calls if "/usage" in c.argv]) == 2  # a user refresh asks again
+
+
+def test_unregistered_current_login_gets_the_reading_only_for_its_own_identity(tmp_path):
+    svc, _ = kiro_world(tmp_path)
+    summary = Overview(svc, legacy=[]).collect_one("kiro")
+    (view, usage) = summary.accounts[0]
+    assert not view.registered and view.active and usage.windows == summary.tool_usage.windows
+    svc2, _ = kiro_world(tmp_path / "x")
+    svc2.store.add(AccountRecord("kiro", "b", "login", identity=OTHER))
+    rows = dict((v.alias, u) for v, u in Overview(svc2, legacy=[]).collect_one("kiro").accounts)
+    assert rows["b"].windows == ()  # a registered, inactive login never gets it

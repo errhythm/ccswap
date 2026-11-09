@@ -115,6 +115,11 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
                 tool,
             )
         )
+    if "storedCredential" in auth:
+        stored = {True: "credential stored", False: "no stored login", None: "unknown"}[
+            auth["storedCredential"]
+        ]
+        rows.append(MenuRow(f"Login: {stored} (Muse does not say whose)", tool))
     if auth.get("envKeyPresent"):
         rows.append(MenuRow("An API key in the environment overrides the stored login", tool))
     if summary.error:

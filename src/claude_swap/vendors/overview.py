@@ -163,9 +163,7 @@ class Overview:
             registered = {v.alias for v, _ in summary.accounts}
             for view in service.list_views(tool):
                 if not view.registered and view.alias not in registered:
-                    summary.accounts.append(
-                        (view, UsageResult(UsageState.UNAVAILABLE, "Not registered with ccswap"))
-                    )
+                    summary.accounts.append((view, _unregistered_usage(view, summary.tool_usage)))
         except (ClaudeSwitchError, OSError) as exc:
             summary.error = _safe_error(exc)
         summary.refreshed_at = time.time()
@@ -194,6 +192,21 @@ def summary_from_snapshot(
             summary.accounts.append((view, adapter.usage_of(acc)))
         summary.refreshed_at = getattr(snapshot, "taken_at", None)
     return summary
+
+
+def _unregistered_usage(view: AccountView, tool_usage: UsageResult | None) -> UsageResult:
+    """A discovered, unregistered login gets the tool-level reading only when the tool
+    reported that reading for exactly this identity (e.g. Kiro's whoami login)."""
+    ident = dict(tool_usage.identity) if tool_usage is not None else {}
+    keys = [k for k in ("email", "startUrl", "accountType") if k in ident]
+    if (
+        tool_usage is not None
+        and view.active
+        and keys
+        and all(view.identity.get(k) == ident[k] for k in keys)
+    ):
+        return tool_usage
+    return UsageResult(UsageState.UNAVAILABLE, "Not registered with ccswap")
 
 
 def _safe_error(exc: BaseException) -> str:

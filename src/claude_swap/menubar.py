@@ -743,9 +743,12 @@ def run(switcher) -> int:
                 # caught and stored independently.
                 if self._codex_snapshot_source is not None:
                     try:
-                        craw = self._codex_snapshot_source.take(
-                            full=full, store_only=self._codex_engine is not None
-                        )
+                        # Not store-only even while the Codex engine runs: Codex keeps its
+                        # usage in the switcher's in-memory cache, which this display shares
+                        # with the engine.  A reading fresher than SERVE_TTL_S is reused, so
+                        # this adds no requests; store-only left the menu at "usage
+                        # unavailable" whenever auto-switch was on.
+                        craw = self._codex_snapshot_source.take(full=full, store_only=False)
                     except Exception:
                         self.switcher._logger.debug("menubar codex snapshot failed", exc_info=True)
                     else:
