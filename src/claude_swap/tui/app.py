@@ -107,6 +107,7 @@ class CswapApp(App):
             provider: SnapshotSource(provider_switcher)
             for provider, provider_switcher in self.switchers.items()
         }
+        self.vendor_service = None  # built lazily by VendorsScreen; tests may inject one
         self._start = start  # "dashboard" | "watch" (`cswap watch`)
         self._detected = detected  # terminal background sensed pre-driver, or None
         self.snapshots = {provider: None for provider in PROVIDERS}
@@ -626,6 +627,13 @@ class CswapApp(App):
             return
         self._last_auto_provider = provider
         self.push_screen(AutoScreen(provider))
+
+    def action_open_vendors(self) -> None:
+        from claude_swap.tui.vendors import VendorsScreen
+
+        if isinstance(self.screen, VendorsScreen):
+            return
+        self.push_screen(VendorsScreen())
 
     def action_open_watch(self) -> None:
         if isinstance(self.screen, WatchScreen):

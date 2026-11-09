@@ -97,6 +97,7 @@ class DashboardScreen(Screen):
         Binding("question_mark", "option_help", mark("Option help")),
         # Power shortcuts; the menu is the discoverable path.
         Binding("g", "app.open_auto", mark("Auto view"), show=False),
+        Binding("v", "app.open_vendors", mark("Vendors"), show=False),
         Binding("f", "app.refresh_full", mark("Refresh usage"), show=False),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
@@ -139,6 +140,7 @@ class DashboardScreen(Screen):
             (self.app.gettext("Switch account…"), "switch"),
             (self.app.gettext("Watch accounts"), "watch"),
             (self.app.gettext("Auto-switch view…"), "auto"),
+            (self.app.gettext("Muse / OpenCode / Kiro…"), "vendors"),
             (self.app.gettext("Add account…"), "add-menu"),
             (self.app.gettext("Disable / enable account…"), "disable-menu"),
             (self.app.gettext("Remove account…"), "remove-menu"),
@@ -403,6 +405,7 @@ class DashboardScreen(Screen):
         actions: dict[str, Callable[[], None]] = {
             "switch": self.action_open_switch,
             "watch": app.action_open_watch,
+            "vendors": app.action_open_vendors,
             "add-token": app.action_add_token,
             "quit": app.exit,
         }

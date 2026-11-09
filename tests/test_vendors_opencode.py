@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from claude_swap.vendors.core import UnsupportedCapability, UsageState, VendorError
+from claude_swap.vendors.opencode import OpenCodeAdapter, valid_selector
+from tests.vendor_helpers import FakeRunner, fail, ok
+
+OC = "/usr/local/bin/opencode"
+GROUP_NEW = "Commands:\n  opencode auth list\n  opencode auth switch <provider> <account>\n"
+GROUP_OLD = "Commands:\n  opencode auth list\n  opencode auth login [url]\n  opencode auth logout [provider]\n"
+
+
+def make(*, new: bool, listing=None):
+    r = FakeRunner({"opencode": OC})
+    r.on(OC, "--version", result=ok("1.99.0\n" if new else "1.18.35\n"))
+    r.on(OC, "auth", "--help", result=ok(GROUP_NEW if new else GROUP_OLD))
+    r.on(OC, "auth", "list", "--help", result=ok("--format  json|table" if new else "--print-logs"))
+    r.on(OC, "auth", "login", "--help", result=ok("-p, --provider"))
+    if listing is not None:
+        r.on(OC, "auth", "list", "--format", "json", result=listing)
+    return r
+
+
+ROWS = [
+    {"provider": "anthropic", "id": "c1", "label": "work", "type": "oauth", "active": True},
+    {"provider": "anthropic", "id": "c2", "label": "personal", "type": "oauth", "active": False},
+    {"provider": "openai", "id": "c3", "label": "main", "type": "api", "active": True},
+]
+
+
+def test_probe_detects_switch_from_help_not_version():
+    assert OpenCodeAdapter(make(new=True)).probe()["switch"] is True
+    old = OpenCodeAdapter(make(new=False))
+    assert old.probe()["switch"] is False and old.probe()["json"] is False
+
+
+def test_json_listing_preserves_provider_account_relationships():
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
+    found = adapter.discover()
+    assert [(r["provider"], r["account"], r["active"]) for r in found] == [
+        ("anthropic", "work", True), ("anthropic", "personal", False), ("openai", "main", True)]
+
+
+def test_json_listing_alternate_shapes():
+    nested = {"accounts": {"anthropic": [{"id": "c1", "name": "work", "active": True}]}}
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(nested))))
+    assert adapter.discover()[0]["account"] == "work"
+
+
+@pytest.mark.parametrize("bad", ["nope", '"str"', "42"])
+def test_malformed_listing_raises(bad):
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(bad)))
+    with pytest.raises(VendorError):
+        adapter.discover()
+
+
+def test_empty_object_listing_means_no_accounts():
+    assert OpenCodeAdapter(make(new=True, listing=ok("{}"))).discover() == []
+
+
+def test_listing_failure_is_reported():
+    adapter = OpenCodeAdapter(make(new=True, listing=fail("db locked")))
+    with pytest.raises(VendorError, match="auth list"):
+        adapter.discover()
+
+
+def test_legacy_auth_json_read_only_no_secret_values(tmp_path, monkeypatch):
+    data = tmp_path / "data" / "opencode"
+    data.mkdir(parents=True)
+    (data / "auth.json").write_text(json.dumps({"opencode-go": {"type": "api", "key": "SECRET-VALUE"}}))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    adapter = OpenCodeAdapter(make(new=False))
+    rows = adapter.discover()
+    assert rows == [{"provider": "opencode-go", "account": "default", "id": None, "type": "api", "active": True}]
+    assert "SECRET-VALUE" not in json.dumps([v.to_json() for v in adapter.observe([])])
+
+
+def test_legacy_without_auth_file_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    assert OpenCodeAdapter(make(new=False)).discover() == []
+
+
+def test_switch_success_is_verified_by_relisting():
+    runner = make(new=True)
+    states = iter([ROWS, [{**ROWS[0], "active": False}, {**ROWS[1], "active": True}, ROWS[2]]])
+    runner.on(OC, "auth", "list", "--format", "json", result=lambda c: ok(json.dumps(next(states))))
+    runner.on(OC, "auth", "switch", result=ok())
+    outcome = OpenCodeAdapter(runner).switch_account("anthropic", "personal")
+    assert outcome.verified and outcome.restart_required
+    assert (OC, "auth", "switch", "anthropic", "c2") in runner.argvs()
+
+
+def test_switch_that_does_not_stick_is_restored_and_reported():
+    runner = make(new=True, listing=ok(json.dumps(ROWS)))  # never changes
+    runner.on(OC, "auth", "switch", result=ok())
+    with pytest.raises(VendorError, match="still reports"):
+        OpenCodeAdapter(runner).switch_account("anthropic", "personal")
+    switches = [a for a in runner.argvs() if a[:3] == (OC, "auth", "switch")]
+    assert switches[-1][-1] == "c1"  # restored to the previous account
+
+
+def test_switch_unknown_account_does_not_invoke_vendor():
+    runner = make(new=True, listing=ok(json.dumps(ROWS)))
+    with pytest.raises(VendorError, match="no account"):
+        OpenCodeAdapter(runner).switch_account("anthropic", "ghost")
+    assert not any(a[:3] == (OC, "auth", "switch") for a in runner.argvs())
+
+
+def test_switch_unsupported_on_legacy(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    with pytest.raises(UnsupportedCapability, match="1.18.35"):
+        OpenCodeAdapter(make(new=False)).switch_account("anthropic", "work")
+
+
+@pytest.mark.parametrize("bad", ["--help", "a b", "x;rm -rf", "$(id)", "", "a\nb", "-p"])
+def test_selectors_cannot_become_flags_or_shell(bad):
+    with pytest.raises(VendorError):
+        valid_selector(bad)
+
+
+def test_switch_rejects_injection_before_any_process():
+    runner = make(new=True, listing=ok(json.dumps(ROWS)))
+    with pytest.raises(VendorError):
+        OpenCodeAdapter(runner).switch_account("anthropic", "--yes")
+    assert runner.calls == []
+
+
+def test_register_requires_disambiguation():
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
+    with pytest.raises(VendorError, match="--account"):
+        adapter.register("a", provider="anthropic")
+    record, secret = adapter.register("work", provider="anthropic", account="work")
+    assert secret is None and record.provider == "anthropic" and record.identity["id"] == "c1"
+    assert adapter.register("o", provider="openai")[0].identity["account"] == "main"
+
+
+def test_observe_marks_registered_and_missing():
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
+    reg, _ = adapter.register("w", provider="anthropic", account="work")
+    from claude_swap.vendors.core import AccountRecord
+    ghost = AccountRecord("opencode", "g", "provider-account", "google", {"account": "x"})
+    views = adapter.observe([reg, ghost])
+    by = {v.alias: v for v in views}
+    assert by["w"].registered and by["w"].active is True
+    assert by["anthropic/personal"].registered is False and by["anthropic/personal"].active is False
+    assert "no longer listed" in by["g"].note
+
+
+def test_usage_never_fabricates_a_quota():
+    result = OpenCodeAdapter(make(new=True)).usage(None, None)
+    assert result.state is UsageState.UNSUPPORTED and result.observations == ()
+
+
+def test_local_stats_are_labelled_non_authoritative():
+    runner = make(new=True)
+    runner.on(OC, "stats", result=ok("\x1b[1mOVERVIEW\x1b[0m\nSessions 3\n"))
+    (obs,) = OpenCodeAdapter(runner).local_stats().observations
+    assert obs.authoritative is False and obs.scope == "local" and obs.kind.value == "local-tokens"
+    assert "\x1b" not in obs.data["text"]
+
+
+def test_provider_config_is_separate_and_names_only(tmp_path, monkeypatch):
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(json.dumps({"model": "anthropic/x", "provider": {"acme": {"options": {"apiKey": "SECRETKEY"}}}}))
+    monkeypatch.setenv("OPENCODE_CONFIG", str(cfg))
+    summary = OpenCodeAdapter(make(new=True)).provider_config()
+    assert summary == {"readable": True, "model": "anthropic/x", "configuredProviders": ["acme"]}
+    assert "SECRETKEY" not in json.dumps(summary)
+
+
+def test_login_uses_provider_flag_when_available():
+    runner = make(new=False)
+    runner.on_interactive(OC, "auth", "login", code=0)
+    OpenCodeAdapter(runner).login("anthropic")
+    assert runner.calls[-1].argv == (OC, "auth", "login", "--provider", "anthropic")
+
+
+def test_logout_passes_validated_arguments_only():
+    runner = make(new=True)
+    runner.on_interactive(OC, "auth", "logout", code=0)
+    OpenCodeAdapter(runner).logout("anthropic", "work")
+    assert runner.calls[-1].argv == (OC, "auth", "logout", "anthropic", "work")
+    with pytest.raises(VendorError):
+        OpenCodeAdapter(runner).logout("anthropic", "--all")

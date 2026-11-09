@@ -1028,6 +1028,7 @@ class TestDashboard:
                 "switch",
                 "watch",
                 "auto",
+                "vendors",
                 "add-menu",
                 "disable-menu",
                 "remove-menu",
