@@ -24,7 +24,7 @@ import re
 import sys
 import threading
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1122,7 +1122,14 @@ def run(switcher) -> int:
                     while label in seen:
                         label += "\u200b"
                     seen.add(label)
-                    item = rumps.MenuItem(label, callback=self._tool_row_callback(row))
+                    callback = self._tool_row_callback(row)
+                    if callback is None and row.checked:
+                        # The active account reads normally (like Claude Code's); clicking it
+                        # refreshes that tool's usage instead of doing nothing.
+                        callback = self._tool_row_callback(
+                            replace(row, action="refresh")
+                        )
+                    item = rumps.MenuItem(label, callback=callback)
                     item.state = 1 if row.checked else 0
                     items.append(item)
                 if not section.accounts:
