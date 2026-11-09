@@ -36,5 +36,10 @@ There is no `opencode run <provider> <account>`: OpenCode resolves credentials i
 server, so per-process account isolation does not exist and ccswap does not pretend it does.
 Running servers keep the previous account until restarted.
 
+If several accounts of one provider share a label, `add`/`switch` ask for the account id
+instead of picking one. A vendor identifier is never reinterpreted as a list position, and
+if a release lists no active flag the switch is reported `verified: false` rather than as
+a failure or a success.
+
 Selectors become argv entries; anything that is not `[A-Za-z0-9._@+:/-]` (so no leading
 `-`) is rejected before any process starts.

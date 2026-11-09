@@ -267,11 +267,18 @@ class VendorsScreen(Screen):
             page = VendorPage(tool, service.vendor_status(adapter), refreshed_at=time.time())
             if page.status.get("installed"):
                 page.views = service.list_views(tool)
-        except ClaudeSwitchError as exc:
+        except (ClaudeSwitchError, OSError) as exc:
             page = VendorPage(
                 tool, {"installed": True, "label": tool}, error=str(exc), refreshed_at=time.time()
             )
-        self.app.call_from_thread(self._loaded, page)
+        self._post(self._loaded, page)
+
+    def _post(self, fn, *args) -> None:
+        """Hand a worker result to the UI thread unless the screen was left meanwhile."""
+        try:
+            self.app.call_from_thread(lambda: fn(*args) if self.is_attached else None)
+        except RuntimeError:  # app already shut down
+            pass
 
     def _loaded(self, page: VendorPage) -> None:
         self._pages[page.tool] = page
@@ -285,9 +292,9 @@ class VendorsScreen(Screen):
         def work() -> None:
             try:
                 result = self.service.usage(tool, alias or None, refresh=True)
-            except ClaudeSwitchError as exc:
+            except (ClaudeSwitchError, OSError) as exc:
                 result = UsageResult(UsageState.UNAVAILABLE, str(exc))
-            self.app.call_from_thread(self._usage_done, tool, view.alias if view else "", result)
+            self._post(self._usage_done, tool, view.alias if view else "", result)
 
         self.run_worker(work, thread=True, group="vendors-usage", exit_on_error=False)
 
@@ -296,12 +303,22 @@ class VendorsScreen(Screen):
         self._render_detail()
 
     def action_capabilities(self) -> None:
-        adapter = self.service.adapter(self.tool)
-        table = self.service.capability_table(adapter)
-        text = "\n".join(
-            f"{name:<22} {s['support']:<12} {s['mechanism']}" for name, s in table.items()
-        )
-        self.app.push_screen(OutputModal(f"{adapter.label} — capabilities", text))
+        tool = self.tool
+
+        def work() -> None:
+            adapter = self.service.adapter(tool)
+            try:
+                table = self.service.capability_table(adapter)
+                text = "\n".join(
+                    f"{name:<22} {s['support']:<12} {s['mechanism']}" for name, s in table.items()
+                )
+            except (ClaudeSwitchError, OSError) as exc:
+                text = str(exc)
+            self._post(
+                lambda: self.app.push_screen(OutputModal(f"{adapter.label} — capabilities", text))
+            )
+
+        self.run_worker(work, thread=True, group="vendors-caps", exit_on_error=False)
 
     def action_add_help(self) -> None:
         prog = "ccswap"
@@ -352,9 +369,12 @@ class VendorsScreen(Screen):
     def _start_switch(self, view: AccountView, *, assume_yes: bool) -> None:
         self._busy = True
         tool = self.tool
+        # A registered account is addressed by alias. Only an unregistered OpenCode account is
+        # addressed by the vendor's own id/label, and then it must never be read as a list index.
+        raw = tool == "opencode" and not view.registered
         selector = (
-            (view.identity.get("id") or view.identity.get("account"))
-            if tool == "opencode"
+            (view.identity.get("id") or view.identity.get("account") or view.alias)
+            if raw
             else view.alias
         )
         provider = view.provider if tool == "opencode" else None
@@ -362,14 +382,16 @@ class VendorsScreen(Screen):
         def work() -> None:
             try:
                 outcome, _ = self.service.switch(
-                    tool, selector or view.alias, provider=provider, assume_yes=assume_yes
+                    tool, selector, provider=provider, assume_yes=assume_yes, raw=raw
                 )
                 message = outcome.message + (
                     "\n⟳ restart running sessions to pick it up" if outcome.restart_required else ""
                 )
-            except ClaudeSwitchError as exc:
+            except (ClaudeSwitchError, OSError) as exc:
                 message = f"switch failed: {exc}"
-            self.app.call_from_thread(self._switch_done, message)
+            except Exception as exc:  # noqa: BLE001 - never leave the screen stuck in "busy"
+                message = f"switch failed unexpectedly: {type(exc).__name__}"
+            self._post(self._switch_done, message)
 
         self.run_worker(work, thread=True, group="vendors-switch", exit_on_error=False)
 

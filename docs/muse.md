@@ -28,6 +28,12 @@ ccswap muse usage [work] [--refresh] [--json]
 ccswap muse remove work                  # forget the registration + ccswap's copy of the key; Muse untouched
 ```
 
+`active` is always *unknown* for Muse in `list --json` (`null`): Muse cannot say which
+credential it will use. After a `switch`, the list only notes "last switched to by ccswap;
+unconfirmed". `usage` for a browser alias is unsupported (the numbers would belong to
+whichever session is current); `ccswap muse usage` with no alias reports the active
+credential and labels it `active-credential`.
+
 Prefer `run` over `switch`: it changes nothing global, so it is safe next to other running
 sessions. `switch` is for making a key the machine-wide default; it cannot confirm the
 result (Muse cannot be asked which key is stored), and says so (`"verified": false`).

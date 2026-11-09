@@ -66,6 +66,7 @@ and every result says honestly whether it was `verified`.
   0700 directory; the metadata file never contains a secret. File names are random, aliases
   are validated (`^[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}$`), symlinked stores/secrets are
   refused, loosened modes are repaired, tampered `secretRef` values are ignored.
+  On Windows the POSIX modes do not exist; the files inherit the user-profile ACL.
   Limitation: this is a permission-protected file, not an OS keychain (a keychain write
   needs the secret on a command line); anyone running as you can read it, as they can read
   Muse's own `auth.json`.

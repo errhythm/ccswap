@@ -122,7 +122,7 @@ def test_switch_unsupported_on_legacy(tmp_path, monkeypatch):
         OpenCodeAdapter(make(new=False)).switch_account("anthropic", "work")
 
 
-@pytest.mark.parametrize("bad", ["--help", "a b", "x;rm -rf", "$(id)", "", "a\nb", "-p"])
+@pytest.mark.parametrize("bad", ["--help", "x;rm -rf", "$(id)", "", "a\nb", "-p"])
 def test_selectors_cannot_become_flags_or_shell(bad):
     with pytest.raises(VendorError):
         valid_selector(bad)
@@ -197,3 +197,69 @@ def test_logout_passes_validated_arguments_only():
     assert runner.calls[-1].argv == (OC, "auth", "logout", "anthropic", "work")
     with pytest.raises(VendorError):
         OpenCodeAdapter(runner).logout("anthropic", "--all")
+
+
+def test_labels_with_spaces_are_single_safe_arguments():
+    assert valid_selector("Team Work") == "Team Work"
+    for bad in ("-x", " lead", "a;b"):
+        with pytest.raises(VendorError):
+            valid_selector(bad)
+
+
+DUP = [
+    {"provider": "anthropic", "id": "c1", "label": "work", "type": "oauth", "active": True},
+    {"provider": "anthropic", "id": "c2", "label": "work", "type": "oauth", "active": False},
+]
+
+
+def test_duplicate_labels_require_the_id():
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(DUP))))
+    with pytest.raises(VendorError, match="account id"):
+        adapter.register("w", provider="anthropic", account="work")
+    record, _ = adapter.register("w2", provider="anthropic", account="c2")
+    assert record.identity["id"] == "c2"
+    with pytest.raises(VendorError, match="account id"):
+        adapter.switch_account("anthropic", "work")
+
+
+def test_observe_distinguishes_same_label_accounts_by_id():
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(DUP))))
+    record, _ = adapter.register("w2", provider="anthropic", account="c2")
+    views = adapter.observe([record])
+    assert [(v.registered, v.alias == "w2") for v in views] == [(False, False), (True, True)]
+
+
+def test_listing_without_active_info_cannot_verify_but_does_not_claim_failure():
+    rows = [{k: v for k, v in r.items() if k != "active"} for r in ROWS]
+    runner = make(new=True, listing=ok(json.dumps(rows)))
+    runner.on(OC, "auth", "switch", result=ok())
+    outcome = OpenCodeAdapter(runner).switch_account("anthropic", "personal")
+    assert outcome.verified is False and "cannot be verified" in outcome.message
+
+
+def test_relist_failure_after_a_successful_switch_is_reported_as_unverified():
+    runner = make(new=True)
+    answers = iter([ok(json.dumps(ROWS)), fail("db locked")])
+    runner.on(OC, "auth", "list", "--format", "json", result=lambda c: next(answers))
+    runner.on(OC, "auth", "switch", result=ok())
+    outcome = OpenCodeAdapter(runner).switch_account("anthropic", "personal")
+    assert outcome.verified is False and outcome.warnings
+
+
+def test_failed_restore_is_reported_not_claimed():
+    runner = make(new=True, listing=ok(json.dumps(ROWS)))  # the switch never sticks
+
+    def switch(call):
+        return ok() if call.argv[-1] == "c2" else fail("cannot restore")
+
+    runner.on(OC, "auth", "switch", result=switch)
+    with pytest.raises(VendorError, match="could not restore"):
+        OpenCodeAdapter(runner).switch_account("anthropic", "personal")
+
+
+def test_legacy_logout_never_passes_an_account(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    runner = make(new=False)
+    runner.on_interactive(OC, "auth", "logout", code=0)
+    OpenCodeAdapter(runner).logout("anthropic", "work")
+    assert runner.calls[-1].argv == (OC, "auth", "logout", "anthropic")

@@ -206,4 +206,25 @@ def test_auth_summary_never_contains_key_value(adapter, monkeypatch):
 def test_observe_flags_env_override(adapter, monkeypatch):
     monkeypatch.setenv(ENV_KEY, KEY)
     (view,) = adapter.observe([api_record()], "work")
-    assert view.active is True and "overrides" in view.note
+    assert view.active is None  # muse cannot say which credential is in use
+    assert "overrides" in view.note and "unconfirmed" in view.note
+
+
+def test_browser_alias_usage_is_not_attributed_to_the_ambient_session(adapter, runner):
+    result = adapter.usage(AccountRecord("muse", "b", "browser"), None)
+    assert result.state is UsageState.UNSUPPORTED
+    assert not any(c.argv[1:2] == ("usage",) for c in runner.calls)
+
+
+def test_unselected_usage_is_labelled_as_the_active_credential(adapter, runner):
+    runner.on(MUSE, "usage", "--json", result=ok(json.dumps({"allowance": {"used": 1}})))
+    (obs,) = adapter.usage(None, None).observations
+    assert obs.scope == "active-credential"
+
+
+def test_browser_login_does_not_become_the_recorded_active_account(adapter, runner):
+    runner.on_interactive(MUSE, "login", code=0)
+    outcome = adapter.switch(
+        AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True
+    )
+    assert outcome.activates is False

@@ -6,6 +6,7 @@ import pytest
 
 from claude_swap.vendors.core import (
     AccountRecord,
+    RunResult,
     UnsupportedCapability,
     UsageState,
     VendorError,
@@ -264,3 +265,66 @@ def test_capability_table_marks_auto_switch_unsupported():
     adapter = KiroAdapter(make()[0])
     caps = {c.value: s.support.value for c, s in adapter.capabilities(adapter.detect()).items()}
     assert caps["auto-switch"] == "unsupported" and caps["usage"] == "unsupported"
+
+
+def test_whoami_failure_is_not_mistaken_for_logged_out():
+    runner = FakeRunner({"kiro-cli": KIRO})
+    runner.on(KIRO, "--version", result=ok("kiro-cli 3.1.0"))
+    runner.on(KIRO, "whoami", result=RunResult(124, timed_out=True))
+    assert KiroAdapter(runner).whoami_state() == ("error", None)
+    runner.on(KIRO, "whoami", result=fail("segfault"))
+    assert KiroAdapter(runner).whoami_state() == ("error", None)
+    runner.on(KIRO, "whoami", result=ok("garbage"))
+    assert KiroAdapter(runner).whoami_state() == ("error", None)
+    runner.on(KIRO, "whoami", result=fail("Not logged in"))
+    assert KiroAdapter(runner).whoami_state() == ("out", None)
+
+
+def test_switch_aborts_without_logout_when_whoami_is_unreadable():
+    runner = FakeRunner({"kiro-cli": KIRO})
+    runner.on(KIRO, "--version", result=ok("kiro-cli 3.1.0"))
+    runner.on(KIRO, "whoami", result=RunResult(124, timed_out=True))
+    runner.on_interactive(KIRO, "logout", code=0)
+    with pytest.raises(VendorError, match="nothing was changed"):
+        KiroAdapter(runner).switch(
+            login_rec(), None, assume_yes=True, interactive=True, context=[login_rec()]
+        )
+    assert not any(c.interactive for c in runner.calls)
+
+
+def test_switch_when_logged_out_skips_logout_and_logs_in():
+    runner, state = make(None)
+    runner.on(
+        KIRO, "whoami", result=lambda c: state.whoami(c) if state.who else fail("Not logged in")
+    )
+    runner.on_interactive(KIRO, "login", code=lambda c: (setattr(state, "who", IDC), 0)[1])
+    outcome = KiroAdapter(runner).switch(
+        login_rec(), None, assume_yes=False, interactive=True, context=[login_rec()]
+    )
+    assert outcome.verified
+    assert [c.argv[1] for c in runner.calls if c.interactive] == ["login"]
+
+
+def test_identity_includes_account_type_and_ignores_email_case():
+    from claude_swap.vendors.kiro import _same_login
+
+    assert _same_login({**IDC, "email": "A@Corp.com"}, IDC)
+    assert not _same_login(
+        {**IDC, "accountType": "BuilderId", "startUrl": ""}, {**IDC, "startUrl": ""}
+    )
+    assert not _same_login(IDC, {**IDC, "startUrl": "https://other.awsapps.com/start"})
+
+
+def test_ctrl_c_during_login_names_the_recovery_command():
+    runner, state = make(OTHER)
+    runner.on_interactive(KIRO, "logout", code=lambda c: (setattr(state, "who", None), 0)[1])
+
+    def interrupted(call):
+        raise KeyboardInterrupt
+
+    runner.on_interactive(KIRO, "login", code=interrupted)
+    ctx = [login_rec(), login_rec("b", OTHER)]
+    with pytest.raises(VendorError, match="Recover with: kiro-cli login"):
+        KiroAdapter(runner).switch(
+            login_rec(), None, assume_yes=True, interactive=True, context=ctx
+        )

@@ -17,6 +17,7 @@ from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.json_output import SCHEMA_VERSION
 from claude_swap.locking import FileLock
 from claude_swap.vendors.core import (
+    AccountNotRegistered,
     AccountRecord,
     AccountView,
     Capability,
@@ -63,21 +64,36 @@ class VendorService:
             return
         raise UnsupportedCapability(f"{adapter.label} does not support {verb}")
 
-    def resolve(self, tool: str, selector: str, provider: str | None = None) -> AccountRecord:
+    def resolve(
+        self,
+        tool: str,
+        selector: str,
+        provider: str | None = None,
+        *,
+        allow_index: bool = True,
+    ) -> AccountRecord:
+        """Alias first (so a numeric alias stays reachable), then ``list`` position.
+
+        ``allow_index=False`` is for selectors that are vendor identifiers (an OpenCode
+        account id/label), which must never be reinterpreted as a list position.
+        """
         records = [
             r for r in self.store.records(tool) if provider is None or r.provider == provider
         ]
-        if selector.isdigit():
+        exact = [r for r in records if r.alias == selector]
+        if exact:
+            return exact[0]
+        if allow_index and selector.isascii() and selector.isdigit():
             index = int(selector)
             if 1 <= index <= len(records):
                 return records[index - 1]
-            raise VendorError(f"No registered {tool} account number {selector}")
-        exact = [r for r in records if r.alias == selector]
-        loose = exact or [
+            raise AccountNotRegistered(f"No registered {tool} account number {selector}")
+        lowered = selector.lower()
+        loose = [
             r
             for r in records
-            if r.alias.lower() == selector.lower()
-            or selector.lower()
+            if r.alias.lower() == lowered
+            or lowered
             in (r.identity.get("email", "").lower(), r.identity.get("account", "").lower())
         ]
         if len(loose) == 1:
@@ -86,7 +102,9 @@ class VendorService:
             raise VendorError(
                 f"'{selector}' matches several {tool} accounts; use the alias or number"
             )
-        raise VendorError(f"No registered {tool} account '{selector}' (see `ccswap {tool} list`)")
+        raise AccountNotRegistered(
+            f"No registered {tool} account '{selector}' (see `ccswap {tool} list`)"
+        )
 
     def _secret(self, record: AccountRecord) -> str | None:
         return self.store.read_secret(record) if record.secret_ref else None
@@ -137,15 +155,17 @@ class VendorService:
             ]
         return adapter.observe(records, self.store.active(tool))
 
-    def list_payload(self, tool: str) -> dict:
+    def list_payload(self, tool: str, views: list[AccountView] | None = None) -> dict:
         adapter = self.adapter(tool)
         info = adapter.detect()
+        if views is None:
+            views = self.list_views(tool)
         return {
             "schemaVersion": SCHEMA_VERSION,
             "tool": tool,
             "installed": info.installed,
             "version": info.version,
-            "accounts": [v.to_json() for v in self.list_views(tool)],
+            "accounts": [v.to_json() for v in views],
         }
 
     def status_payload(self, tool: str) -> dict:
@@ -161,6 +181,16 @@ class VendorService:
         validate_alias(alias)
         adapter.require_installed()
         record, secret = adapter.register(alias, **options)  # type: ignore[attr-defined]
+        if record.identity:
+            for other in self.store.records(tool):
+                if (other.kind, other.provider, dict(other.identity)) == (
+                    record.kind,
+                    record.provider,
+                    dict(record.identity),
+                ):
+                    raise VendorError(
+                        f"That {adapter.label} account is already registered as '{other.alias}'"
+                    )
         return self.store.add(record, secret)
 
     def remove(self, tool: str, selector: str, provider: str | None = None) -> AccountRecord:
@@ -176,17 +206,22 @@ class VendorService:
         provider: str | None = None,
         assume_yes: bool = False,
         interactive: bool = False,
+        raw: bool = False,
     ) -> tuple[SwitchOutcome, AccountRecord | None]:
         adapter = self.adapter(tool)
         self._need(adapter, SwitchingCapability, Capability.SWITCH, "account switching")
         adapter.require_installed()
         records = self.store.records(tool)
-        try:
-            record: AccountRecord | None = self.resolve(tool, selector, provider)
-        except VendorError:
-            if tool != "opencode" or provider is None:
-                raise
-            record = None  # OpenCode: an unregistered but vendor-listed account is fine
+        record: AccountRecord | None = None
+        if not raw:
+            try:
+                record = self.resolve(tool, selector, provider, allow_index=tool != "opencode")
+            except AccountNotRegistered:
+                if tool != "opencode" or provider is None:
+                    raise
+        if record is None and (tool != "opencode" or provider is None):
+            raise AccountNotRegistered(f"No registered {tool} account '{selector}'")
+        # OpenCode only: an unregistered but vendor-listed (provider, account) is switchable.
         secret = self._secret(record) if record else None
         lock = FileLock(self.store.root / f"switch-{tool}.lock", timeout=10.0)
         if not lock.acquire():
@@ -199,7 +234,7 @@ class VendorService:
                     record, secret, assume_yes=assume_yes, interactive=interactive, context=records
                 )
             warnings = list(outcome.warnings)
-            if record is not None:
+            if record is not None and outcome.activates:
                 try:
                     self.store.set_active(tool, record.alias, record.provider)
                 except ClaudeSwitchError:
@@ -237,7 +272,11 @@ class VendorService:
     def usage_payload(
         self, tool: str, selector: str | None = None, *, refresh: bool = False
     ) -> dict:
-        payload = self.usage(tool, selector, refresh=refresh).to_json()
+        return self.usage_envelope(tool, selector, self.usage(tool, selector, refresh=refresh))
+
+    @staticmethod
+    def usage_envelope(tool: str, selector: str | None, result: UsageResult) -> dict:
+        payload = result.to_json()
         payload.update(schemaVersion=SCHEMA_VERSION, tool=tool, account=selector)
         return payload
 

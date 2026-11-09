@@ -67,11 +67,19 @@ def parse_whoami(text: str) -> dict[str, str] | None:
 
 
 def _same_login(identity: Mapping[str, str], current: Mapping[str, str]) -> bool:
-    return bool(
-        identity.get("email")
-        and identity.get("email") == current.get("email")
-        and identity.get("startUrl", "") == current.get("startUrl", "")
-    )
+    """Same login = same email, same Identity Center start URL and, when both say, same type.
+
+    ``whoami`` does not name the social provider, so a Google and a GitHub login with one
+    email look identical; ``VendorService.add`` therefore refuses to register two logins
+    with the same identity instead of guessing between them.
+    """
+    email, other = identity.get("email", ""), current.get("email", "")
+    if not email or email.lower() != other.lower():
+        return False
+    if identity.get("startUrl", "") != current.get("startUrl", ""):
+        return False
+    kinds = (identity.get("accountType", ""), current.get("accountType", ""))
+    return not all(kinds) or kinds[0].lower() == kinds[1].lower()
 
 
 def _hint_args(hint: Mapping[str, str]) -> list[str]:
@@ -141,12 +149,26 @@ class KiroAdapter(ToolAdapter):
 
     # ---- state -------------------------------------------------------
 
-    def whoami(self) -> dict[str, str] | None:
+    def whoami_state(self) -> tuple[str, dict[str, str] | None]:
+        """("in", identity) | ("out", None) | ("error", None).
+
+        Only an explicit "not logged in" counts as logged out. A timeout, crash or
+        unparseable output is "error", and destructive steps must not run on it.
+        """
         info = self.detect()
         if not info.installed:
-            return None
+            return "error", None
         result = self.runner.run([info.exe, "whoami", "-f", "json"], timeout=20)
-        return parse_whoami(result.stdout) if result.ok else None
+        if result.ok:
+            who = parse_whoami(result.stdout)
+            return ("in", who) if who else ("error", None)
+        text = f"{result.stdout}\n{result.stderr}".lower()
+        if not result.timed_out and not result.missing and "not logged in" in text:
+            return "out", None
+        return "error", None
+
+    def whoami(self) -> dict[str, str] | None:
+        return self.whoami_state()[1]
 
     def auth_summary(self) -> dict:
         who = self.whoami()
@@ -164,19 +186,19 @@ class KiroAdapter(ToolAdapter):
     def observe(
         self, records: Sequence[AccountRecord], last_active: str | None = None
     ) -> list[AccountView]:
-        who = self.whoami()
+        state, who = self.whoami_state()
         env = bool(os.environ.get(ENV_KEY))
         views: list[AccountView] = []
         matched = False
         for rec in records:
             if rec.kind == "login":
-                is_active = bool(who and _same_login(rec.identity, who))
-                matched = matched or is_active
-                note = (
-                    "KIRO_API_KEY in this environment overrides the login"
-                    if env and is_active
-                    else ""
+                is_active: bool | None = (
+                    None if state == "error" else bool(who and _same_login(rec.identity, who))
                 )
+                matched = matched or bool(is_active)
+                note = "kiro-cli whoami failed; login state unknown" if state == "error" else ""
+                if env and is_active:
+                    note = "KIRO_API_KEY in this environment overrides the login"
                 views.append(
                     AccountView(
                         self.key,
@@ -291,7 +313,12 @@ class KiroAdapter(ToolAdapter):
         warnings = []
         if os.environ.get(ENV_KEY):
             warnings.append("KIRO_API_KEY is set in this environment and overrides the login")
-        current = self.whoami()
+        state, current = self.whoami_state()
+        if state == "error":
+            raise VendorError(
+                "Cannot read the current Kiro login (`kiro-cli whoami` failed or timed out); "
+                "nothing was changed"
+            )
         if current and _same_login(record.identity, current):
             return SwitchOutcome(
                 True, False, f"'{record.alias}' is already the active Kiro login", tuple(warnings)
@@ -301,25 +328,31 @@ class KiroAdapter(ToolAdapter):
                 "Kiro logins can only be changed interactively. Re-run with --login to run "
                 "`kiro-cli logout` and `kiro-cli login` here"
             )
-        if current and not any(
-            r.kind == "login" and _same_login(r.identity, current) for r in context
-        ):
+        login_args = _hint_args(record.login_hint)
+        recovery = " ".join(["kiro-cli", "login", *login_args])
+        if current:  # logged in as someone else: ending that login needs every safeguard
+            if not any(r.kind == "login" and _same_login(r.identity, current) for r in context):
+                raise VendorError(
+                    "The current Kiro login is not registered with ccswap, so it could not be "
+                    "restored after logout. Run `ccswap kiro add <alias>` for it first"
+                )
+            if not assume_yes:
+                raise VendorError(
+                    "This ends the current Kiro login (`kiro-cli logout`). Re-run with --yes "
+                    "to confirm"
+                )
+            if self.runner.run_interactive([info.exe, "logout"]) != 0:
+                raise VendorError("`kiro-cli logout` failed; the login was left as it was")
+        try:
+            code = self.runner.run_interactive([info.exe, "login", *login_args])
+        except KeyboardInterrupt:
             raise VendorError(
-                "The current Kiro login is not registered with ccswap, so it could not be "
-                "restored after logout. Run `ccswap kiro add <alias>` for it first"
-            )
-        if current and not assume_yes:
+                f"Interrupted; you may be logged out. Recover with: {recovery}"
+            ) from None
+        state, after = self.whoami_state()
+        if code != 0 or state != "in" or not after:
             raise VendorError(
-                "This ends the current Kiro login (`kiro-cli logout`). Re-run with --yes to confirm"
-            )
-        if self.runner.run_interactive([info.exe, "logout"]) != 0:
-            raise VendorError("`kiro-cli logout` failed; the login was left as it was")
-        code = self.runner.run_interactive([info.exe, "login", *_hint_args(record.login_hint)])
-        after = self.whoami()
-        if code != 0 or not after:
-            raise VendorError(
-                "`kiro-cli login` did not complete; you are logged out. "
-                f"Recover with: kiro-cli login {' '.join(_hint_args(record.login_hint))}".strip()
+                f"`kiro-cli login` did not complete; you may be logged out. Recover with: {recovery}"
             )
         if not _same_login(record.identity, after):
             raise VendorError(

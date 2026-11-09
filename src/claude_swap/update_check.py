@@ -267,7 +267,8 @@ def held_back_release_notice(current_version: str) -> str | None:
 
 
 def _is_fork_build(version: str) -> bool:
-    return "+" in version
+    """True for builds of this fork's PEP 440 local version (``X.Y.Z+vendors.N``)."""
+    return "+vendors" in version
 
 
 def fork_upgrade_refusal(version: str) -> str | None:

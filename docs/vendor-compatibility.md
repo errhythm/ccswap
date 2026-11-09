@@ -31,7 +31,7 @@ code, so the table and the behaviour cannot drift apart.
 | Account enumeration / identification | unsupported | no `whoami`/`accounts` command; ccswap only knows accounts you register |
 | Registration | supported | API key from stdin/no-echo prompt into ccswap's 0600 store; browser sessions are an alias only, no token is copied |
 | Native activation | conditional | API-key accounts: `muse auth set --provider meta --api-key-stdin` (key on stdin). **Replaces** whatever Muse has stored, including a browser session, so `--yes` is required. Browser accounts: not switchable, only `muse login` |
-| Post-switch verification | unsupported | muse offers no way to read back the stored identity; the result says `verified: false` |
+| Post-switch verification | unsupported | muse offers no way to read back the stored identity; the result says `verified: false`, and `active` stays `null` (unknown) in listings |
 | Credential ownership | n/a | Muse owns its stored credential; ccswap owns only the API keys you registered with it |
 | Global vs project settings | unverified | ccswap never reads or writes `settings.json`/`trust.json`; Muse sandbox and approval modes are untouched |
 | Model selection | unsupported | left to `muse --model` / settings; not managed |

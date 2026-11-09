@@ -641,6 +641,7 @@ def run(switcher) -> int:
             self._refreshing = False
             self.vendor_rows = {}  # tool -> [MenuRow]; filled by the refresh worker
             self._vendor_at = 0.0
+            self._vendor_refreshing = False
             self._config_path = switcher._get_claude_config_path()
             self._config_mtime = 0.0
             self._last_usage_log: dict = {}  # (provider, account num) -> last-logged (5h, 7d) key
@@ -734,22 +735,36 @@ def run(switcher) -> int:
                         self._log_usage(codex_snap, "codex")
                         self.codex_snapshot = codex_snap
                         dirty = True
-                if time.time() - self._vendor_at > VENDOR_REFRESH_SECONDS:
-                    # Vendor CLIs are spawned processes: poll them far less often
-                    # than the usage snapshot, and never let them break the pass.
-                    self._vendor_at = time.time()
-                    try:
-                        from claude_swap.vendors.menu import collect
-                        from claude_swap.vendors.service import VendorService
-
-                        self.vendor_rows = collect(VendorService())
-                        dirty = True
-                    except Exception:
-                        self.switcher._logger.debug("menubar vendor refresh failed", exc_info=True)
                 if dirty:
                     self._dirty = True  # picked up by on_sync_tick on the main thread
             finally:
                 self._refreshing = False
+            self._maybe_refresh_vendors()
+
+        def _maybe_refresh_vendors(self):
+            """Vendor CLIs are spawned processes: poll sparingly, on their own thread, so a slow
+            or hung vendor never delays the Claude/Codex snapshot or a manual refresh."""
+            if self._vendor_refreshing or time.time() - self._vendor_at <= VENDOR_REFRESH_SECONDS:
+                return
+            self._vendor_refreshing = True
+            self._vendor_at = time.time()
+            threading.Thread(target=self._vendor_worker, daemon=True).start()
+
+        def _vendor_worker(self):
+            try:
+                from claude_swap.vendors.menu import MenuRow, collect
+                from claude_swap.vendors.service import VendorService
+
+                self.vendor_rows = collect(VendorService())
+                self._dirty = True
+            except Exception:  # noqa: BLE001 - optional surface; never break the menu bar
+                self.switcher._logger.debug("menubar vendor refresh failed", exc_info=True)
+                from claude_swap.vendors.menu import MenuRow
+
+                self.vendor_rows = {"error": [MenuRow("Vendor status unavailable", "error")]}
+                self._dirty = True
+            finally:
+                self._vendor_refreshing = False
 
         def _log_usage(self, snap, provider):
             """Log each account's session/weekly limits when they change.
@@ -1047,7 +1062,9 @@ def run(switcher) -> int:
             from claude_swap.vendors.service import VendorService
 
             try:
-                outcome, _ = VendorService().switch(row.tool, row.selector, provider=row.provider)
+                outcome, _ = VendorService().switch(
+                    row.tool, row.selector, provider=row.provider, raw=True
+                )
                 rumps.notification("ccswap", "OpenCode account switched", outcome.message)
             except ClaudeSwitchError as e:
                 rumps.notification("ccswap", "Switch failed", str(e))

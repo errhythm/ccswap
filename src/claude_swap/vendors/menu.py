@@ -40,7 +40,7 @@ def collect(service: VendorService) -> dict[str, list[MenuRow]]:
                 rows.append(MenuRow(f"{adapter.label} {info.version or ''}".strip(), tool))
                 views = service.list_views(tool)
                 if not views:
-                    rows.append(MenuRow("  no accounts", tool))
+                    rows.append(MenuRow(f"  no {adapter.label} accounts", tool))
                 for view in views:
                     mark = {True: "●", False: "○", None: "?"}[view.active]
                     where = f"{view.provider}/" if view.provider and tool != "opencode" else ""

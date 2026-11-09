@@ -27,6 +27,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -49,6 +50,10 @@ class UnsupportedCapability(VendorError):
     """The vendor product cannot do this (exit status 3)."""
 
     exit_code = 3
+
+
+class AccountNotRegistered(VendorError):
+    """No registered account matches a selector (as opposed to an ambiguous one)."""
 
 
 class ToolMissing(VendorError):
@@ -232,6 +237,8 @@ class SwitchOutcome:
     restart_required: bool
     message: str
     warnings: tuple[str, ...] = ()
+    # False when nothing ccswap can name became "the active account" (e.g. a browser login).
+    activates: bool = True
 
     def to_json(self) -> dict:
         return {
@@ -389,7 +396,8 @@ def short_detail(result: RunResult, secrets: Sequence[str] = ()) -> str:
     if result.timed_out:
         return "timed out"
     first = (result.stderr or result.stdout or "").strip().splitlines()
-    return redact(first[0][:200], secrets) if first else f"exit status {result.returncode}"
+    # Redact the whole line first: truncating first could cut a secret in half and keep a prefix.
+    return redact(first[0], secrets)[:200] if first else f"exit status {result.returncode}"
 
 
 # --------------------------------------------------------------------------
@@ -407,14 +415,20 @@ class ToolAdapter:
     # Which accounts-kinds ``add`` can register, for help text and the TUI.
     kinds: tuple[str, ...] = ()
 
+    DETECT_TTL = 5.0  # a status pass asks several times; the answer cannot change that fast
+
     def __init__(self, runner: Runner | None = None) -> None:
         self.runner: Runner = runner or SubprocessRunner()
+        self._detected: tuple[float, ToolInfo] | None = None
 
     def detect(self) -> ToolInfo:
+        now = time.monotonic()
+        if self._detected and now - self._detected[0] < self.DETECT_TTL:
+            return self._detected[1]
         path = self.runner.which(self.binary)
-        if not path:
-            return ToolInfo(False)
-        return ToolInfo(True, path, self._version(path))
+        info = ToolInfo(True, path, self._version(path)) if path else ToolInfo(False)
+        self._detected = (now, info)
+        return info
 
     def _version(self, path: str) -> str | None:
         result = self.runner.run([path, "--version"], timeout=10)

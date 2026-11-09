@@ -38,10 +38,10 @@ def _prog() -> str:
 
 def read_secret(prompt: str, *, from_stdin: bool) -> str:
     """Never from argv: a pipe/redirect, or a no-echo prompt on a terminal."""
-    if from_stdin or not sys.stdin.isatty():
-        value = sys.stdin.readline()
+    if sys.stdin.isatty():
+        value = getpass.getpass(prompt)  # hidden, even when --api-key-stdin was requested
     else:
-        value = getpass.getpass(prompt)
+        value = sys.stdin.readline()
     return value.strip()
 
 
@@ -227,6 +227,14 @@ def tool_command(tool: str, argv: list[str], service: VendorService | None = Non
         return _dispatch(tool, args, service, as_json)
     except (ClaudeSwitchError, OSError) as exc:
         return _fail(exc, as_json)
+    except KeyboardInterrupt:
+        hint = (
+            " If you were switching a Kiro login, run `kiro-cli login` to sign in again."
+            if tool == "kiro"
+            else ""
+        )
+        printer.error(f"Interrupted.{hint}")
+        return 130
 
 
 def _emit(payload: dict, as_json: bool, human) -> int:
@@ -242,7 +250,9 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
     adapter = service.adapter(tool)
     if action in ("list", "accounts"):
         views = service.list_views(tool)
-        return _emit(service.list_payload(tool), as_json, lambda: render_accounts(tool, views))
+        return _emit(
+            service.list_payload(tool, views), as_json, lambda: render_accounts(tool, views)
+        )
     if action == "status":
         payload = service.status_payload(tool)
         return _emit(payload, as_json, lambda: render_status(payload))
@@ -251,8 +261,8 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
             result = adapter.local_stats()  # type: ignore[attr-defined]
             payload = {"schemaVersion": 1, "tool": tool, **result.to_json()}
         else:
-            payload = service.usage_payload(tool, args.account, refresh=args.refresh)
-            result = service.usage(tool, args.account)
+            result = service.usage(tool, args.account, refresh=args.refresh)
+            payload = service.usage_envelope(tool, args.account, result)
         return _emit(payload, as_json, lambda: render_usage(result))
     if action == "add":
         options: dict = {}
@@ -338,7 +348,8 @@ def vendors_command(argv: list[str], service: VendorService | None = None) -> in
     sub = parser.add_subparsers(dest="action")
     for name in ("status", "capabilities"):
         p = sub.add_parser(name)
-        p.add_argument("--json", action="store_true")
+        # SUPPRESS: a subparser default would overwrite the parent's `vendors --json`.
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         if name == "capabilities":
             p.add_argument("tool", nargs="?", choices=TOOLS)
     parser.add_argument("--json", action="store_true")

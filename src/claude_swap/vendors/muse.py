@@ -148,26 +148,23 @@ class MuseAdapter(ToolAdapter):
     def observe(
         self, records: Sequence[AccountRecord], last_active: str | None = None
     ) -> list[AccountView]:
+        """``active`` is always unknown: muse cannot say which credential it will use."""
         env = bool(os.environ.get(ENV_KEY))
         views = []
         for rec in records:
-            note = ""
-            active: bool | None = None
+            notes = []
             if rec.kind == "api-key" and last_active == rec.alias:
-                active = True
-                note = "last activated by ccswap (muse cannot confirm which key is stored)"
+                notes.append("last switched to by ccswap; unconfirmed (muse cannot report its key)")
             if env:
-                note = (
-                    note + "; " if note else ""
-                ) + "META_API_KEY in this environment overrides stored login"
+                notes.append("META_API_KEY in this environment overrides any stored login")
             views.append(
                 AccountView(
                     tool=self.key,
                     alias=rec.alias,
                     kind=rec.kind,
                     identity=rec.identity,
-                    active=active,
-                    note=note,
+                    active=None,
+                    note="; ".join(notes),
                 )
             )
         return views
@@ -217,6 +214,7 @@ class MuseAdapter(ToolAdapter):
                 "Signed in with `muse login`. Muse exposes no identity, so ccswap "
                 "cannot verify which account is now active",
                 tuple(warnings),
+                activates=False,
             )
         if secret is None:
             raise VendorError(f"Account '{record.alias}' has no stored API key")
@@ -246,6 +244,13 @@ class MuseAdapter(ToolAdapter):
 
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
         info = self.require_installed()
+        if record is not None and record.kind != "api-key":
+            return UsageResult(
+                UsageState.UNSUPPORTED,
+                "Muse usage cannot be attributed to a browser alias: it is read from whichever "
+                "credential Muse is using now",
+                hint="Run `ccswap muse usage` without an alias for the active credential",
+            )
         env = {ENV_KEY: secret} if secret else None
         result = self.runner.run([info.exe, "usage", "--json"], timeout=20, env=env)
         secrets = [secret] if secret else []
@@ -273,6 +278,7 @@ class MuseAdapter(ToolAdapter):
                     UsageKind.SUBSCRIPTION_ALLOWANCE,
                     "muse usage --json",
                     True,
+                    scope="account" if record is not None else "active-credential",
                     data=_scalars(allowance),
                     fetched_at=time.time(),
                 ),

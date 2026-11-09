@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from claude_swap.vendors.cli import tool_command, vendors_command
+from claude_swap.vendors.core import AccountRecord
 from claude_swap.vendors.registry import ToolRegistry
 from claude_swap.vendors.service import VendorService
 from claude_swap.vendors.store import VendorStore
@@ -240,3 +241,59 @@ def test_corrupt_store_gives_clean_error(service, capsys):
     code, _out, err = run("muse", ["list"], service, capsys)
     assert code == 1 and "untouched" in err and "Traceback" not in err
     assert service.store.file.read_text() == "{oops"
+
+
+def test_numeric_alias_is_reachable_and_unicode_digits_do_not_crash(service):
+    from claude_swap.vendors.core import AccountNotRegistered
+
+    service.store.add(AccountRecord("muse", "first", "browser"))
+    service.store.add(AccountRecord("muse", "2", "browser"))
+    assert service.resolve("muse", "2").alias == "2"  # alias beats list position
+    assert service.resolve("muse", "1").alias == "first"
+    with pytest.raises(AccountNotRegistered):
+        service.resolve("muse", "²")
+
+
+def test_opencode_vendor_identifiers_are_never_list_positions(service):
+    from claude_swap.vendors.core import AccountNotRegistered
+
+    service.store.add(
+        AccountRecord(
+            "opencode", "mine", "provider-account", "anthropic", {"account": "work", "id": "c1"}
+        )
+    )
+    with pytest.raises(AccountNotRegistered):
+        service.resolve("opencode", "1", "anthropic", allow_index=False)
+
+
+def test_duplicate_identity_cannot_be_registered_twice(service, capsys):
+    assert run("kiro", ["add", "a"], service, capsys)[0] == 0
+    code, _, err = run("kiro", ["add", "b"], service, capsys)
+    assert code == 1 and "already registered as 'a'" in err
+
+
+def test_vendors_json_flag_works_before_and_after_the_subcommand(service, capsys):
+    for argv in (["--json"], ["status", "--json"], ["--json", "status"]):
+        assert vendors_command(argv, service) == 0
+        assert json.loads(capsys.readouterr().out)["schemaVersion"] == 1
+
+
+def test_ctrl_c_is_a_clean_130_with_kiro_recovery_hint(service, capsys, monkeypatch):
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("claude_swap.vendors.cli._dispatch", boom)
+    code, _, err = run("kiro", ["list"], service, capsys)
+    assert code == 130 and "kiro-cli login" in err
+
+
+def test_api_key_prompt_is_hidden_on_a_terminal(monkeypatch):
+    from claude_swap.vendors import cli as vcli
+
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(sys, "stdin", Tty(""))
+    monkeypatch.setattr(vcli.getpass, "getpass", lambda prompt: "  secret-from-prompt \n")
+    assert vcli.read_secret("key: ", from_stdin=True) == "secret-from-prompt"

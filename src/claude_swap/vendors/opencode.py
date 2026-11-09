@@ -27,7 +27,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +52,8 @@ from claude_swap.vendors.core import (
 )
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-_SELECTOR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+:/-]{0,127}$")
+# One argv entry each, never a flag (first char alphanumeric); spaces are fine in a label.
+_SELECTOR = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._@+:/ -]{0,126}[A-Za-z0-9._@+:/-])?$")
 
 
 def valid_selector(value: str) -> str:
@@ -88,12 +89,13 @@ class OpenCodeAdapter(ToolAdapter):
     def __init__(self, runner=None) -> None:
         super().__init__(runner)
         self._probe: dict[str, bool] | None = None
+        self._probed_at = 0.0
 
     # ---- probing -----------------------------------------------------
 
     def probe(self) -> dict[str, bool]:
         """Which official account commands this install actually offers."""
-        if self._probe is not None:
+        if self._probe is not None and time.monotonic() - self._probed_at < 300:
             return self._probe
         info = self.detect()
         flags = {
@@ -115,6 +117,7 @@ class OpenCodeAdapter(ToolAdapter):
             login = self.runner.run([info.exe, "auth", "login", "--help"], timeout=15)
             flags["provider-flag"] = login.ok and "--provider" in login.stdout
         self._probe = flags
+        self._probed_at = time.monotonic()
         return flags
 
     def capabilities(self, info: ToolInfo) -> dict[Capability, CapabilityStatus]:
@@ -268,12 +271,17 @@ class OpenCodeAdapter(ToolAdapter):
         self, records: Sequence[AccountRecord], last_active: str | None = None
     ) -> list[AccountView]:
         found = self.discover()
-        by_key = {(r.provider, r.identity.get("account")): r for r in records}
+
+        def key(provider: str | None, ident: Mapping[str, Any]) -> tuple[str | None, Any]:
+            return provider, ident.get("id") or ident.get("account")
+
+        by_key = {key(r.provider, r.identity): r for r in records}
         views: list[AccountView] = []
         seen = set()
         for row in found:
-            rec = by_key.get((row["provider"], row["account"]))
-            seen.add((row["provider"], row["account"]))
+            row_key = key(row["provider"], {"id": row["id"], "account": row["account"]})
+            rec = by_key.get(row_key)
+            seen.add(row_key)
             views.append(
                 AccountView(
                     tool=self.key,
@@ -289,7 +297,7 @@ class OpenCodeAdapter(ToolAdapter):
                 )
             )
         for rec in records:
-            if (rec.provider, rec.identity.get("account")) not in seen:
+            if key(rec.provider, rec.identity) not in seen:
                 views.append(
                     AccountView(
                         tool=self.key,
@@ -324,6 +332,10 @@ class OpenCodeAdapter(ToolAdapter):
                 raise VendorError(
                     f"OpenCode lists no account '{account}' for provider '{provider}'"
                 )
+            if len(matches) > 1:
+                raise VendorError(
+                    f"Several '{provider}' accounts are called '{account}'; pass the account id"
+                )
             row = matches[0]
         ident = {"account": row["account"]}
         if row["id"]:
@@ -345,30 +357,60 @@ class OpenCodeAdapter(ToolAdapter):
             )
         before = self.discover()
         rows = [r for r in before if r["provider"] == provider]
-        target = next((r for r in rows if account in (r["account"], r["id"])), None)
-        if target is None:
+        matches = [r for r in rows if account in (r["account"], r["id"])]
+        if not matches:
             raise VendorError(f"OpenCode lists no account '{account}' for provider '{provider}'")
+        if len(matches) > 1:
+            raise VendorError(
+                f"Several '{provider}' accounts are called '{account}'; use the account id"
+            )
+        target = matches[0]
         previous = next((r for r in rows if r["active"]), None)
         selector = target["id"] or target["account"]
         result = self.runner.run([info.exe, "auth", "switch", provider, selector], timeout=30)
         if not result.ok:
             raise VendorError(f"`opencode auth switch` failed: {short_detail(result)}")
-        after = [r for r in self.discover() if r["provider"] == provider]
+        restart = "Running OpenCode servers/sessions keep the old account until restarted"
+        try:
+            after = [r for r in self.discover() if r["provider"] == provider]
+        except VendorError:
+            return SwitchOutcome(
+                False,
+                True,
+                f"`opencode auth switch` succeeded for '{target['account']}' but the result could "
+                f"not be re-read. {restart}",
+                ("verification failed: `opencode auth list` did not answer",),
+            )
+        if all(r["active"] is None for r in after):
+            return SwitchOutcome(
+                False,
+                True,
+                f"`opencode auth switch` succeeded for '{target['account']}'; this OpenCode's "
+                f"listing does not say which account is active, so it cannot be verified. {restart}",
+            )
         landed = next((r for r in after if r["active"]), None)
         if not landed or (landed["account"], landed["id"]) != (target["account"], target["id"]):
-            if previous:  # restore through the same official command
-                self.runner.run(
+            restored = False
+            if previous:  # put it back through the same official command
+                undo = self.runner.run(
                     [info.exe, "auth", "switch", provider, previous["id"] or previous["account"]],
                     timeout=30,
                 )
+                restored = undo.ok
+            tail = (
+                f"ccswap switched back to '{previous['account']}'"
+                if previous and restored
+                else "ccswap could not restore the previous account; check `opencode auth list`"
+            )
             raise VendorError(
-                f"OpenCode accepted the switch but still reports a different active account for '{provider}'"
+                f"OpenCode accepted the switch but still reports a different active account for "
+                f"'{provider}'; {tail}"
             )
         return SwitchOutcome(
             True,
             True,
-            f"Active {provider} account is now '{target['account']}' (verified with `opencode auth list`). "
-            "Running OpenCode servers/sessions keep the old account until restarted",
+            f"Active {provider} account is now '{target['account']}' (verified with "
+            f"`opencode auth list`). {restart}",
         )
 
     def switch(
@@ -397,7 +439,8 @@ class OpenCodeAdapter(ToolAdapter):
     def logout(self, provider: str, account: str | None) -> int:
         info = self.require_installed()
         argv = [info.exe, "auth", "logout", valid_selector(provider)]
-        if account:
+        # Releases with `auth switch` take an account; 1.18.x documents `logout [provider]` only.
+        if account and self.probe()["switch"]:
             argv.append(valid_selector(account))
         return self.runner.run_interactive(argv)
 

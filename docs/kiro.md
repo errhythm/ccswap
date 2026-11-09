@@ -38,6 +38,13 @@ A login switch therefore:
 4. re-reads `whoami`: wrong account, or a cancelled login, is reported as failure with the
    exact `kiro-cli login ...` recovery command. It is never reported as success.
 
+If `kiro-cli whoami` itself fails or times out, ccswap changes nothing: only an explicit
+"not logged in" counts as logged out.
+
+Identity is `email` + Identity Center start URL (+ account type when both sides report it).
+`whoami` does not name the social provider, so ccswap refuses to register two logins with the
+same identity (for example a Google and a GitHub login with one email) instead of guessing.
+
 Running `kiro-cli chat` sessions keep their old login until restarted. `KIRO_API_KEY` in the
 environment overrides any login, and ccswap warns when it is set.
 
