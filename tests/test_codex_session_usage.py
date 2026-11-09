@@ -12,6 +12,7 @@ from tests.test_codex_reconcile import custody, write
 @pytest.fixture
 def usage(custody, monkeypatch):
     switcher, home, baseline = custody
+    switcher.provider_dir = switcher.backup_dir / 'codex'
     switcher.lock_file = switcher.backup_dir / '.lock'
     switcher.auth_file = switcher.codex_home / 'auth.json'
     switcher._usage_cache.clear()

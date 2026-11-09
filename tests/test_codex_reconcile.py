@@ -19,6 +19,7 @@ def custody(tmp_path):
     source.mkdir()
     switcher = CodexAccountSwitcher.__new__(CodexAccountSwitcher)
     switcher.backup_dir = root
+    switcher.provider_dir = root / "codex"
     switcher.codex_home = source
     switcher.credentials_dir = root / "codex" / "credentials"
     switcher.sequence_file = root / "codex" / "sequence.json"
@@ -28,7 +29,8 @@ def custody(tmp_path):
     switcher.credentials_dir.mkdir()
     cs._session_write(root, switcher._credential_path("1"), baseline)
     cs._session_write(root, switcher.sequence_file, {
-        "accounts": {"1": {"email": "user@example.org", "accountId": "workspace"}},
+        "accounts": {"1": {"email": "user@example.org", "accountId": "workspace",
+                           "usageGeneration": "a" * 32}},
     })
     return switcher, home, baseline
 

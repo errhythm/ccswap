@@ -29,6 +29,8 @@
 
 Session-mode profiles (`ccswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`) and auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset) live in the backup directory root.
 
+Codex saves sanitized quota snapshots in `codex/usage-N.json` beside its account roster. These contain the slot and public labels, last successful fetch time, quota windows, credits, allowance, banked resets and the last error class/attempt time. File-only consumers can read them without credentials; failed attempts preserve the last good measurement. See [Codex usage snapshots](codex.md#usage-snapshots-on-disk) for the schema and freshness rules.
+
 On Linux/WSL, set `XDG_DATA_HOME` to override the default location.
 
 ## macOS over SSH / headless
