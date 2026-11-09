@@ -125,7 +125,7 @@ def test_usage_null_allowance_is_unavailable_not_zero(adapter, runner):
 def test_usage_api_key_reason_is_explained(adapter, runner):
     runner.on(MUSE, "usage", "--json", result=ok('{"allowance": null, "reason": "api_key"}'))
     result = adapter.usage(api_record(), KEY)
-    assert result.state is UsageState.UNAVAILABLE and "pay-as-you-go" in result.reason
+    assert result.state is UsageState.UNAVAILABLE and "does not report usage for an API-key sign-in" in result.reason
 
 
 def test_usage_not_logged_in_is_unauthenticated(adapter, runner):

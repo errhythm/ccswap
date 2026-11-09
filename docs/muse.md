@@ -13,9 +13,11 @@ details and evidence: [vendor-compatibility.md](vendor-compatibility.md#muse-cod
   warns about it.
 - Usage comes from `muse usage --json`, which runs no model turn: your tier, the 5-hour
   window and the weekly window, each with its used % and reset time. Muse reports
-  percentages only, so ccswap never shows a made-up "N of M". A pay-as-you-go key has no
-  allowance (`api_key`), and a new window can be empty (`server_sent_no_usage`); both are
-  shown as *unavailable* with the reason, never as 0%.
+  percentages only, so ccswap never shows a made-up "N of M". Muse reports no allowance for
+  any API-key sign-in (`api_key`), even for the Muse Code subscription key that the CLI login
+  mints, and a new window can be empty (`server_sent_no_usage`); both are shown as
+  *unavailable* with the reason, never as 0%. Whether a key is the subscription key or a
+  pay-as-you-go key is shown only on dev.meta.ai/api-keys.
 - API-key accounts are measured **one by one** (`META_API_KEY` set for that child only).
   Browser logins cannot be: Muse stores one login in the macOS Keychain (so even a
   different `HOME` sees it) and never says whose it is. The tool-level reading is therefore

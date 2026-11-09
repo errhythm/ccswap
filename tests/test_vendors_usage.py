@@ -571,7 +571,7 @@ def test_tool_usage_subcommand_includes_every_account(tmp_path, capsys):
 def test_new_credential_never_inherits_the_previous_credentials_numbers(tmp_path):
     svc, r = muse_world(tmp_path, ok(json.dumps({"allowance": MUSE_14})))
     assert svc.usage("muse").windows
-    # The user now uses a pay-as-you-go key: a definitive "no allowance", not a failure.
+    # The user now signs in with an API key: a definitive "no allowance", not a failure.
     r.on(MUSE, "usage", "--json", result=ok(json.dumps({"allowance": None, "reason": "api_key"})))
     now = svc.usage("muse", refresh=True)
     assert now.state is UsageState.UNAVAILABLE and now.windows == ()
