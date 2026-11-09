@@ -65,10 +65,18 @@ def usage_lines(result: UsageResult | None) -> list[str]:
     lines = []
     for obs in result.observations:
         label = "vendor-reported" if obs.authoritative else "local statistics, not a quota"
-        stamp = datetime.fromtimestamp(obs.fetched_at).strftime("%H:%M:%S") if obs.fetched_at else "?"
-        lines.append(f"{obs.kind.value} ({label}; {obs.source}; {stamp}{'; cached' if obs.cached else ''})")
+        stamp = (
+            datetime.fromtimestamp(obs.fetched_at).strftime("%H:%M:%S") if obs.fetched_at else "?"
+        )
+        lines.append(
+            f"{obs.kind.value} ({label}; {obs.source}; {stamp}{'; cached' if obs.cached else ''})"
+        )
         text = obs.data.get("text") if isinstance(obs.data, dict) else None
-        lines.extend(str(text).splitlines()[:8] if text else [f"{k}: {v}" for k, v in list(obs.data.items())[:8]])
+        lines.extend(
+            str(text).splitlines()[:8]
+            if text
+            else [f"{k}: {v}" for k, v in list(obs.data.items())[:8]]
+        )
     return lines
 
 
@@ -84,7 +92,10 @@ def info_lines(page: VendorPage) -> list[str]:
     if auth.get("envKeyPresent"):
         lines.append("! an API key in the environment overrides the stored login")
     if "accountSwitching" in auth:
-        lines.append("native account switching: " + ("yes" if auth["accountSwitching"] else "no (this OpenCode version)"))
+        lines.append(
+            "native account switching: "
+            + ("yes" if auth["accountSwitching"] else "no (this OpenCode version)")
+        )
     if "storedCredential" in auth:
         stored = {True: "present", False: "none", None: "unknown"}[auth["storedCredential"]]
         lines.append(f"stored credential: {stored} (type/identity not exposed by muse)")
@@ -100,7 +111,7 @@ class VendorItem(ListItem):
 
 
 class VendorsScreen(Screen):
-    BINDINGS = [
+    BINDINGS = [  # noqa: RUF012 - Textual convention
         Binding("left,h", "prev_vendor", mark("Prev vendor")),
         Binding("right,l", "next_vendor", mark("Next vendor")),
         Binding("enter,s", "switch", mark("Switch"), priority=True),
@@ -178,7 +189,8 @@ class VendorsScreen(Screen):
         elif not page.views:
             hint = (
                 "no accounts — press a to see how to add one"
-                if page.status.get("installed") else "install the CLI first"
+                if page.status.get("installed")
+                else "install the CLI first"
             )
             listview.append(ListItem(Static(Text(hint), markup=False), disabled=True))
         for n, view in enumerate(page.views, 1):
@@ -202,10 +214,14 @@ class VendorsScreen(Screen):
         elif page is not None and page.status.get("installed"):
             lines += usage_lines(self._usage.get((self.tool, "")))
         if page and page.refreshed_at:
-            lines.append("refreshed " + datetime.fromtimestamp(page.refreshed_at).strftime("%H:%M:%S"))
+            lines.append(
+                "refreshed " + datetime.fromtimestamp(page.refreshed_at).strftime("%H:%M:%S")
+            )
         if self._message:
             lines.insert(0, self._message)
-        self.query_one("#vendor-detail", Static).update(Text(self._mask("\n".join(lines)), no_wrap=False))
+        self.query_one("#vendor-detail", Static).update(
+            Text(self._mask("\n".join(lines)), no_wrap=False)
+        )
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         self._render_detail()
@@ -236,8 +252,13 @@ class VendorsScreen(Screen):
 
     def action_refresh(self) -> None:
         tool = self.tool
-        self.run_worker(lambda: self._load(tool), thread=True, group="vendors-load",
-                        exit_on_error=False, exclusive=True)
+        self.run_worker(
+            lambda: self._load(tool),
+            thread=True,
+            group="vendors-load",
+            exit_on_error=False,
+            exclusive=True,
+        )
 
     def _load(self, tool: str) -> None:
         service = self.service
@@ -247,7 +268,9 @@ class VendorsScreen(Screen):
             if page.status.get("installed"):
                 page.views = service.list_views(tool)
         except ClaudeSwitchError as exc:
-            page = VendorPage(tool, {"installed": True, "label": tool}, error=str(exc), refreshed_at=time.time())
+            page = VendorPage(
+                tool, {"installed": True, "label": tool}, error=str(exc), refreshed_at=time.time()
+            )
         self.app.call_from_thread(self._loaded, page)
 
     def _loaded(self, page: VendorPage) -> None:
@@ -275,21 +298,25 @@ class VendorsScreen(Screen):
     def action_capabilities(self) -> None:
         adapter = self.service.adapter(self.tool)
         table = self.service.capability_table(adapter)
-        text = "\n".join(f"{name:<22} {s['support']:<12} {s['mechanism']}" for name, s in table.items())
+        text = "\n".join(
+            f"{name:<22} {s['support']:<12} {s['mechanism']}" for name, s in table.items()
+        )
         self.app.push_screen(OutputModal(f"{adapter.label} — capabilities", text))
 
     def action_add_help(self) -> None:
         prog = "ccswap"
         howto = {
             "muse": f"{prog} muse add <alias> --api-key-stdin     (API key via stdin/prompt)\n"
-                    f"{prog} muse add <alias> --browser           (register current browser login)",
+            f"{prog} muse add <alias> --browser           (register current browser login)",
             "opencode": f"opencode auth login                       (add the account in OpenCode)\n"
-                        f"{prog} opencode add <alias> --provider <p> [--account <a>]",
+            f"{prog} opencode add <alias> --provider <p> [--account <a>]",
             "kiro": f"kiro-cli login                               (log in, then:)\n"
-                    f"{prog} kiro add <alias>                      (register the current login)\n"
-                    f"{prog} kiro add <alias> --api-key            (KIRO_API_KEY via stdin/prompt)",
+            f"{prog} kiro add <alias>                      (register the current login)\n"
+            f"{prog} kiro add <alias> --api-key            (KIRO_API_KEY via stdin/prompt)",
         }[self.tool]
-        self.app.push_screen(OutputModal("Add an account", howto + "\n\nSecrets are never taken from arguments."))
+        self.app.push_screen(
+            OutputModal("Add an account", howto + "\n\nSecrets are never taken from arguments.")
+        )
 
     def action_switch(self) -> None:
         view = self._selected()
@@ -309,23 +336,37 @@ class VendorsScreen(Screen):
             )
         else:
             explain = {
-                ("muse", "browser"): "Muse cannot switch browser sessions. Sign in again with `muse login`.",
+                (
+                    "muse",
+                    "browser",
+                ): "Muse cannot switch browser sessions. Sign in again with `muse login`.",
                 ("kiro", "api-key"): "KIRO_API_KEY is process-scoped. Launch with `ccswap kiro run "
-                                     f"{view.alias}`.",
-            }.get((tool, view.kind), f"Interactive login required. Run `ccswap {tool} switch {view.alias} --login`"
-                  " from a terminal; it asks before ending your current Kiro login.")
+                f"{view.alias}`.",
+            }.get(
+                (tool, view.kind),
+                f"Interactive login required. Run `ccswap {tool} switch {view.alias} --login`"
+                " from a terminal; it asks before ending your current Kiro login.",
+            )
             self.app.push_screen(OutputModal("Switch from the command line", explain))
 
     def _start_switch(self, view: AccountView, *, assume_yes: bool) -> None:
         self._busy = True
         tool = self.tool
-        selector = (view.identity.get("id") or view.identity.get("account")) if tool == "opencode" else view.alias
+        selector = (
+            (view.identity.get("id") or view.identity.get("account"))
+            if tool == "opencode"
+            else view.alias
+        )
         provider = view.provider if tool == "opencode" else None
 
         def work() -> None:
             try:
-                outcome, _ = self.service.switch(tool, selector or view.alias, provider=provider, assume_yes=assume_yes)
-                message = outcome.message + ("\n⟳ restart running sessions to pick it up" if outcome.restart_required else "")
+                outcome, _ = self.service.switch(
+                    tool, selector or view.alias, provider=provider, assume_yes=assume_yes
+                )
+                message = outcome.message + (
+                    "\n⟳ restart running sessions to pick it up" if outcome.restart_required else ""
+                )
             except ClaudeSwitchError as exc:
                 message = f"switch failed: {exc}"
             self.app.call_from_thread(self._switch_done, message)

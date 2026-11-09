@@ -23,8 +23,9 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from claude_swap.vendors.core import (
     AccountRecord,
@@ -144,7 +145,9 @@ class MuseAdapter(ToolAdapter):
             "identityExposed": False,
         }
 
-    def observe(self, records: Sequence[AccountRecord], last_active: str | None = None) -> list[AccountView]:
+    def observe(
+        self, records: Sequence[AccountRecord], last_active: str | None = None
+    ) -> list[AccountView]:
         env = bool(os.environ.get(ENV_KEY))
         views = []
         for rec in records:
@@ -154,11 +157,17 @@ class MuseAdapter(ToolAdapter):
                 active = True
                 note = "last activated by ccswap (muse cannot confirm which key is stored)"
             if env:
-                note = (note + "; " if note else "") + "META_API_KEY in this environment overrides stored login"
+                note = (
+                    note + "; " if note else ""
+                ) + "META_API_KEY in this environment overrides stored login"
             views.append(
                 AccountView(
-                    tool=self.key, alias=rec.alias, kind=rec.kind, identity=rec.identity,
-                    active=active, note=note,
+                    tool=self.key,
+                    alias=rec.alias,
+                    kind=rec.kind,
+                    identity=rec.identity,
+                    active=active,
+                    note=note,
                 )
             )
         return views
@@ -178,8 +187,13 @@ class MuseAdapter(ToolAdapter):
     # ---- switching -------------------------------------------------------
 
     def switch(
-        self, record: AccountRecord, secret: str | None, *, assume_yes: bool,
-        interactive: bool, context: Sequence[AccountRecord] = (),
+        self,
+        record: AccountRecord,
+        secret: str | None,
+        *,
+        assume_yes: bool,
+        interactive: bool,
+        context: Sequence[AccountRecord] = (),
     ) -> SwitchOutcome:
         info = self.require_installed()
         warnings = []
@@ -194,11 +208,12 @@ class MuseAdapter(ToolAdapter):
                     "Muse cannot switch between browser sessions. Run `muse login` "
                     "(or pass --login to ccswap muse switch) to sign in again"
                 )
-            code = self.runner.run_interactive([info.path, "login"])
+            code = self.runner.run_interactive([info.exe, "login"])
             if code != 0:
                 raise VendorError(f"`muse login` exited with status {code}")
             return SwitchOutcome(
-                False, True,
+                False,
+                True,
                 "Signed in with `muse login`. Muse exposes no identity, so ccswap "
                 "cannot verify which account is now active",
                 tuple(warnings),
@@ -212,13 +227,15 @@ class MuseAdapter(ToolAdapter):
                 f"{record.alias}` to launch without changing anything"
             )
         result = self.runner.run(
-            [info.path, "auth", "set", "--provider", "meta", "--api-key-stdin"],
-            timeout=20, input_text=secret + "\n",
+            [info.exe, "auth", "set", "--provider", "meta", "--api-key-stdin"],
+            timeout=20,
+            input_text=secret + "\n",
         )
         if not result.ok:
             raise VendorError(f"`muse auth set` failed: {short_detail(result, [secret])}")
         return SwitchOutcome(
-            False, True,
+            False,
+            True,
             f"Stored the API key for '{record.alias}' via `muse auth set`. Running Muse "
             "sessions keep their old credential until restarted; Muse exposes no way "
             "for ccswap to confirm the stored key",
@@ -230,10 +247,12 @@ class MuseAdapter(ToolAdapter):
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
         info = self.require_installed()
         env = {ENV_KEY: secret} if secret else None
-        result = self.runner.run([info.path, "usage", "--json"], timeout=20, env=env)
+        result = self.runner.run([info.exe, "usage", "--json"], timeout=20, env=env)
         secrets = [secret] if secret else []
         if not result.ok:
-            return UsageResult(UsageState.UNAVAILABLE, f"muse usage failed: {short_detail(result, secrets)}")
+            return UsageResult(
+                UsageState.UNAVAILABLE, f"muse usage failed: {short_detail(result, secrets)}"
+            )
         try:
             doc = json.loads(result.stdout)
         except ValueError:
@@ -251,8 +270,11 @@ class MuseAdapter(ToolAdapter):
             UsageState.AVAILABLE,
             observations=(
                 UsageObservation(
-                    UsageKind.SUBSCRIPTION_ALLOWANCE, "muse usage --json", True,
-                    data=_scalars(allowance), fetched_at=time.time(),
+                    UsageKind.SUBSCRIPTION_ALLOWANCE,
+                    "muse usage --json",
+                    True,
+                    data=_scalars(allowance),
+                    fetched_at=time.time(),
                 ),
             ),
             hint="Vendor payload shown as reported; ccswap does not derive percentages from it",
@@ -260,17 +282,19 @@ class MuseAdapter(ToolAdapter):
 
     # ---- sessions --------------------------------------------------------
 
-    def launch_spec(self, record: AccountRecord, secret: str | None, args: Sequence[str]) -> LaunchSpec:
+    def launch_spec(
+        self, record: AccountRecord, secret: str | None, args: Sequence[str]
+    ) -> LaunchSpec:
         info = self.require_installed()
         if record.kind != "api-key" or secret is None:
             raise UnsupportedCapability(
                 "Only API-key accounts can run in isolation; Muse has a single stored "
                 "browser session. Use `muse` directly or `ccswap muse switch --login`"
             )
-        return LaunchSpec((info.path, *args), env_overlay={ENV_KEY: secret})
+        return LaunchSpec((info.exe, *args), env_overlay={ENV_KEY: secret})
 
     def logout(self) -> None:
         info = self.require_installed()
-        result = self.runner.run([info.path, "logout"], timeout=20)
+        result = self.runner.run([info.exe, "logout"], timeout=20)
         if not result.ok:
             raise VendorError(f"`muse logout` failed: {short_detail(result)}")

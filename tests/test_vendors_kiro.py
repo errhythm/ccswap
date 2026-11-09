@@ -14,8 +14,12 @@ from claude_swap.vendors.kiro import ENV_KEY, KiroAdapter, parse_whoami
 from tests.vendor_helpers import FakeRunner, fail, ok
 
 KIRO = "/usr/local/bin/kiro-cli"
-IDC = {"accountType": "IamIdentityCenter", "startUrl": "https://corp.awsapps.com/start",
-       "region": "ap-northeast-2", "email": "a@corp.com"}
+IDC = {
+    "accountType": "IamIdentityCenter",
+    "startUrl": "https://corp.awsapps.com/start",
+    "region": "ap-northeast-2",
+    "email": "a@corp.com",
+}
 OTHER = {**IDC, "email": "b@corp.com"}
 TRAILER = "\n\nProfile:\nKiroProfile-us-east-1\narn:aws:codewhisperer:us-east-1:1:profile/X\n"
 
@@ -44,8 +48,15 @@ def make(who=IDC):
 
 
 def login_rec(alias="a", ident=IDC, hint=None):
-    return AccountRecord("kiro", alias, "login", identity=ident,
-                         login_hint=hint if hint is not None else {"license": "pro", "identityProvider": IDC["startUrl"], "region": IDC["region"]})
+    return AccountRecord(
+        "kiro",
+        alias,
+        "login",
+        identity=ident,
+        login_hint=hint
+        if hint is not None
+        else {"license": "pro", "identityProvider": IDC["startUrl"], "region": IDC["region"]},
+    )
 
 
 def test_parse_whoami_ignores_trailing_text():
@@ -99,14 +110,16 @@ def test_register_social_and_validation():
 
 
 def test_register_api_key():
-    record, secret = KiroAdapter(make()[0]).register("ci", kind="api-key", api_key="ksk_abcdef123456")
+    record, secret = KiroAdapter(make()[0]).register(
+        "ci", kind="api-key", api_key="ksk_abcdef123456"
+    )
     assert record.kind == "api-key" and secret == "ksk_abcdef123456"
     with pytest.raises(VendorError):
         KiroAdapter(make()[0]).register("ci", kind="api-key", api_key="x")
 
 
 def test_observe_marks_active_by_identity_not_alias():
-    runner, state = make(IDC)
+    runner, _ = make(IDC)
     adapter = KiroAdapter(runner)
     recs = [login_rec("a"), login_rec("b", OTHER)]
     views = {v.alias: v.active for v in adapter.observe(recs)}
@@ -121,7 +134,9 @@ def test_observe_surfaces_unregistered_current_login():
 
 def test_switch_already_active_is_noop():
     runner, _ = make(IDC)
-    outcome = KiroAdapter(runner).switch(login_rec(), None, assume_yes=False, interactive=False, context=[login_rec()])
+    outcome = KiroAdapter(runner).switch(
+        login_rec(), None, assume_yes=False, interactive=False, context=[login_rec()]
+    )
     assert outcome.verified and not outcome.restart_required
     assert not any(c.interactive for c in runner.calls)
 
@@ -129,14 +144,22 @@ def test_switch_already_active_is_noop():
 def test_switch_non_interactive_is_unsupported_and_changes_nothing():
     runner, _ = make(OTHER)
     with pytest.raises(UnsupportedCapability, match="--login"):
-        KiroAdapter(runner).switch(login_rec(), None, assume_yes=True, interactive=False, context=[login_rec(), login_rec("b", OTHER)])
+        KiroAdapter(runner).switch(
+            login_rec(),
+            None,
+            assume_yes=True,
+            interactive=False,
+            context=[login_rec(), login_rec("b", OTHER)],
+        )
     assert not any(c.interactive for c in runner.calls)
 
 
 def test_switch_refuses_when_current_login_is_unregistered():
     runner, _ = make(OTHER)
     with pytest.raises(VendorError, match="not registered"):
-        KiroAdapter(runner).switch(login_rec(), None, assume_yes=True, interactive=True, context=[login_rec()])
+        KiroAdapter(runner).switch(
+            login_rec(), None, assume_yes=True, interactive=True, context=[login_rec()]
+        )
     assert not any(c.interactive for c in runner.calls)  # logout was never run
 
 
@@ -144,7 +167,9 @@ def test_switch_requires_confirmation_before_logout():
     runner, _ = make(OTHER)
     ctx = [login_rec(), login_rec("b", OTHER)]
     with pytest.raises(VendorError, match="--yes"):
-        KiroAdapter(runner).switch(login_rec(), None, assume_yes=False, interactive=True, context=ctx)
+        KiroAdapter(runner).switch(
+            login_rec(), None, assume_yes=False, interactive=True, context=ctx
+        )
     assert not any(c.interactive for c in runner.calls)
 
 
@@ -153,12 +178,23 @@ def test_switch_full_flow_logs_out_logs_in_and_verifies():
     runner.on_interactive(KIRO, "logout", code=lambda c: (setattr(state, "who", None), 0)[1])
     runner.on_interactive(KIRO, "login", code=lambda c: (setattr(state, "who", IDC), 0)[1])
     ctx = [login_rec(), login_rec("b", OTHER)]
-    outcome = KiroAdapter(runner).switch(login_rec(), None, assume_yes=True, interactive=True, context=ctx)
+    outcome = KiroAdapter(runner).switch(
+        login_rec(), None, assume_yes=True, interactive=True, context=ctx
+    )
     assert outcome.verified and outcome.restart_required
     interactive = [c.argv for c in runner.calls if c.interactive]
     assert interactive == [
         (KIRO, "logout"),
-        (KIRO, "login", "--license", "pro", "--identity-provider", IDC["startUrl"], "--region", IDC["region"]),
+        (
+            KIRO,
+            "login",
+            "--license",
+            "pro",
+            "--identity-provider",
+            IDC["startUrl"],
+            "--region",
+            IDC["region"],
+        ),
     ]
 
 
@@ -168,16 +204,20 @@ def test_switch_login_cancelled_reports_recovery_command():
     runner.on_interactive(KIRO, "login", code=1)
     ctx = [login_rec(), login_rec("b", OTHER)]
     with pytest.raises(VendorError, match="logged out.*kiro-cli login"):
-        KiroAdapter(runner).switch(login_rec(), None, assume_yes=True, interactive=True, context=ctx)
+        KiroAdapter(runner).switch(
+            login_rec(), None, assume_yes=True, interactive=True, context=ctx
+        )
 
 
 def test_switch_wrong_account_after_login_is_not_reported_as_success():
-    runner, state = make(OTHER)
+    runner, _ = make(OTHER)
     runner.on_interactive(KIRO, "logout", code=0)
     runner.on_interactive(KIRO, "login", code=0)  # user signs in as b again
     ctx = [login_rec(), login_rec("b", OTHER)]
     with pytest.raises(VendorError, match="b@corp.com"):
-        KiroAdapter(runner).switch(login_rec(), None, assume_yes=True, interactive=True, context=ctx)
+        KiroAdapter(runner).switch(
+            login_rec(), None, assume_yes=True, interactive=True, context=ctx
+        )
 
 
 def test_logout_failure_leaves_login_alone():
@@ -185,7 +225,9 @@ def test_logout_failure_leaves_login_alone():
     runner.on_interactive(KIRO, "logout", code=1)
     ctx = [login_rec(), login_rec("b", OTHER)]
     with pytest.raises(VendorError, match="left as it was"):
-        KiroAdapter(runner).switch(login_rec(), None, assume_yes=True, interactive=True, context=ctx)
+        KiroAdapter(runner).switch(
+            login_rec(), None, assume_yes=True, interactive=True, context=ctx
+        )
     assert [c.argv for c in runner.calls if c.interactive] == [(KIRO, "logout")]
 
 

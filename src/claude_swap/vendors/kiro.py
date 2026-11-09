@@ -29,7 +29,8 @@ import json
 import os
 import re
 import time
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from claude_swap.vendors.core import (
     AccountRecord,
@@ -46,8 +47,6 @@ from claude_swap.vendors.core import (
     UsageState,
     VendorError,
     cap,
-    redact,
-    short_detail,
 )
 
 ENV_KEY = "KIRO_API_KEY"
@@ -101,9 +100,13 @@ class KiroAdapter(ToolAdapter):
     def capabilities(self, info: ToolInfo) -> dict[Capability, CapabilityStatus]:
         S = Support
         return {
-            Capability.DETECT: cap(S.SUPPORTED, "PATH lookup for `kiro-cli` (not the IDE launcher `kiro`)"),
+            Capability.DETECT: cap(
+                S.SUPPORTED, "PATH lookup for `kiro-cli` (not the IDE launcher `kiro`)"
+            ),
             Capability.VERSION: cap(S.SUPPORTED, "`kiro-cli --version`"),
-            Capability.AUTH_STATE: cap(S.SUPPORTED, "`kiro-cli whoami -f json` (+ KIRO_API_KEY presence)"),
+            Capability.AUTH_STATE: cap(
+                S.SUPPORTED, "`kiro-cli whoami -f json` (+ KIRO_API_KEY presence)"
+            ),
             Capability.ACCOUNT_ENUMERATION: cap(
                 S.CONDITIONAL, "only the single active login is visible (`whoami`); no account list"
             ),
@@ -119,16 +122,21 @@ class KiroAdapter(ToolAdapter):
                 "(process-scoped) -- use `ccswap kiro run`",
             ),
             Capability.USAGE: cap(
-                S.UNSUPPORTED, "`/usage` is interactive-only; no documented machine-readable interface"
+                S.UNSUPPORTED,
+                "`/usage` is interactive-only; no documented machine-readable interface",
             ),
             Capability.RATE_LIMIT_DETECTION: cap(S.UNSUPPORTED, "no stable kiro-cli interface"),
-            Capability.AUTO_SWITCH: cap(S.UNSUPPORTED, "no programmatic usage and no non-interactive login switch"),
+            Capability.AUTO_SWITCH: cap(
+                S.UNSUPPORTED, "no programmatic usage and no non-interactive login switch"
+            ),
             Capability.SESSION_ISOLATION: cap(
                 S.CONDITIONAL,
                 "API-key accounts: child gets KIRO_API_KEY (headless). Login accounts share the "
                 "one machine-wide login and cannot run side by side",
             ),
-            Capability.LOGOUT: cap(S.CONDITIONAL, "`kiro-cli logout`, only inside an explicit login switch"),
+            Capability.LOGOUT: cap(
+                S.CONDITIONAL, "`kiro-cli logout`, only inside an explicit login switch"
+            ),
         }
 
     # ---- state -------------------------------------------------------
@@ -137,7 +145,7 @@ class KiroAdapter(ToolAdapter):
         info = self.detect()
         if not info.installed:
             return None
-        result = self.runner.run([info.path, "whoami", "-f", "json"], timeout=20)
+        result = self.runner.run([info.exe, "whoami", "-f", "json"], timeout=20)
         return parse_whoami(result.stdout) if result.ok else None
 
     def auth_summary(self) -> dict:
@@ -153,7 +161,9 @@ class KiroAdapter(ToolAdapter):
             "switchRestartNote": "running kiro-cli chat sessions keep the old login until restarted",
         }
 
-    def observe(self, records: Sequence[AccountRecord], last_active: str | None = None) -> list[AccountView]:
+    def observe(
+        self, records: Sequence[AccountRecord], last_active: str | None = None
+    ) -> list[AccountView]:
         who = self.whoami()
         env = bool(os.environ.get(ENV_KEY))
         views: list[AccountView] = []
@@ -162,19 +172,46 @@ class KiroAdapter(ToolAdapter):
             if rec.kind == "login":
                 is_active = bool(who and _same_login(rec.identity, who))
                 matched = matched or is_active
-                note = "KIRO_API_KEY in this environment overrides the login" if env and is_active else ""
-                views.append(AccountView(self.key, rec.alias, rec.kind, identity=rec.identity, active=is_active, note=note))
+                note = (
+                    "KIRO_API_KEY in this environment overrides the login"
+                    if env and is_active
+                    else ""
+                )
+                views.append(
+                    AccountView(
+                        self.key,
+                        rec.alias,
+                        rec.kind,
+                        identity=rec.identity,
+                        active=is_active,
+                        note=note,
+                    )
+                )
             else:
                 views.append(
-                    AccountView(self.key, rec.alias, rec.kind, identity=rec.identity, active=None,
-                                note="process-scoped; use `ccswap kiro run`")
+                    AccountView(
+                        self.key,
+                        rec.alias,
+                        rec.kind,
+                        identity=rec.identity,
+                        active=None,
+                        note="process-scoped; use `ccswap kiro run`",
+                    )
                 )
         if who and not matched:
             views.append(
                 AccountView(
-                    self.key, f"(current {who.get('email', 'login')})", "login",
-                    identity={k: v for k, v in who.items() if k in ("accountType", "email", "startUrl", "region")},
-                    registered=False, active=True, note="not registered; run `ccswap kiro add`",
+                    self.key,
+                    f"(current {who.get('email', 'login')})",
+                    "login",
+                    identity={
+                        k: v
+                        for k, v in who.items()
+                        if k in ("accountType", "email", "startUrl", "region")
+                    },
+                    registered=False,
+                    active=True,
+                    note="not registered; run `ccswap kiro add`",
                 )
             )
         return views
@@ -182,10 +219,17 @@ class KiroAdapter(ToolAdapter):
     # ---- registration -------------------------------------------------
 
     def register(
-        self, alias: str, *, kind: str = "login", api_key: str | None = None,
-        social: str | None = None, license: str | None = None,
-        identity_provider: str | None = None, region: str | None = None,
-        device_flow: bool = False, **_: Any,
+        self,
+        alias: str,
+        *,
+        kind: str = "login",
+        api_key: str | None = None,
+        social: str | None = None,
+        license: str | None = None,
+        identity_provider: str | None = None,
+        region: str | None = None,
+        device_flow: bool = False,
+        **_: Any,
     ):
         if kind == "api-key":
             key = (api_key or "").strip()
@@ -196,7 +240,9 @@ class KiroAdapter(ToolAdapter):
             raise VendorError("Kiro account kind must be 'login' or 'api-key'")
         who = self.whoami()
         if not who or not who.get("email"):
-            raise VendorError("Not logged in to Kiro CLI; run `kiro-cli login` first, then `ccswap kiro add`")
+            raise VendorError(
+                "Not logged in to Kiro CLI; run `kiro-cli login` first, then `ccswap kiro add`"
+            )
         hint: dict[str, str] = {}
         if social:
             if social not in SOCIALS:
@@ -204,22 +250,37 @@ class KiroAdapter(ToolAdapter):
             hint["social"] = social
         elif license == "free":
             hint["license"] = "free"
-        elif license == "pro" or identity_provider or "identitycenter" in who.get("accountType", "").lower():
+        elif (
+            license == "pro"
+            or identity_provider
+            or "identitycenter" in who.get("accountType", "").lower()
+        ):
             idp = identity_provider or who.get("startUrl", "")
             reg = region or who.get("region", "")
             if not _URL.match(idp) or (reg and not _REGION.match(reg)):
                 raise VendorError("Invalid Identity Center URL or region")
-            hint.update({"license": "pro", "identityProvider": idp, **({"region": reg} if reg else {})})
+            hint.update(
+                {"license": "pro", "identityProvider": idp, **({"region": reg} if reg else {})}
+            )
         if device_flow:
             hint["deviceFlow"] = "true"
-        ident = {k: v for k, v in who.items() if k in ("accountType", "email", "startUrl", "region")}
-        return AccountRecord(self.key, alias, "login", identity=ident, login_hint=hint, created_at=time.time()), None
+        ident = {
+            k: v for k, v in who.items() if k in ("accountType", "email", "startUrl", "region")
+        }
+        return AccountRecord(
+            self.key, alias, "login", identity=ident, login_hint=hint, created_at=time.time()
+        ), None
 
     # ---- switching ----------------------------------------------------
 
     def switch(
-        self, record: AccountRecord, secret: str | None, *, assume_yes: bool,
-        interactive: bool, context: Sequence[AccountRecord] = (),
+        self,
+        record: AccountRecord,
+        secret: str | None,
+        *,
+        assume_yes: bool,
+        interactive: bool,
+        context: Sequence[AccountRecord] = (),
     ) -> SwitchOutcome:
         info = self.require_installed()
         if record.kind == "api-key":
@@ -232,7 +293,9 @@ class KiroAdapter(ToolAdapter):
             warnings.append("KIRO_API_KEY is set in this environment and overrides the login")
         current = self.whoami()
         if current and _same_login(record.identity, current):
-            return SwitchOutcome(True, False, f"'{record.alias}' is already the active Kiro login", tuple(warnings))
+            return SwitchOutcome(
+                True, False, f"'{record.alias}' is already the active Kiro login", tuple(warnings)
+            )
         if not interactive:
             raise UnsupportedCapability(
                 "Kiro logins can only be changed interactively. Re-run with --login to run "
@@ -249,9 +312,9 @@ class KiroAdapter(ToolAdapter):
             raise VendorError(
                 "This ends the current Kiro login (`kiro-cli logout`). Re-run with --yes to confirm"
             )
-        if self.runner.run_interactive([info.path, "logout"]) != 0:
+        if self.runner.run_interactive([info.exe, "logout"]) != 0:
             raise VendorError("`kiro-cli logout` failed; the login was left as it was")
-        code = self.runner.run_interactive([info.path, "login", *_hint_args(record.login_hint)])
+        code = self.runner.run_interactive([info.exe, "login", *_hint_args(record.login_hint)])
         after = self.whoami()
         if code != 0 or not after:
             raise VendorError(
@@ -264,7 +327,8 @@ class KiroAdapter(ToolAdapter):
                 f"'{record.alias}'. The Kiro login is now that account"
             )
         return SwitchOutcome(
-            True, True,
+            True,
+            True,
             f"Kiro login is now '{record.alias}' (verified with `kiro-cli whoami`). Running chat "
             "sessions keep the old login until restarted",
             tuple(warnings),
@@ -281,16 +345,18 @@ class KiroAdapter(ToolAdapter):
 
     # ---- sessions -------------------------------------------------------
 
-    def launch_spec(self, record: AccountRecord, secret: str | None, args: Sequence[str]) -> LaunchSpec:
+    def launch_spec(
+        self, record: AccountRecord, secret: str | None, args: Sequence[str]
+    ) -> LaunchSpec:
         info = self.require_installed()
         if record.kind == "api-key":
             if secret is None:
                 raise VendorError(f"Account '{record.alias}' has no stored API key")
-            return LaunchSpec((info.path, "chat", *args), env_overlay={ENV_KEY: secret})
+            return LaunchSpec((info.exe, "chat", *args), env_overlay={ENV_KEY: secret})
         current = self.whoami()
         if not (current and _same_login(record.identity, current)):
             raise VendorError(
                 f"'{record.alias}' is not the active Kiro login and logins cannot run side by side; "
                 f"run `ccswap kiro switch {record.alias} --login` first"
             )
-        return LaunchSpec((info.path, "chat", *args), unset_env=(ENV_KEY,))
+        return LaunchSpec((info.exe, "chat", *args), unset_env=(ENV_KEY,))

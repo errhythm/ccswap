@@ -12,7 +12,8 @@ import argparse
 import getpass
 import json
 import sys
-from typing import Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from claude_swap import printer
 from claude_swap.exceptions import ClaudeSwitchError
@@ -129,7 +130,9 @@ def _parser(tool: str) -> argparse.ArgumentParser:
     usage.add_argument("account", nargs="?", metavar="ALIAS|NUM")
     usage.add_argument("--refresh", action="store_true", help="Ignore the 60 s cache")
     if tool == "opencode":
-        usage.add_argument("--local", action="store_true", help="Local token/cost statistics (not a quota)")
+        usage.add_argument(
+            "--local", action="store_true", help="Local token/cost statistics (not a quota)"
+        )
 
     add = with_json(sub.add_parser("add", help="Register an account (no vendor login is changed)"))
     if tool == "opencode":
@@ -139,9 +142,17 @@ def _parser(tool: str) -> argparse.ArgumentParser:
     else:
         add.add_argument("alias")
         if tool == "muse":
-            add.add_argument("--browser", action="store_true", help="Register the current browser login (alias only)")
+            add.add_argument(
+                "--browser",
+                action="store_true",
+                help="Register the current browser login (alias only)",
+            )
         else:
-            add.add_argument("--api-key", action="store_true", help="Register a KIRO_API_KEY (read from stdin/prompt)")
+            add.add_argument(
+                "--api-key",
+                action="store_true",
+                help="Register a KIRO_API_KEY (read from stdin/prompt)",
+            )
             add.add_argument("--social", choices=("google", "github"))
             add.add_argument("--license", choices=("free", "pro"))
             add.add_argument("--identity-provider", metavar="URL")
@@ -149,28 +160,42 @@ def _parser(tool: str) -> argparse.ArgumentParser:
             add.add_argument("--device-flow", action="store_true")
         add.add_argument("--api-key-stdin", action="store_true", help="Read the key from stdin")
 
-    remove = with_json(sub.add_parser("remove", help="Forget a registration (vendor login untouched)"))
+    remove = with_json(
+        sub.add_parser("remove", help="Forget a registration (vendor login untouched)")
+    )
     remove.add_argument("account", metavar="ALIAS|NUM")
     if tool == "opencode":
         remove.add_argument("--provider")
 
-    switch = with_json(sub.add_parser("switch", help="Make an account active using the vendor's own mechanism"))
+    switch = with_json(
+        sub.add_parser("switch", help="Make an account active using the vendor's own mechanism")
+    )
     if tool == "opencode":
         switch.add_argument("provider")
         switch.add_argument("account", metavar="ACCOUNT")
     else:
         switch.add_argument("account", metavar="ALIAS|NUM")
-        switch.add_argument("--login", action="store_true", help="Allow the interactive vendor login flow")
-        switch.add_argument("--yes", action="store_true", help="Confirm replacing the vendor's current login")
+        switch.add_argument(
+            "--login", action="store_true", help="Allow the interactive vendor login flow"
+        )
+        switch.add_argument(
+            "--yes", action="store_true", help="Confirm replacing the vendor's current login"
+        )
 
     if tool in ("muse", "kiro"):
-        run = sub.add_parser("run", help="Run the tool as one account, without changing global login state")
+        run = sub.add_parser(
+            "run", help="Run the tool as one account, without changing global login state"
+        )
         run.add_argument("account", metavar="ALIAS|NUM")
-        run.add_argument("args", nargs=argparse.REMAINDER, help="Arguments after `--` go to the tool")
+        run.add_argument(
+            "args", nargs=argparse.REMAINDER, help="Arguments after `--` go to the tool"
+        )
     if tool == "opencode":
         login = sub.add_parser("login", help="Run `opencode auth login` (interactive)")
         login.add_argument("provider", nargs="?")
-        logout = sub.add_parser("logout", help="Run `opencode auth logout` (removes the vendor credential)")
+        logout = sub.add_parser(
+            "logout", help="Run `opencode auth logout` (removes the vendor credential)"
+        )
         logout.add_argument("provider")
         logout.add_argument("account", nargs="?")
         logout.add_argument("--yes", action="store_true")
@@ -237,31 +262,47 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
             options = {"kind": "browser" if args.browser else "api-key"}
         else:
             options = {
-                "kind": "api-key" if args.api_key else "login", "social": args.social,
-                "license": args.license, "identity_provider": args.identity_provider,
-                "region": args.region, "device_flow": args.device_flow,
+                "kind": "api-key" if args.api_key else "login",
+                "social": args.social,
+                "license": args.license,
+                "identity_provider": args.identity_provider,
+                "region": args.region,
+                "device_flow": args.device_flow,
             }
         if options.get("kind") == "api-key":
-            options["api_key"] = read_secret(f"{adapter.label} API key: ", from_stdin=args.api_key_stdin)
+            options["api_key"] = read_secret(
+                f"{adapter.label} API key: ", from_stdin=args.api_key_stdin
+            )
         record = service.add(tool, args.alias, **options)
         return _emit(
-            {"schemaVersion": 1, "tool": tool, "account": record.to_json()}, as_json,
-            lambda: print(f"Registered {tool} account '{record.alias}' ({record.kind}). "
-                          "No vendor login was changed."),
+            {"schemaVersion": 1, "tool": tool, "account": record.to_json()},
+            as_json,
+            lambda: print(
+                f"Registered {tool} account '{record.alias}' ({record.kind}). "
+                "No vendor login was changed."
+            ),
         )
     if action == "remove":
         record = service.remove(tool, args.account, getattr(args, "provider", None))
         return _emit(
-            {"schemaVersion": 1, "tool": tool, "removed": record.alias}, as_json,
-            lambda: print(f"Removed '{record.alias}' from ccswap. Your {adapter.label} login was not touched."),
+            {"schemaVersion": 1, "tool": tool, "removed": record.alias},
+            as_json,
+            lambda: print(
+                f"Removed '{record.alias}' from ccswap. Your {adapter.label} login was not touched."
+            ),
         )
     if action == "switch":
         if tool == "opencode":
             outcome, _ = service.switch(tool, args.account, provider=args.provider)
         else:
             outcome, _ = service.switch(
-                tool, args.account, assume_yes=args.yes,
-                interactive=args.login and sys.stdin.isatty() and sys.stdout.isatty() and not as_json,
+                tool,
+                args.account,
+                assume_yes=args.yes,
+                interactive=args.login
+                and sys.stdin.isatty()
+                and sys.stdout.isatty()
+                and not as_json,
             )
         payload = {"schemaVersion": 1, "tool": tool, **outcome.to_json()}
 
@@ -279,8 +320,12 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
     if action == "login":
         return adapter.login(args.provider)  # type: ignore[attr-defined]
     if action == "logout":
-        if not args.yes and not confirm(f"Remove the {args.provider} credential from OpenCode itself?"):
-            raise VendorError("Refusing to log out without --yes (this deletes OpenCode's credential)")
+        if not args.yes and not confirm(
+            f"Remove the {args.provider} credential from OpenCode itself?"
+        ):
+            raise VendorError(
+                "Refusing to log out without --yes (this deletes OpenCode's credential)"
+            )
         return adapter.logout(args.provider, args.account)  # type: ignore[attr-defined]
     raise UnsupportedCapability(f"{tool} does not support '{action}'")
 
@@ -303,22 +348,33 @@ def vendors_command(argv: list[str], service: VendorService | None = None) -> in
     try:
         if args.action == "capabilities":
             adapters = [service.adapter(args.tool)] if args.tool else service.registry.adapters()
-            payload = {
+            payload: dict[str, Any] = {
                 "schemaVersion": 1,
                 "vendors": {a.key: service.capability_table(a) for a in adapters},
             }
-            return _emit(payload, as_json, lambda: [
-                print(f"{a.label}\n" + "\n".join(
-                    f"  {n:<22} {s['support']:<12} {s['mechanism']}"
-                    for n, s in payload["vendors"][a.key].items())) for a in adapters
-            ])
+            return _emit(
+                payload,
+                as_json,
+                lambda: [
+                    print(
+                        f"{a.label}\n"
+                        + "\n".join(
+                            f"  {n:<22} {s['support']:<12} {s['mechanism']}"
+                            for n, s in payload["vendors"][a.key].items()
+                        )
+                    )
+                    for a in adapters
+                ],
+            )
         payload = service.vendors_payload()
 
         def human() -> None:
             for v in payload["vendors"]:
                 state = f"{v.get('version') or '?'}" if v.get("installed") else "not installed"
-                print(f"{v['label']:<12} {state:<14} accounts: {v.get('accounts', 0)}"
-                      + (f"  ! {v['error']}" if v.get("error") else ""))
+                print(
+                    f"{v['label']:<12} {state:<14} accounts: {v.get('accounts', 0)}"
+                    + (f"  ! {v['error']}" if v.get("error") else "")
+                )
 
         return _emit(payload, as_json, human)
     except (ClaudeSwitchError, OSError) as exc:

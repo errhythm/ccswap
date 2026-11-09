@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
-from claude_swap import paths
 from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.json_output import SCHEMA_VERSION
 from claude_swap.locking import FileLock
@@ -56,14 +56,14 @@ class VendorService:
     def adapter(self, tool: str) -> ToolAdapter:
         return self.registry.get(tool)
 
-    def _need(self, adapter: ToolAdapter, protocol: type, capability: Capability, verb: str) -> None:
+    def _need(
+        self, adapter: ToolAdapter, protocol: type, capability: Capability, verb: str
+    ) -> None:
         if isinstance(adapter, protocol):
             return
         raise UnsupportedCapability(f"{adapter.label} does not support {verb}")
 
-    def resolve(
-        self, tool: str, selector: str, provider: str | None = None
-    ) -> AccountRecord:
+    def resolve(self, tool: str, selector: str, provider: str | None = None) -> AccountRecord:
         records = [
             r for r in self.store.records(tool) if provider is None or r.provider == provider
         ]
@@ -77,12 +77,15 @@ class VendorService:
             r
             for r in records
             if r.alias.lower() == selector.lower()
-            or selector.lower() in (r.identity.get("email", "").lower(), r.identity.get("account", "").lower())
+            or selector.lower()
+            in (r.identity.get("email", "").lower(), r.identity.get("account", "").lower())
         ]
         if len(loose) == 1:
             return loose[0]
         if len(loose) > 1:
-            raise VendorError(f"'{selector}' matches several {tool} accounts; use the alias or number")
+            raise VendorError(
+                f"'{selector}' matches several {tool} accounts; use the alias or number"
+            )
         raise VendorError(f"No registered {tool} account '{selector}' (see `ccswap {tool} list`)")
 
     def _secret(self, record: AccountRecord) -> str | None:
@@ -121,8 +124,15 @@ class VendorService:
         records = self.store.records(tool)
         if not adapter.detect().installed:
             return [
-                AccountView(tool, r.alias, r.kind, r.provider, r.identity, active=None,
-                            note=f"{adapter.label} is not installed")
+                AccountView(
+                    tool,
+                    r.alias,
+                    r.kind,
+                    r.provider,
+                    r.identity,
+                    active=None,
+                    note=f"{adapter.label} is not installed",
+                )
                 for r in records
             ]
         return adapter.observe(records, self.store.active(tool))
@@ -200,7 +210,9 @@ class VendorService:
 
     # ---- usage ------------------------------------------------------------
 
-    def usage(self, tool: str, selector: str | None = None, *, refresh: bool = False) -> UsageResult:
+    def usage(
+        self, tool: str, selector: str | None = None, *, refresh: bool = False
+    ) -> UsageResult:
         adapter = self.adapter(tool)
         self._need(adapter, UsageCapability, Capability.USAGE, "usage reporting")
         record = self.resolve(tool, selector) if selector else None
@@ -214,25 +226,33 @@ class VendorService:
                 result = cached[1]
                 return dataclasses.replace(
                     result,
-                    observations=tuple(dataclasses.replace(o, cached=True) for o in result.observations),
+                    observations=tuple(
+                        dataclasses.replace(o, cached=True) for o in result.observations
+                    ),
                 )
         result = adapter.usage(record, self._secret(record) if record else None)  # type: ignore[attr-defined]
         self._usage_cache[key] = (now, result)
         return result
 
-    def usage_payload(self, tool: str, selector: str | None = None, *, refresh: bool = False) -> dict:
+    def usage_payload(
+        self, tool: str, selector: str | None = None, *, refresh: bool = False
+    ) -> dict:
         payload = self.usage(tool, selector, refresh=refresh).to_json()
         payload.update(schemaVersion=SCHEMA_VERSION, tool=tool, account=selector)
         return payload
 
     # ---- sessions -----------------------------------------------------------
 
-    def run(self, tool: str, selector: str, args: Sequence[str], provider: str | None = None) -> int:
+    def run(
+        self, tool: str, selector: str, args: Sequence[str], provider: str | None = None
+    ) -> int:
         adapter = self.adapter(tool)
         self._need(adapter, SessionCapability, Capability.SESSION_ISOLATION, "isolated sessions")
         record = self.resolve(tool, selector, provider)
         spec = adapter.launch_spec(record, self._secret(record), list(args))  # type: ignore[attr-defined]
-        return adapter.runner.run_interactive(spec.argv, env=spec.env_overlay, unset_env=spec.unset_env)
+        return adapter.runner.run_interactive(
+            spec.argv, env=spec.env_overlay, unset_env=spec.unset_env
+        )
 
     # ---- policy -------------------------------------------------------------
 

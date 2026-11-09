@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Sequence
 
 from claude_swap.vendors.core import RunResult
 
@@ -28,11 +28,11 @@ class FakeRunner:
         self.interactive_routes: dict[tuple[str, ...], Callable[[Call], int] | int] = {}
         self.calls: list[Call] = []
 
-    def on(self, *argv: str, result: Handler) -> "FakeRunner":
+    def on(self, *argv: str, result: Handler) -> FakeRunner:
         self.routes[tuple(argv)] = result
         return self
 
-    def on_interactive(self, *argv: str, code: Callable[[Call], int] | int = 0) -> "FakeRunner":
+    def on_interactive(self, *argv: str, code: Callable[[Call], int] | int = 0) -> FakeRunner:
         self.interactive_routes[tuple(argv)] = code
         return self
 
@@ -46,7 +46,9 @@ class FakeRunner:
                 best = prefix
         return table[best] if best is not None else None
 
-    def run(self, argv: Sequence[str], *, timeout: float = 20.0, env=None, unset_env=(), input_text=None) -> RunResult:
+    def run(
+        self, argv: Sequence[str], *, timeout: float = 20.0, env=None, unset_env=(), input_text=None
+    ) -> RunResult:
         call = Call(tuple(argv), dict(env or {}), tuple(unset_env), input_text)
         self.calls.append(call)
         handler = self._match(self.routes, argv)

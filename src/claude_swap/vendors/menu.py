@@ -45,9 +45,15 @@ def collect(service: VendorService) -> dict[str, list[MenuRow]]:
                     mark = {True: "●", False: "○", None: "?"}[view.active]
                     where = f"{view.provider}/" if view.provider and tool != "opencode" else ""
                     ok = switchable(tool, view.active, view.provider)
-                    selector = (view.identity.get("id") or view.identity.get("account")) if ok else None
+                    selector = (
+                        (view.identity.get("id") or view.identity.get("account")) if ok else None
+                    )
                     hint = "" if ok or view.active else "  (switch in terminal)"
-                    rows.append(MenuRow(f"  {mark} {where}{view.alias}{hint}", tool, selector, view.provider))
+                    rows.append(
+                        MenuRow(
+                            f"  {mark} {where}{view.alias}{hint}", tool, selector, view.provider
+                        )
+                    )
         except ClaudeSwitchError as exc:
             rows.append(MenuRow(f"{adapter.label} — {exc}"[:80], tool))
         result[tool] = rows

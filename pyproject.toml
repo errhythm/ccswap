@@ -112,3 +112,9 @@ markers = [
     "no_keychain_fake: opt out of the autouse in-memory Keychain guard (test mocks subprocess itself, or runs against a temp keychain on GitHub Actions)",
     "no_oauth_profile_fake: opt out of the autouse fetch_oauth_profile stub (test exercises fetch_oauth_profile itself against a mocked urlopen)",
 ]
+
+# Lint/format config used by the vendor integration (new code only; CI scopes it
+# to src/claude_swap/vendors, tui/vendors.py and their tests).
+[tool.ruff]
+line-length = 100
+target-version = "py312"

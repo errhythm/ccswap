@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import stat
 import sys
 import threading
@@ -169,8 +168,13 @@ def test_newer_schema_refused(store):
 def test_unknown_fields_survive_rewrite(store):
     store.root.mkdir(parents=True)
     store.file.write_text(
-        json.dumps({"schemaVersion": 1, "futureTop": {"k": 1},
-                    "tools": {"muse": {"accounts": [], "futureTool": True}}})
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "futureTop": {"k": 1},
+                "tools": {"muse": {"accounts": [], "futureTool": True}},
+            }
+        )
     )
     store.add(rec("a"))
     doc = json.loads(store.file.read_text())
@@ -179,7 +183,9 @@ def test_unknown_fields_survive_rewrite(store):
 
 def test_corrupt_entry_skipped_but_preserved(store):
     store.root.mkdir(parents=True)
-    store.file.write_text(json.dumps({"schemaVersion": 1, "tools": {"muse": {"accounts": [{"nope": 1}]}}}))
+    store.file.write_text(
+        json.dumps({"schemaVersion": 1, "tools": {"muse": {"accounts": [{"nope": 1}]}}})
+    )
     assert store.records("muse") == []
     store.add(rec("a"))
     assert {"nope": 1} in json.loads(store.file.read_text())["tools"]["muse"]["accounts"]
@@ -196,7 +202,9 @@ def test_active_tracking_and_clear_on_remove(store):
 def test_active_by_provider(store):
     store.set_active("opencode", "w", "anthropic")
     store.set_active("opencode", "p", "openai")
-    assert store.active("opencode", "anthropic") == "w" and store.active("opencode", "openai") == "p"
+    assert (
+        store.active("opencode", "anthropic") == "w" and store.active("opencode", "openai") == "p"
+    )
 
 
 def test_concurrent_adds_lose_nothing(store):
@@ -205,7 +213,7 @@ def test_concurrent_adds_lose_nothing(store):
     def worker(i):
         try:
             store.add(rec(f"acct{i}"), f"key-value-{i:04d}")
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover
             errors.append(exc)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]

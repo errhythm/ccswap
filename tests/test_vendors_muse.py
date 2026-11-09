@@ -104,32 +104,62 @@ def test_switch_warns_when_env_key_overrides(adapter, runner, monkeypatch):
 
 def test_browser_switch_is_unsupported_non_interactively(adapter):
     with pytest.raises(UnsupportedCapability, match="muse login"):
-        adapter.switch(AccountRecord("muse", "b", "browser"), None, assume_yes=True, interactive=False)
+        adapter.switch(
+            AccountRecord("muse", "b", "browser"), None, assume_yes=True, interactive=False
+        )
 
 
 def test_browser_switch_interactive_runs_login_and_admits_no_verification(adapter, runner):
     runner.on_interactive(MUSE, "login", code=0)
-    outcome = adapter.switch(AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True)
+    outcome = adapter.switch(
+        AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True
+    )
     assert outcome.verified is False and "cannot verify" in outcome.message
 
 
 def test_browser_login_failure_propagates(adapter, runner):
     runner.on_interactive(MUSE, "login", code=1)
     with pytest.raises(VendorError, match="status 1"):
-        adapter.switch(AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True)
+        adapter.switch(
+            AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True
+        )
 
 
 def test_usage_null_allowance_is_unavailable_not_zero(adapter, runner):
-    runner.on(MUSE, "usage", "--json", result=ok(json.dumps(
-        {"schemaVersion": 1, "allowance": None, "reason": "server_sent_no_usage", "hint": "wait"})))
+    runner.on(
+        MUSE,
+        "usage",
+        "--json",
+        result=ok(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "allowance": None,
+                    "reason": "server_sent_no_usage",
+                    "hint": "wait",
+                }
+            )
+        ),
+    )
     result = adapter.usage(None, None)
     assert result.state is UsageState.UNAVAILABLE and result.observations == ()
     assert result.reason == "server_sent_no_usage"
 
 
 def test_usage_available_passes_vendor_data_through_uninterpreted(adapter, runner):
-    runner.on(MUSE, "usage", "--json", result=ok(json.dumps(
-        {"schemaVersion": 1, "allowance": {"used": 3, "limit": 10, "resetsAt": "2026-11-09T12:00:00Z"}})))
+    runner.on(
+        MUSE,
+        "usage",
+        "--json",
+        result=ok(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "allowance": {"used": 3, "limit": 10, "resetsAt": "2026-11-09T12:00:00Z"},
+                }
+            )
+        ),
+    )
     result = adapter.usage(None, None)
     (obs,) = result.observations
     assert obs.authoritative and obs.kind.value == "subscription-allowance"

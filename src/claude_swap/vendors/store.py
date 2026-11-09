@@ -153,9 +153,14 @@ class VendorStore:
             if secret is not None:
                 ref = self._write_secret(record.tool, secret)
             stored = AccountRecord(
-                tool=record.tool, alias=record.alias, kind=record.kind,
-                provider=record.provider, identity=record.identity, secret_ref=ref,
-                login_hint=record.login_hint, created_at=record.created_at or time.time(),
+                tool=record.tool,
+                alias=record.alias,
+                kind=record.kind,
+                provider=record.provider,
+                identity=record.identity,
+                secret_ref=ref,
+                login_hint=record.login_hint,
+                created_at=record.created_at or time.time(),
             )
             entry["accounts"].append(self._raw(stored))
             try:

@@ -27,8 +27,9 @@ import json
 import os
 import re
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from claude_swap.vendors.core import (
     AccountRecord,
@@ -95,14 +96,23 @@ class OpenCodeAdapter(ToolAdapter):
         if self._probe is not None:
             return self._probe
         info = self.detect()
-        flags = {"switch": False, "json": False, "provider-flag": False, "installed": info.installed}
+        flags = {
+            "switch": False,
+            "json": False,
+            "provider-flag": False,
+            "installed": info.installed,
+        }
         if info.installed:
-            group = self.runner.run([info.path, "auth", "--help"], timeout=15)
+            group = self.runner.run([info.exe, "auth", "--help"], timeout=15)
             if group.ok:
-                flags["switch"] = bool(re.search(r"^\s*opencode (?:auth|providers) switch\b", group.stdout, re.M))
-            listing = self.runner.run([info.path, "auth", "list", "--help"], timeout=15)
+                flags["switch"] = bool(
+                    re.search(
+                        r"^\s*opencode (?:auth|providers) switch\b", group.stdout, re.MULTILINE
+                    )
+                )
+            listing = self.runner.run([info.exe, "auth", "list", "--help"], timeout=15)
             flags["json"] = listing.ok and "--format" in listing.stdout
-            login = self.runner.run([info.path, "auth", "login", "--help"], timeout=15)
+            login = self.runner.run([info.exe, "auth", "login", "--help"], timeout=15)
             flags["provider-flag"] = login.ok and "--provider" in login.stdout
         self._probe = flags
         return flags
@@ -125,8 +135,12 @@ class OpenCodeAdapter(ToolAdapter):
             Capability.VERSION: cap(S.SUPPORTED, "`opencode --version`"),
             Capability.AUTH_STATE: listing,
             Capability.ACCOUNT_ENUMERATION: listing,
-            Capability.REGISTRATION: cap(S.SUPPORTED, "alias for a provider/account OpenCode already lists"),
-            Capability.SWITCH: cap(S.SUPPORTED, "`opencode auth switch <provider> <account>`, verified by re-listing")
+            Capability.REGISTRATION: cap(
+                S.SUPPORTED, "alias for a provider/account OpenCode already lists"
+            ),
+            Capability.SWITCH: cap(
+                S.SUPPORTED, "`opencode auth switch <provider> <account>`, verified by re-listing"
+            )
             if switch
             else cap(
                 S.UNSUPPORTED,
@@ -138,12 +152,17 @@ class OpenCodeAdapter(ToolAdapter):
                 "no authoritative provider quota; `opencode stats` gives local, "
                 "non-per-account token/cost statistics only",
             ),
-            Capability.RATE_LIMIT_DETECTION: cap(S.UNSUPPORTED, "provider-specific; not exposed by OpenCode"),
+            Capability.RATE_LIMIT_DETECTION: cap(
+                S.UNSUPPORTED, "provider-specific; not exposed by OpenCode"
+            ),
             Capability.AUTO_SWITCH: cap(S.UNSUPPORTED, "no verified per-account quota to compare"),
             Capability.SESSION_ISOLATION: cap(
-                S.UNSUPPORTED, "credentials are resolved by the shared OpenCode server, not per process"
+                S.UNSUPPORTED,
+                "credentials are resolved by the shared OpenCode server, not per process",
             ),
-            Capability.LOGOUT: cap(S.CONDITIONAL, "`opencode auth logout <provider> [account]` (explicit only)"),
+            Capability.LOGOUT: cap(
+                S.CONDITIONAL, "`opencode auth logout <provider> [account]` (explicit only)"
+            ),
         }
 
     # ---- enumeration -------------------------------------------------
@@ -155,7 +174,7 @@ class OpenCodeAdapter(ToolAdapter):
             return []
         flags = self.probe()
         if flags["json"]:
-            result = self.runner.run([info.path, "auth", "list", "--format", "json"], timeout=20)
+            result = self.runner.run([info.exe, "auth", "list", "--format", "json"], timeout=20)
             if not result.ok:
                 raise VendorError(f"`opencode auth list` failed: {short_detail(result)}")
             return self._parse_json_listing(result.stdout)
@@ -245,7 +264,9 @@ class OpenCodeAdapter(ToolAdapter):
             "providerConfig": self.provider_config(),
         }
 
-    def observe(self, records: Sequence[AccountRecord], last_active: str | None = None) -> list[AccountView]:
+    def observe(
+        self, records: Sequence[AccountRecord], last_active: str | None = None
+    ) -> list[AccountView]:
         found = self.discover()
         by_key = {(r.provider, r.identity.get("account")): r for r in records}
         views: list[AccountView] = []
@@ -259,7 +280,10 @@ class OpenCodeAdapter(ToolAdapter):
                     alias=rec.alias if rec else f"{row['provider']}/{row['account']}",
                     kind=row["type"],
                     provider=row["provider"],
-                    identity={"account": row["account"], **({"id": row["id"]} if row["id"] else {})},
+                    identity={
+                        "account": row["account"],
+                        **({"id": row["id"]} if row["id"] else {}),
+                    },
                     registered=rec is not None,
                     active=row["active"],
                 )
@@ -268,8 +292,12 @@ class OpenCodeAdapter(ToolAdapter):
             if (rec.provider, rec.identity.get("account")) not in seen:
                 views.append(
                     AccountView(
-                        tool=self.key, alias=rec.alias, kind=rec.kind, provider=rec.provider,
-                        identity=rec.identity, active=None,
+                        tool=self.key,
+                        alias=rec.alias,
+                        kind=rec.kind,
+                        provider=rec.provider,
+                        identity=rec.identity,
+                        active=None,
                         note="no longer listed by OpenCode",
                     )
                 )
@@ -277,7 +305,9 @@ class OpenCodeAdapter(ToolAdapter):
 
     # ---- registration ------------------------------------------------
 
-    def register(self, alias: str, *, provider: str | None = None, account: str | None = None, **_: Any):
+    def register(
+        self, alias: str, *, provider: str | None = None, account: str | None = None, **_: Any
+    ):
         if not provider:
             raise VendorError("A provider is required (see `ccswap opencode accounts`)")
         valid_selector(provider)
@@ -291,12 +321,16 @@ class OpenCodeAdapter(ToolAdapter):
         else:
             matches = [r for r in rows if account in (r["account"], r["id"])]
             if not matches:
-                raise VendorError(f"OpenCode lists no account '{account}' for provider '{provider}'")
+                raise VendorError(
+                    f"OpenCode lists no account '{account}' for provider '{provider}'"
+                )
             row = matches[0]
         ident = {"account": row["account"]}
         if row["id"]:
             ident["id"] = row["id"]
-        return AccountRecord(self.key, alias, "provider-account", provider, ident, created_at=time.time()), None
+        return AccountRecord(
+            self.key, alias, "provider-account", provider, ident, created_at=time.time()
+        ), None
 
     # ---- switching ---------------------------------------------------
 
@@ -316,7 +350,7 @@ class OpenCodeAdapter(ToolAdapter):
             raise VendorError(f"OpenCode lists no account '{account}' for provider '{provider}'")
         previous = next((r for r in rows if r["active"]), None)
         selector = target["id"] or target["account"]
-        result = self.runner.run([info.path, "auth", "switch", provider, selector], timeout=30)
+        result = self.runner.run([info.exe, "auth", "switch", provider, selector], timeout=30)
         if not result.ok:
             raise VendorError(f"`opencode auth switch` failed: {short_detail(result)}")
         after = [r for r in self.discover() if r["provider"] == provider]
@@ -324,28 +358,37 @@ class OpenCodeAdapter(ToolAdapter):
         if not landed or (landed["account"], landed["id"]) != (target["account"], target["id"]):
             if previous:  # restore through the same official command
                 self.runner.run(
-                    [info.path, "auth", "switch", provider, previous["id"] or previous["account"]], timeout=30
+                    [info.exe, "auth", "switch", provider, previous["id"] or previous["account"]],
+                    timeout=30,
                 )
             raise VendorError(
                 f"OpenCode accepted the switch but still reports a different active account for '{provider}'"
             )
         return SwitchOutcome(
-            True, True,
+            True,
+            True,
             f"Active {provider} account is now '{target['account']}' (verified with `opencode auth list`). "
             "Running OpenCode servers/sessions keep the old account until restarted",
         )
 
     def switch(
-        self, record: AccountRecord, secret: str | None, *, assume_yes: bool,
-        interactive: bool, context: Sequence[AccountRecord] = (),
+        self,
+        record: AccountRecord,
+        secret: str | None,
+        *,
+        assume_yes: bool,
+        interactive: bool,
+        context: Sequence[AccountRecord] = (),
     ) -> SwitchOutcome:
-        return self.switch_account(record.provider or "", record.identity.get("id") or record.identity.get("account", ""))
+        return self.switch_account(
+            record.provider or "", record.identity.get("id") or record.identity.get("account", "")
+        )
 
     # ---- login / logout ---------------------------------------------
 
     def login(self, provider: str | None) -> int:
         info = self.require_installed()
-        argv = [info.path, "auth", "login"]
+        argv = [info.exe, "auth", "login"]
         if provider:
             valid_selector(provider)
             argv += ["--provider", provider] if self.probe()["provider-flag"] else [provider]
@@ -353,7 +396,7 @@ class OpenCodeAdapter(ToolAdapter):
 
     def logout(self, provider: str, account: str | None) -> int:
         info = self.require_installed()
-        argv = [info.path, "auth", "logout", valid_selector(provider)]
+        argv = [info.exe, "auth", "logout", valid_selector(provider)]
         if account:
             argv.append(valid_selector(account))
         return self.runner.run_interactive(argv)
@@ -370,17 +413,23 @@ class OpenCodeAdapter(ToolAdapter):
 
     def local_stats(self) -> UsageResult:
         info = self.require_installed()
-        result = self.runner.run([info.path, "stats"], timeout=30)
+        result = self.runner.run([info.exe, "stats"], timeout=30)
         if not result.ok:
-            return UsageResult(UsageState.UNAVAILABLE, f"`opencode stats` failed: {short_detail(result)}")
+            return UsageResult(
+                UsageState.UNAVAILABLE, f"`opencode stats` failed: {short_detail(result)}"
+            )
         text = redact(_ANSI.sub("", result.stdout)).strip()
         lines = text.splitlines()[:60]
         return UsageResult(
             UsageState.AVAILABLE,
             observations=(
                 UsageObservation(
-                    UsageKind.LOCAL_TOKENS, "opencode stats", False, scope="local",
-                    data={"text": "\n".join(lines)}, fetched_at=time.time(),
+                    UsageKind.LOCAL_TOKENS,
+                    "opencode stats",
+                    False,
+                    scope="local",
+                    data={"text": "\n".join(lines)},
+                    fetched_at=time.time(),
                 ),
             ),
             hint="Local statistics across all providers; not an authoritative quota",

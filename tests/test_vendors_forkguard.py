@@ -25,7 +25,10 @@ def test_cli_upgrade_flag_never_reaches_the_package_manager_on_a_fork(capsys, mo
 
     monkeypatch.setattr("sys.argv", ["ccswap", "--upgrade"])
     monkeypatch.setattr(cli, "__version__", "0.48.0+vendors.1")
-    with patch("claude_swap.update_check.run_self_upgrade") as upgrade, pytest.raises(SystemExit) as exc:
+    with (
+        patch("claude_swap.update_check.run_self_upgrade") as upgrade,
+        pytest.raises(SystemExit) as exc,
+    ):
         cli.main()
     upgrade.assert_not_called()
     assert exc.value.code == 1

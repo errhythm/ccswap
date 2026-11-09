@@ -27,8 +27,9 @@ import shutil
 import signal
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from claude_swap import spawn
 from claude_swap.exceptions import ClaudeSwitchError
@@ -103,6 +104,13 @@ class ToolInfo:
     installed: bool
     path: str | None = None
     version: str | None = None
+
+    @property
+    def exe(self) -> str:
+        """The executable path; only valid once ``installed`` was checked."""
+        if not self.path:
+            raise ToolMissing("tool is not installed")
+        return self.path
 
     def to_json(self) -> dict:
         return {"installed": self.installed, "path": self.path, "version": self.version}
@@ -336,16 +344,14 @@ class SubprocessRunner:
         """
         child_env = _child_env(env, unset_env)
         try:
-            child = subprocess.Popen(list(argv), env=child_env)
+            child = subprocess.Popen(list(argv), env=child_env)  # nosec B603 - argv list, no shell
         except FileNotFoundError:
             return 127
         except OSError:
             return 126
         previous = None
         if sys.platform != "win32":
-            previous = signal.signal(
-                signal.SIGTERM, lambda _s, _f: child.terminate()
-            )
+            previous = signal.signal(signal.SIGTERM, lambda _s, _f: child.terminate())
         try:
             while True:
                 try:
@@ -365,9 +371,7 @@ def _exit_code(code: int) -> int:
 # Redaction
 # --------------------------------------------------------------------------
 
-_TOKENISH = re.compile(
-    r"(?i)(?:ksk_|sk-|sk_|ghp_|gho_|xox[abp]-|bearer\s+|eyJ)[A-Za-z0-9._\-]{8,}"
-)
+_TOKENISH = re.compile(r"(?i)(?:ksk_|sk-|sk_|ghp_|gho_|xox[abp]-|bearer\s+|eyJ)[A-Za-z0-9._\-]{8,}")
 
 
 def redact(text: str, secrets: Sequence[str] = ()) -> str:
@@ -419,6 +423,18 @@ class ToolAdapter:
     def capabilities(self, info: ToolInfo) -> dict[Capability, CapabilityStatus]:
         raise NotImplementedError
 
+    # Optional capability defaults: adapters override what the vendor really offers.
+    def auth_summary(self) -> dict:
+        return {}
+
+    def observe(
+        self, records: Sequence[AccountRecord], last_active: str | None = None
+    ) -> list[AccountView]:
+        return [
+            AccountView(self.key, r.alias, r.kind, r.provider, r.identity, active=None)
+            for r in records
+        ]
+
     def require_installed(self) -> ToolInfo:
         info = self.detect()
         if not info.installed:
@@ -447,8 +463,13 @@ class ObservationCapability(Protocol):
 @runtime_checkable
 class SwitchingCapability(Protocol):
     def switch(
-        self, record: AccountRecord, secret: str | None, *, assume_yes: bool,
-        interactive: bool, context: Sequence[AccountRecord] = (),
+        self,
+        record: AccountRecord,
+        secret: str | None,
+        *,
+        assume_yes: bool,
+        interactive: bool,
+        context: Sequence[AccountRecord] = (),
     ) -> SwitchOutcome: ...
 
 

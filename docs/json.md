@@ -62,3 +62,14 @@ Codex list account rows carry an additive `session` object. This is preserved bo
 ```
 
 `state` is `absent`, `idle`, `live`, `uncertain`, `stale` or `conflict` (priority: conflict, uncertain, live, stale, idle, absent). `capturePending` is true for live/uncertain homes, unapplied committed intents or unadopted session credentials. `runCount` is a nonnegative count of alive supervisors, not a guessed writer-PID count; `shared` is true when an active run opted into sharing. Session fields contain no paths, token claims, fingerprints, environment or prompts. See [Codex session mode](codex.md#session-mode-codex-run) for launch and recovery behavior. `codex run` has no wrapper `--json`; Codex's own JSON arguments belong after `--`.
+
+## Vendor commands (`ccswap vendors`, `ccswap muse|opencode|kiro`)
+
+All carry `"schemaVersion": 1` and are additive. Errors use the usual envelope
+(`{"schemaVersion":1,"error":{"type","message"}}`); exit status `3` means the vendor product
+cannot perform the operation (`error.type` is `UnsupportedCapability`).
+
+- `vendors --json`: `{"vendors":[{"tool","label","installed","path","version","capabilities":{<name>:{"support","mechanism"}},"accounts":N,"auth":{...}|null,"error":null|string}]}`. `support` is `supported|conditional|unsupported|unverified`. `auth` never contains secrets.
+- `<tool> list --json`: `{"tool","installed","version","accounts":[{"alias","kind","provider","identity","registered","active","note"}]}`. `active` is `true`, `false` or **`null` when the vendor cannot say**; treat `null` as unknown, not inactive.
+- `<tool> usage --json`: `{"state":"available|unavailable|unsupported","reason","hint","observations":[{"kind","source","authoritative","scope","data","fetchedAt","cached"}]}`. `authoritative:false` marks local statistics (OpenCode `stats`), which are never a quota. `data` is the vendor's payload as reported; there are no derived percentages.
+- `<tool> switch --json`: `{"verified","restartRequired","message","warnings":[]}`. `verified:false` means the vendor offers no way to confirm the result (Muse).

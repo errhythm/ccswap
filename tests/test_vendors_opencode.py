@@ -41,7 +41,10 @@ def test_json_listing_preserves_provider_account_relationships():
     adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
     found = adapter.discover()
     assert [(r["provider"], r["account"], r["active"]) for r in found] == [
-        ("anthropic", "work", True), ("anthropic", "personal", False), ("openai", "main", True)]
+        ("anthropic", "work", True),
+        ("anthropic", "personal", False),
+        ("openai", "main", True),
+    ]
 
 
 def test_json_listing_alternate_shapes():
@@ -70,11 +73,15 @@ def test_listing_failure_is_reported():
 def test_legacy_auth_json_read_only_no_secret_values(tmp_path, monkeypatch):
     data = tmp_path / "data" / "opencode"
     data.mkdir(parents=True)
-    (data / "auth.json").write_text(json.dumps({"opencode-go": {"type": "api", "key": "SECRET-VALUE"}}))
+    (data / "auth.json").write_text(
+        json.dumps({"opencode-go": {"type": "api", "key": "SECRET-VALUE"}})
+    )
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     adapter = OpenCodeAdapter(make(new=False))
     rows = adapter.discover()
-    assert rows == [{"provider": "opencode-go", "account": "default", "id": None, "type": "api", "active": True}]
+    assert rows == [
+        {"provider": "opencode-go", "account": "default", "id": None, "type": "api", "active": True}
+    ]
     assert "SECRET-VALUE" not in json.dumps([v.to_json() for v in adapter.observe([])])
 
 
@@ -141,6 +148,7 @@ def test_observe_marks_registered_and_missing():
     adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
     reg, _ = adapter.register("w", provider="anthropic", account="work")
     from claude_swap.vendors.core import AccountRecord
+
     ghost = AccountRecord("opencode", "g", "provider-account", "google", {"account": "x"})
     views = adapter.observe([reg, ghost])
     by = {v.alias: v for v in views}
@@ -164,7 +172,11 @@ def test_local_stats_are_labelled_non_authoritative():
 
 def test_provider_config_is_separate_and_names_only(tmp_path, monkeypatch):
     cfg = tmp_path / "opencode.json"
-    cfg.write_text(json.dumps({"model": "anthropic/x", "provider": {"acme": {"options": {"apiKey": "SECRETKEY"}}}}))
+    cfg.write_text(
+        json.dumps(
+            {"model": "anthropic/x", "provider": {"acme": {"options": {"apiKey": "SECRETKEY"}}}}
+        )
+    )
     monkeypatch.setenv("OPENCODE_CONFIG", str(cfg))
     summary = OpenCodeAdapter(make(new=True)).provider_config()
     assert summary == {"readable": True, "model": "anthropic/x", "configuredProviders": ["acme"]}

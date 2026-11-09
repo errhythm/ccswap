@@ -14,7 +14,9 @@ import pytest
 
 from claude_swap.vendors.core import SubprocessRunner
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="fake executables are POSIX scripts")
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32", reason="fake executables are POSIX scripts"
+)
 
 KEY = "mk_live_0123456789abcdef"
 
@@ -31,7 +33,9 @@ def world(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     log = tmp_path / "log.jsonl"
-    script(bin_dir / "muse", f"""
+    script(
+        bin_dir / "muse",
+        f"""
         import json, os, sys
         rec = {{"argv": sys.argv[1:], "key": os.environ.get("META_API_KEY"),
                 "stdin": None if sys.stdin.isatty() else sys.stdin.read()}}
@@ -42,9 +46,15 @@ def world(tmp_path):
             sys.exit(7)
         elif sys.argv[1:3] == ["usage", "--json"]:
             print(json.dumps({{"schemaVersion": 1, "allowance": None, "reason": "none"}}))
-    """)
-    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
-           "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "XDG_CONFIG_HOME": str(home / "cfg")}
+    """,
+    )
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "XDG_CONFIG_HOME": str(home / "cfg"),
+    }
     env.pop("META_API_KEY", None)
     return env, log
 
@@ -52,7 +62,12 @@ def world(tmp_path):
 def ccswap(env, *argv, stdin=None):
     return subprocess.run(
         [sys.executable, "-c", "from claude_swap.cli import main; main()", *argv],
-        env=env, input=stdin, capture_output=True, text=True, timeout=60,
+        env=env,
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
 
 
@@ -78,7 +93,9 @@ def test_end_to_end_add_switch_run_through_real_processes(world):
     run_call = calls(log)[-1]
     assert run_call["argv"] == ["exec", "hello"] and run_call["key"] == KEY
 
-    secrets = [p for p in (env["HOME"] and __import__("pathlib").Path(env["HOME"]).rglob("*.secret"))]
+    secrets = [
+        p for p in (env["HOME"] and __import__("pathlib").Path(env["HOME"]).rglob("*.secret"))
+    ]
     assert secrets and all(oct(p.stat().st_mode & 0o777) == "0o600" for p in secrets)
 
     done = ccswap(env, "muse", "usage", "--json")
@@ -107,7 +124,10 @@ def test_runner_timeout_and_missing(tmp_path):
 
 def test_runner_passes_stdin_and_env_not_argv(tmp_path):
     echo = tmp_path / "echo"
-    script(echo, "import os,sys,json; print(json.dumps([os.environ.get('SECRET_X'), sys.stdin.read()]))\n")
+    script(
+        echo,
+        "import os,sys,json; print(json.dumps([os.environ.get('SECRET_X'), sys.stdin.read()]))\n",
+    )
     result = SubprocessRunner().run([str(echo)], env={"SECRET_X": "e"}, input_text="in")
     assert json.loads(result.stdout) == ["e", "in"]
 
@@ -124,12 +144,14 @@ def test_interactive_exit_code_and_signal_forwarding(tmp_path):
     child = tmp_path / "child"
     script(child, "import time; time.sleep(60)\n")
     parent = tmp_path / "parent.py"
-    parent.write_text(textwrap.dedent(f"""
+    parent.write_text(
+        textwrap.dedent(f"""
         import sys
         from claude_swap.vendors.core import SubprocessRunner
         print("ready", flush=True)
         sys.exit(SubprocessRunner().run_interactive([{str(child)!r}]))
-    """))
+    """)
+    )
     proc = subprocess.Popen([sys.executable, str(parent)], stdout=subprocess.PIPE, text=True)
     assert proc.stdout.readline().strip() == "ready"
     time.sleep(0.5)

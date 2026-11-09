@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from claude_swap.vendors.core import AccountRecord, VendorError
+from claude_swap.vendors.core import AccountRecord
 from claude_swap.vendors.menu import collect, switchable
 from claude_swap.vendors.registry import ToolRegistry
 from claude_swap.vendors.service import VendorService
@@ -30,8 +30,10 @@ def test_collect_marks_missing_vendors_and_isolates_failures(tmp_path):
     r.on(OC, "auth", "--help", result=ok("opencode auth switch"))
     r.on(OC, "auth", "list", "--help", result=ok("--format"))
     r.on(OC, "auth", "login", "--help", result=ok(""))
-    rows = [{"provider": "anthropic", "id": "c1", "label": "work", "type": "oauth", "active": True},
-            {"provider": "anthropic", "id": "c2", "label": "alt", "type": "oauth", "active": False}]
+    rows = [
+        {"provider": "anthropic", "id": "c1", "label": "work", "type": "oauth", "active": True},
+        {"provider": "anthropic", "id": "c2", "label": "alt", "type": "oauth", "active": False},
+    ]
     r.on(OC, "auth", "list", "--format", "json", result=ok(json.dumps(rows)))
     out = collect(service(tmp_path, r))
     assert out["muse"][0].label.endswith("not installed")

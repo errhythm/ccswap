@@ -9,16 +9,19 @@ import sys
 import pytest
 
 from claude_swap.vendors.cli import tool_command, vendors_command
-from claude_swap.vendors.core import RunResult
 from claude_swap.vendors.registry import ToolRegistry
 from claude_swap.vendors.service import VendorService
 from claude_swap.vendors.store import VendorStore
-from tests.vendor_helpers import FakeRunner, fail, ok
+from tests.vendor_helpers import FakeRunner, ok
 
 MUSE, KIRO, OC = "/b/muse", "/b/kiro-cli", "/b/opencode"
 KEY = "mk_live_0123456789abcdef"
-IDC = {"accountType": "IamIdentityCenter", "startUrl": "https://c.awsapps.com/start",
-       "region": "us-east-1", "email": "a@c.com"}
+IDC = {
+    "accountType": "IamIdentityCenter",
+    "startUrl": "https://c.awsapps.com/start",
+    "region": "us-east-1",
+    "email": "a@c.com",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -76,7 +79,9 @@ def test_vendors_status_isolates_a_failing_vendor(service, monkeypatch):
 
 
 def test_unexpected_adapter_bugs_are_not_hidden(service, monkeypatch):
-    monkeypatch.setattr(service.adapter("muse"), "detect", lambda: (_ for _ in ()).throw(RuntimeError))
+    monkeypatch.setattr(
+        service.adapter("muse"), "detect", lambda: (_ for _ in ()).throw(RuntimeError)
+    )
     with pytest.raises(RuntimeError):
         service.vendors_payload()
 
@@ -88,7 +93,9 @@ def test_capabilities_command(service, capsys):
 
 
 def test_muse_add_reads_key_from_stdin_and_never_prints_it(service, capsys, monkeypatch, runner):
-    code, out, err = run("muse", ["add", "work", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch)
+    code, out, err = run(
+        "muse", ["add", "work", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch
+    )
     assert code == 0 and KEY not in out + err
     code, out, _ = run("muse", ["list", "--json"], service, capsys)
     assert KEY not in out and json.loads(out)["accounts"][0]["alias"] == "work"
@@ -127,7 +134,9 @@ def test_remove_leaves_vendor_untouched(service, capsys, monkeypatch, runner):
 
 def test_usage_cache_and_refresh(service, capsys, runner):
     calls = []
-    runner.on(MUSE, "usage", "--json", result=lambda c: (calls.append(1), ok('{"allowance": null}'))[1])
+    runner.on(
+        MUSE, "usage", "--json", result=lambda c: (calls.append(1), ok('{"allowance": null}'))[1]
+    )
     for _ in range(3):
         service.usage("muse")
     assert len(calls) == 1
@@ -137,12 +146,22 @@ def test_usage_cache_and_refresh(service, capsys, runner):
 
 def test_usage_cache_expires(runner, tmp_path):
     now = [1000.0]
-    svc = VendorService(ToolRegistry.default(runner), VendorStore(tmp_path / "v"), clock=lambda: now[0])
+    svc = VendorService(
+        ToolRegistry.default(runner), VendorStore(tmp_path / "v"), clock=lambda: now[0]
+    )
     calls = []
-    runner.on(MUSE, "usage", "--json", result=lambda c: (calls.append(1), ok('{"allowance": {"a": 1}}'))[1])
-    svc.usage("muse"); now[0] += 30; cached = svc.usage("muse")
+    runner.on(
+        MUSE,
+        "usage",
+        "--json",
+        result=lambda c: (calls.append(1), ok('{"allowance": {"a": 1}}'))[1],
+    )
+    svc.usage("muse")
+    now[0] += 30
+    cached = svc.usage("muse")
     assert len(calls) == 1 and cached.observations[0].cached is True
-    now[0] += 61; svc.usage("muse")
+    now[0] += 61
+    svc.usage("muse")
     assert len(calls) == 2
 
 
@@ -154,8 +173,11 @@ def test_unsupported_exit_code_and_json_envelope(service, capsys, runner):
 
 
 def test_opencode_list_human_and_provider_awareness(service, capsys, runner, tmp_path, monkeypatch):
-    data = tmp_path / "d" / "opencode"; data.mkdir(parents=True)
-    (data / "auth.json").write_text(json.dumps({"anthropic": {"type": "oauth", "refresh": "SECRET"}}))
+    data = tmp_path / "d" / "opencode"
+    data.mkdir(parents=True)
+    (data / "auth.json").write_text(
+        json.dumps({"anthropic": {"type": "oauth", "refresh": "SECRET"}})
+    )
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "d"))
     code, out, _ = run("opencode", ["list"], service, capsys)
     assert code == 0 and "anthropic/default" in out and "SECRET" not in out
@@ -172,8 +194,11 @@ def test_kiro_status_and_list(service, capsys):
 def test_kiro_switch_non_interactive_exit_3(service, capsys, runner):
     run("kiro", ["add", "a"], service, capsys)
     other = {**IDC, "email": "z@c.com"}
-    service.store.add(__import__("claude_swap.vendors.core", fromlist=["AccountRecord"]).AccountRecord(
-        "kiro", "z", "login", identity=other))
+    service.store.add(
+        __import__("claude_swap.vendors.core", fromlist=["AccountRecord"]).AccountRecord(
+            "kiro", "z", "login", identity=other
+        )
+    )
     code, _, err = run("kiro", ["switch", "z"], service, capsys)
     assert code == 3 and "--login" in err
 
@@ -212,6 +237,6 @@ def test_argparse_rejects_secret_on_command_line(service, capsys):
 def test_corrupt_store_gives_clean_error(service, capsys):
     service.store.root.mkdir(parents=True, exist_ok=True)
     service.store.file.write_text("{oops")
-    code, out, err = run("muse", ["list"], service, capsys)
+    code, _out, err = run("muse", ["list"], service, capsys)
     assert code == 1 and "untouched" in err and "Traceback" not in err
     assert service.store.file.read_text() == "{oops"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from claude_swap.vendors.core import Runner, ToolAdapter, VendorError
 from claude_swap.vendors.kiro import KiroAdapter
@@ -20,7 +20,7 @@ class ToolRegistry:
         self._adapters = {a.key: a for a in adapters}
 
     @classmethod
-    def default(cls, runner: Runner | None = None) -> "ToolRegistry":
+    def default(cls, runner: Runner | None = None) -> ToolRegistry:
         return cls(factory(runner) for factory in DEFAULT_FACTORIES)
 
     def keys(self) -> list[str]:
@@ -33,4 +33,6 @@ class ToolRegistry:
         try:
             return self._adapters[key]
         except KeyError:
-            raise VendorError(f"Unknown vendor '{key}'. Known: {', '.join(self._adapters)}") from None
+            raise VendorError(
+                f"Unknown vendor '{key}'. Known: {', '.join(self._adapters)}"
+            ) from None
