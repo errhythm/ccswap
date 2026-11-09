@@ -32,6 +32,15 @@ ccswap opencode usage                     # local tokens + cost per provider/mod
 ccswap opencode usage --local             # raw `opencode stats` text
 ```
 
+**OpenCode Go is not credits.** Go limits each model separately in dollar-equivalent usage
+(token price × tokens): a rolling 5-hour window of 20% and a weekly window of 50% of the
+model's monthly limit ([docs](https://opencode.ai/docs/go/)). OpenCode records each
+message's cost at Go's token prices, so ccswap shows each Go model's usage for the last 5
+hours, 7 days and 30 days from those records. The monthly limit per model depends on your
+plan (Go, Go Plus, Teams) and is only shown in the OpenCode console, so no percentage is
+invented. When the newest Go request failed (for example `403 Workspace access denied`), the
+headline says "last request refused".
+
 Usage is **local statistics**: a constant, read-only `SELECT` through the official
 `opencode db` command over the `message` table (never the credential or account tables,
 never message content). It gives message counts, token types and OpenCode's own USD cost

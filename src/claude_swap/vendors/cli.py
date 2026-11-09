@@ -150,6 +150,13 @@ def _parser(tool: str) -> argparse.ArgumentParser:
             add.add_argument("--identity-provider", metavar="URL")
             add.add_argument("--region")
             add.add_argument("--device-flow", action="store_true")
+            add.add_argument(
+                "--profile-arn",
+                metavar="ARN",
+                help="Register another Kiro profile of the current login (e.g. a second AWS "
+                "account in your organization); see `kiro-cli profile`",
+            )
+            add.add_argument("--profile-name", help="Display name of that profile")
         add.add_argument("--api-key-stdin", action="store_true", help="Read the key from stdin")
 
     remove = with_json(
@@ -278,6 +285,8 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
                 "identity_provider": args.identity_provider,
                 "region": args.region,
                 "device_flow": args.device_flow,
+                "profile_arn": args.profile_arn,
+                "profile_name": args.profile_name,
             }
         if options.get("kind") == "api-key":
             options["api_key"] = read_secret(

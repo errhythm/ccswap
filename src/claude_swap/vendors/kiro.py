@@ -61,15 +61,49 @@ _URL = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?(?:/[A-Za-z0-9._~/%-]*)?$")
 SOCIALS = ("google", "github")
 
 
+IDENTITY_KEYS = ("accountType", "email", "startUrl", "region", "profileArn", "profileName")
+# arn:aws:codewhisperer:<region>:<12-digit AWS account>:profile/<id>
+_PROFILE_ARN = re.compile(
+    r"^arn:aws:codewhisperer:[a-z]{2}(?:-[a-z]+)+-\d:\d{12}:profile/[A-Za-z0-9]+$"
+)
+
+
 def parse_whoami(text: str) -> dict[str, str] | None:
-    """First JSON object in ``whoami -f json`` output; trailing text ignored."""
+    """``whoami -f json``: the JSON object, plus the Kiro profile kiro-cli 3.1 prints after it.
+
+    Verified on 3.1.0 with an Identity Center login::
+
+        {"accountType":"IamIdentityCenter","startUrl":"…","region":"…","email":"…"}
+
+        Profile:
+        KiroProfile-us-east-1
+        arn:aws:codewhisperer:us-east-1:276673691073:profile/A93MWV3YUKXQ
+
+    One Identity Center login can see several profiles (one per AWS account in the
+    organization); each is a separate account for ccswap.
+    """
+    raw = (text or "").lstrip()
     try:
-        doc, _ = json.JSONDecoder().raw_decode((text or "").lstrip())
+        doc, end = json.JSONDecoder().raw_decode(raw)
     except ValueError:
         return None
     if not isinstance(doc, dict):
         return None
-    return {k: str(v) for k, v in doc.items() if isinstance(v, (str, int)) and v != ""}
+    who = {k: str(v) for k, v in doc.items() if isinstance(v, (str, int)) and v != ""}
+    tail = [line.strip() for line in raw[end:].splitlines() if line.strip()]
+    if "Profile:" in tail:
+        rest = tail[tail.index("Profile:") + 1 :]
+        arn = next((line for line in rest[:3] if _PROFILE_ARN.match(line)), None)
+        if arn:
+            who["profileArn"] = arn
+            name = rest[0] if rest and rest[0] != arn else ""
+            if name and len(name) <= 80:
+                who["profileName"] = name
+    return who
+
+
+def profile_account_id(arn: str) -> str:
+    return arn.split(":")[4] if _PROFILE_ARN.match(arn or "") else ""
 
 
 def _signed_out_json(text: str) -> bool:
@@ -93,7 +127,19 @@ def _same_login(identity: Mapping[str, str], current: Mapping[str, str]) -> bool
     if identity.get("startUrl", "") != current.get("startUrl", ""):
         return False
     kinds = (identity.get("accountType", ""), current.get("accountType", ""))
-    return not all(kinds) or kinds[0].lower() == kinds[1].lower()
+    if all(kinds) and kinds[0].lower() != kinds[1].lower():
+        return False
+    # Profiles of one login are separate accounts.  A record without a profile (registered
+    # before profiles were tracked) only matches while ``whoami`` reports none either.
+    return identity.get("profileArn", "") == current.get("profileArn", "")
+
+
+def _same_person(identity: Mapping[str, str], current: Mapping[str, str]) -> bool:
+    """Same Kiro login (email + start URL), regardless of the selected profile."""
+    return bool(identity.get("email")) and (
+        identity.get("email", "").lower() == current.get("email", "").lower()
+        and identity.get("startUrl", "") == current.get("startUrl", "")
+    )
 
 
 def _hint_args(hint: Mapping[str, str]) -> list[str]:
@@ -366,11 +412,7 @@ class KiroAdapter(ToolAdapter):
                     self.key,
                     f"(current {who.get('email', 'login')})",
                     "login",
-                    identity={
-                        k: v
-                        for k, v in who.items()
-                        if k in ("accountType", "email", "startUrl", "region")
-                    },
+                    identity={k: v for k, v in who.items() if k in IDENTITY_KEYS},
                     registered=False,
                     active=True,
                     note="not registered; run `ccswap kiro add`",
@@ -391,6 +433,8 @@ class KiroAdapter(ToolAdapter):
         identity_provider: str | None = None,
         region: str | None = None,
         device_flow: bool = False,
+        profile_arn: str | None = None,
+        profile_name: str | None = None,
         **_: Any,
     ):
         if kind == "api-key":
@@ -426,9 +470,19 @@ class KiroAdapter(ToolAdapter):
             )
         if device_flow:
             hint["deviceFlow"] = "true"
-        ident = {
-            k: v for k, v in who.items() if k in ("accountType", "email", "startUrl", "region")
-        }
+        ident = {k: v for k, v in who.items() if k in IDENTITY_KEYS}
+        if profile_arn:
+            # Another profile of the *current* login (e.g. a second AWS account of the
+            # organization): same email/start URL, different profile.  Nothing is switched.
+            if not _PROFILE_ARN.match(profile_arn):
+                raise VendorError(
+                    "Invalid Kiro profile ARN (arn:aws:codewhisperer:<region>:<account>:profile/<id>)"
+                )
+            ident["profileArn"] = profile_arn
+            if profile_name and len(profile_name) <= 80:
+                ident["profileName"] = profile_name
+            else:
+                ident.pop("profileName", None)
         return AccountRecord(
             self.key, alias, "login", identity=ident, login_hint=hint, created_at=time.time()
         ), None
@@ -463,6 +517,8 @@ class KiroAdapter(ToolAdapter):
             return SwitchOutcome(
                 True, False, f"'{record.alias}' is already the active Kiro login", tuple(warnings)
             )
+        if current and _same_person(record.identity, current):
+            return self._switch_profile(info.exe, record, interactive, tuple(warnings))
         if not interactive:
             raise UnsupportedCapability(
                 "Kiro logins can only be changed interactively. Re-run with --login to run "
@@ -596,12 +652,37 @@ class KiroAdapter(ToolAdapter):
                     UsageState.UNAVAILABLE,
                     "The Kiro login changed during the usage check; not recorded",
                 )
-            identity = {
-                k: v
-                for k, v in after.items()
-                if k in ("accountType", "email", "startUrl", "region")
-            }
+            identity = {k: v for k, v in after.items() if k in IDENTITY_KEYS}
         return dataclasses.replace(parsed, attributed_to=who, identity=identity)
+
+    def _switch_profile(
+        self, exe: str, record: AccountRecord, interactive: bool, warnings: tuple[str, ...]
+    ) -> SwitchOutcome:
+        """Same login, other profile: Kiro's own picker (`kiro-cli profile`), no logout."""
+        arn = record.identity.get("profileArn", "")
+        target = f"{record.identity.get('profileName', 'profile')} in AWS account {profile_account_id(arn)}"
+        if not interactive:
+            raise UnsupportedCapability(
+                f"Choosing a Kiro profile needs Kiro's interactive picker. Re-run with --login and "
+                f"pick {target}"
+            )
+        print(f"Kiro's profile picker opens next: choose {target}.")
+        self.runner.run_interactive([exe, "profile"])
+        state, after = self.whoami_state()
+        if state != "in" or not after:
+            raise VendorError(
+                "`kiro-cli whoami` failed after the profile picker; check `kiro-cli whoami`"
+            )
+        if after.get("profileArn") != arn:
+            chosen = profile_account_id(after.get("profileArn", "")) or "none"
+            raise VendorError(f"The active Kiro profile is AWS account {chosen}, not {target}")
+        return SwitchOutcome(
+            True,
+            True,
+            f"Kiro profile is now '{record.alias}' ({target}; verified with `kiro-cli whoami`). "
+            "Running chat sessions keep the old profile until restarted",
+            warnings,
+        )
 
     @staticmethod
     def owner_of(record: AccountRecord, identity: Mapping[str, str]) -> bool:

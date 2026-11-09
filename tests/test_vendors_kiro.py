@@ -329,3 +329,104 @@ def test_ctrl_c_during_login_names_the_recovery_command():
         KiroAdapter(runner).switch(
             login_rec(), None, assume_yes=True, interactive=True, context=ctx
         )
+
+
+# ---- Kiro profiles (one Identity Center login, several AWS accounts) ---------------
+
+ARN_A = "arn:aws:codewhisperer:us-east-1:276673691073:profile/A93MWV3YUKXQ"
+ARN_B = "arn:aws:codewhisperer:us-east-1:151869951925:profile/QXHDHVXUCRC4"
+
+
+def whoami_with_profile(who, arn, name="KiroProfile-us-east-1"):
+    return ok(json.dumps(who) + f"\n\nProfile:\n{name}\n{arn}\n")
+
+
+def test_parse_whoami_reads_the_profile_kiro_31_prints():
+    from claude_swap.vendors.kiro import parse_whoami
+
+    who = parse_whoami(json.dumps(IDC) + f"\n\nProfile:\nKiroProfile-us-east-1\n{ARN_A}\n")
+    assert who["profileArn"] == ARN_A and who["profileName"] == "KiroProfile-us-east-1"
+    assert "profileArn" not in parse_whoami(json.dumps(IDC) + "\n\nProfile:\nnot-an-arn\n")
+
+
+def profile_world(active_arn):
+    state = {"arn": active_arn}
+    r = FakeRunner({"kiro-cli": KIRO})
+    r.on(KIRO, "--version", result=ok("kiro-cli 3.1.0"))
+    r.on(KIRO, "whoami", result=lambda c: whoami_with_profile(IDC, state["arn"]))
+    return r, state
+
+
+def test_two_profiles_of_one_login_are_separate_accounts():
+    r, _ = profile_world(ARN_A)
+    adapter = KiroAdapter(r)
+    a, _ = adapter.register("acct-a")
+    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    assert a.identity["profileArn"] == ARN_A and b.identity["profileArn"] == ARN_B
+    assert b.identity["email"] == IDC["email"] and "profileName" not in b.identity
+    views = {v.alias: v.active for v in adapter.observe([a, b])}
+    assert views == {"acct-a": True, "acct-b": False}
+    assert not any(c.interactive for c in r.calls)  # registering never switches
+
+
+def test_invalid_profile_arn_is_rejected():
+    r, _ = profile_world(ARN_A)
+    with pytest.raises(VendorError, match="Invalid Kiro profile ARN"):
+        KiroAdapter(r).register("x", profile_arn="arn:aws:iam::123:role/evil; rm -rf /")
+
+
+def test_profile_switch_uses_kiros_picker_without_logout_and_verifies():
+    r, state = profile_world(ARN_A)
+    r.on_interactive(KIRO, "profile", code=lambda c: (state.__setitem__("arn", ARN_B), 0)[1])
+    adapter = KiroAdapter(r)
+    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    outcome = adapter.switch(b, None, assume_yes=False, interactive=True, context=[b])
+    assert outcome.verified and "151869951925" in outcome.message
+    assert [c.argv for c in r.calls if c.interactive] == [(KIRO, "profile")]  # no logout
+
+
+def test_profile_switch_to_the_wrong_profile_is_reported():
+    r, _ = profile_world(ARN_A)
+    r.on_interactive(KIRO, "profile", code=0)  # user picked nothing new
+    adapter = KiroAdapter(r)
+    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    with pytest.raises(VendorError, match="276673691073"):
+        adapter.switch(b, None, assume_yes=False, interactive=True, context=[b])
+
+
+def test_profile_switch_non_interactive_explains_the_picker():
+    r, _ = profile_world(ARN_A)
+    adapter = KiroAdapter(r)
+    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    with pytest.raises(UnsupportedCapability, match="151869951925"):
+        adapter.switch(b, None, assume_yes=False, interactive=False, context=[b])
+    assert not any(c.interactive for c in r.calls)
+
+
+def test_profile_usage_is_filed_under_the_active_profile_only(tmp_path):
+    from claude_swap.vendors.registry import ToolRegistry
+    from claude_swap.vendors.service import VendorService
+    from claude_swap.vendors.store import VendorStore
+
+    r, _ = profile_world(ARN_A)
+    r.on(KIRO, "chat", "--help", result=ok("--no-interactive --v2"))
+    r.on(
+        KIRO,
+        "chat",
+        "--no-interactive",
+        "--v2",
+        "/usage",
+        result=ok(
+            "Estimated Usage | resets on 2099-12-01 | KIRO PRO+\nCredits (100.00 of 2000 covered in plan), 5%\n"
+        ),
+    )
+    reg = ToolRegistry.default(r)
+    reg.get("kiro").probe_dir = tmp_path / "probe"
+    svc = VendorService(reg, VendorStore(tmp_path / "v"))
+    a, _ = reg.get("kiro").register("acct-a")
+    b, _ = reg.get("kiro").register("acct-b", profile_arn=ARN_B)
+    svc.store.add(a)
+    svc.store.add(b)
+    assert svc.usage("kiro").attributed_to == "acct-a"
+    assert svc.usage("kiro", "acct-a").windows[0].used == 100.0
+    assert svc.usage("kiro", "acct-b").windows == ()  # not the active profile

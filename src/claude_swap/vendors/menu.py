@@ -18,6 +18,7 @@ from claude_swap.vendors.overview import (
     LABELS,
     Overview,
     ToolSummary,
+    go_lines,
     headline,
     local_cost_line,
     reset_text,
@@ -69,6 +70,15 @@ def usage_rows(tool: str, result: UsageResult, now: float, indent: str = "") -> 
         reset = reset_text(w, now)
         if reset:
             rows.append(MenuRow(f"{indent}    {reset}", tool))
+    for line in go_lines(result):
+        rows.append(
+            MenuRow(
+                f"{indent}{line.strip() if not line.startswith('  ') else '    ' + line.strip()}"[
+                    :110
+                ],
+                tool,
+            )
+        )
     local = local_cost_line(result)
     if local:
         rows.append(MenuRow(f"{indent}{local} (OpenCode estimate, not a quota)", tool))

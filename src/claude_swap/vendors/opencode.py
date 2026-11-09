@@ -81,7 +81,7 @@ def _config_file() -> Path:
     return root / "opencode" / "opencode.json"
 
 
-_PERIODS = ("24h", "7d", "30d", "all")
+_PERIODS = ("5h", "24h", "7d", "30d", "all")
 _TOKEN_FIELDS = (
     ("input", "$.tokens.input"),
     ("output", "$.tokens.output"),
@@ -94,12 +94,13 @@ _TOKEN_FIELDS = (
 def _cutoffs(now: float) -> dict[str, int]:
     day = 86400 * 1000
     ms = int(now * 1000)
-    return {"d1": ms - day, "d7": ms - 7 * day, "d30": ms - 30 * day}
+    return {"h5": ms - 5 * 3600 * 1000, "d1": ms - day, "d7": ms - 7 * day, "d30": ms - 30 * day}
 
 
 def _sums() -> str:
     parts = []
     for period, cond in (
+        ("5h", "time_created > {h5}"),
         ("24h", "time_created > {d1}"),
         ("7d", "time_created > {d7}"),
         ("30d", "time_created > {d30}"),
@@ -116,6 +117,44 @@ def _sums() -> str:
                 f'as "{name}_{period}"'
             )
     return ", ".join(parts)
+
+
+# The newest assistant message per provider, only when it failed: tells whether a provider is
+# currently refusing requests (e.g. OpenCode Go's "Workspace access denied").  Constant,
+# read-only, message table only; it selects the error text, never message content.
+_LAST_ERROR_SQL = (
+    "select provider, message, status, at from (select json_extract(data,'$.providerID') as provider, "
+    "json_extract(data,'$.error.data.message') as message, "
+    "json_extract(data,'$.error.data.statusCode') as status, time_created as at, "
+    "row_number() over (partition by json_extract(data,'$.providerID') order by time_created desc) as rn "
+    "from message where json_extract(data,'$.role')='assistant') where rn = 1 and message is not null"
+)
+
+# OpenCode Go meters usage per model in dollar-equivalents (token price x tokens, the
+# same prices OpenCode records as each message's cost), with rolling limits of 20% (5 h),
+# 50% (week) and 100% (month) of each model's monthly limit: https://opencode.ai/docs/go/
+GO_PROVIDER = "opencode-go"
+GO_RULE = "Go limits each model separately: 5-hour ≤ 20%, weekly ≤ 50% of its monthly limit"
+
+
+def go_usage(providers: list[dict]) -> dict | None:
+    """Per-model OpenCode Go usage in Go's own windows (dollar-equivalent, not credits)."""
+    bucket = next((p for p in providers if p["provider"] == GO_PROVIDER), None)
+    if bucket is None:
+        return None
+    models = [
+        {
+            "model": m["model"],
+            "fiveHourUsd": m["5h"]["costUsd"],
+            "weekUsd": m["7d"]["costUsd"],
+            "thirtyDayUsd": m["30d"]["costUsd"],
+            "messages30d": m["30d"]["messages"],
+        }
+        for m in bucket["models"]
+        if m["30d"]["messages"] or m["7d"]["messages"]
+    ]
+    models.sort(key=lambda m: (-m["weekUsd"], -m["thirtyDayUsd"]))
+    return {"models": models, "rule": GO_RULE, "unit": "usd-equivalent"}
 
 
 # A constant, read-only aggregate over the message table only.  It never touches the
@@ -587,6 +626,11 @@ class OpenCodeAdapter(ToolAdapter):
                 "OpenCode has no recorded model usage yet",
                 source="opencode db (local message records)",
             )
+        last_errors = self._last_errors(info.exe)
+        data: dict = {"periods": list(_PERIODS), "providers": providers, "lastErrors": last_errors}
+        go = go_usage(providers)
+        if go is not None:
+            data["go"] = go
         return UsageResult(
             UsageState.AVAILABLE,
             observations=(
@@ -595,16 +639,35 @@ class OpenCodeAdapter(ToolAdapter):
                     "opencode db (local message records)",
                     False,
                     scope="local",
-                    data={"periods": list(_PERIODS), "providers": providers},
+                    data=data,
                     fetched_at=now,
                 ),
             ),
             source="opencode db (local message records)",
             authoritative=False,
             observed_at=now,
-            hint="Local statistics. Costs are OpenCode's own USD estimates; provider "
-            "subscription quotas are not reported by OpenCode",
+            hint="Local records. OpenCode Go counts dollar-equivalent usage per model (not "
+            "credits); its limits and plan are only shown in the OpenCode console",
         )
+
+    def _last_errors(self, exe: str) -> dict[str, dict]:
+        """{provider: {message, status, at}} when a provider's newest request failed."""
+        result = self.runner.run([exe, "db", _LAST_ERROR_SQL, "--format", "json"], timeout=45)
+        if not result.ok:
+            return {}
+        try:
+            rows = json.loads(result.stdout or "[]")
+        except ValueError:
+            return {}
+        out: dict[str, dict] = {}
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and isinstance(row.get("provider"), str):
+                out[row["provider"]] = {
+                    "message": redact(str(row.get("message") or ""))[:160],
+                    "status": row.get("status") if isinstance(row.get("status"), int) else None,
+                    "at": at / 1000 if isinstance(at := row.get("at"), (int, float)) else None,
+                }
+        return out
 
     def _db_supported(self, exe: str) -> bool:
         if self._db is None:

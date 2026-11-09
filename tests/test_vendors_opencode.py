@@ -267,3 +267,116 @@ def test_legacy_logout_never_passes_an_account(tmp_path, monkeypatch):
     runner.on_interactive(OC, "auth", "logout", code=0)
     OpenCodeAdapter(runner).logout("anthropic", "work")
     assert runner.calls[-1].argv == (OC, "auth", "logout", "anthropic")
+
+
+# ---- OpenCode Go: dollar-equivalent usage per model, in Go's own windows ------------
+
+
+def go_rows():
+    def row(model, h5, d7, d30, n30):
+        base = {"provider": "opencode-go", "model": model, "last": 1}
+        for p, (n, c) in {
+            "5h": (1 if h5 else 0, h5),
+            "24h": (0, 0.0),
+            "7d": (1, d7),
+            "30d": (n30, d30),
+            "all": (n30, d30),
+        }.items():
+            base[f"n_{p}"], base[f"cost_{p}"] = n, c
+        return base
+
+    return [
+        row("muse-spark-1.3", 0.5, 4.0, 38.48, 51000),
+        row("glm-5.3", 0.0, 0.0, 0.03, 2),
+        {"provider": "anthropic", "model": "x", "n_30d": 1, "cost_30d": 2.0},
+    ]
+
+
+def test_go_usage_is_per_model_in_gos_windows_not_credits():
+    from claude_swap.vendors.opencode import go_usage
+
+    go = go_usage(summarize_rows())
+    assert go["unit"] == "usd-equivalent" and "20%" in go["rule"] and "50%" in go["rule"]
+    top = go["models"][0]
+    assert (top["model"], top["fiveHourUsd"], top["weekUsd"], top["thirtyDayUsd"]) == (
+        "muse-spark-1.3",
+        0.5,
+        4.0,
+        38.48,
+    )
+
+
+def summarize_rows():
+    from claude_swap.vendors.opencode import summarize
+
+    return summarize(go_rows())
+
+
+def test_go_headline_and_refused_request_are_shown():
+    from claude_swap.vendors.core import UsageKind, UsageObservation, UsageResult, UsageState
+    from claude_swap.vendors.opencode import go_usage
+    from claude_swap.vendors.overview import go_lines, usage_headline
+
+    providers = summarize_rows()
+    data = {
+        "providers": providers,
+        "go": go_usage(providers),
+        "lastErrors": {
+            "opencode-go": {"message": "Workspace access denied", "status": 403, "at": 1.0}
+        },
+    }
+    result = UsageResult(
+        UsageState.AVAILABLE,
+        observations=(
+            UsageObservation(
+                UsageKind.LOCAL_TOKENS, "opencode db", False, scope="local", data=data
+            ),
+        ),
+    )
+    assert (
+        usage_headline(result) == "Go · 5h $0.50 · wk $4.00 (muse-spark-1.3) · last request refused"
+    )
+    text = "\n".join(go_lines(result))
+    assert (
+        "dollar-equivalent" in text
+        and "not credits" in text
+        and "403: Workspace access denied" in text
+    )
+    assert "credit" not in usage_headline(result)
+
+
+def test_last_error_query_is_constant_and_read_only():
+    from claude_swap.vendors.opencode import _LAST_ERROR_SQL
+
+    sql = _LAST_ERROR_SQL.lower()
+    assert sql.startswith("select ") and " from message " in sql
+    for word in ("insert", "update", "delete", "drop", "credential", "account", "attach", "pragma"):
+        assert word not in sql.replace("json_extract", "")
+
+
+def test_usage_queries_last_errors_and_reports_go(tmp_path):
+    runner = make(new=True)
+    runner.on(OC, "db", "--help", result=RunResult(0, stderr="query --format json"))
+    from claude_swap.vendors.opencode import _LAST_ERROR_SQL
+
+    def db(call):
+        if call.argv[2] == _LAST_ERROR_SQL:
+            return ok(
+                json.dumps(
+                    [
+                        {
+                            "provider": "opencode-go",
+                            "message": "Workspace access denied",
+                            "status": 403,
+                            "at": 1793856631125,
+                        }
+                    ]
+                )
+            )
+        return ok(json.dumps(go_rows()))
+
+    runner.on(OC, "db", result=db)
+    result = OpenCodeAdapter(runner).usage(None, None)
+    data = result.observations[0].data
+    assert data["lastErrors"]["opencode-go"]["status"] == 403
+    assert data["go"]["models"][0]["model"] == "muse-spark-1.3"

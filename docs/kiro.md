@@ -27,6 +27,22 @@ ccswap kiro usage                         # plan, credits used/limit, reset date
 ccswap kiro remove work                   # forget the registration; Kiro untouched
 ```
 
+## Profiles (several AWS accounts in one organization)
+
+One Identity Center login can see several Kiro profiles, one per AWS account in the
+organization, and each has its own subscription and credits. ccswap treats each profile
+as a separate account: `kiro-cli whoami` prints the active profile ARN, which becomes part
+of the account's identity.
+
+```sh
+ccswap kiro add work-a                         # the active profile
+ccswap kiro add work-b --profile-arn arn:aws:codewhisperer:us-east-1:<account>:profile/<id>
+ccswap kiro switch work-b --login              # opens Kiro's own `kiro-cli profile` picker; no logout
+```
+
+The switch is verified with `whoami`. Picking the wrong profile is reported, never
+counted as success. `/usage` is filed under whichever profile was active when it was read.
+
 ## Usage
 
 `ccswap kiro usage` runs `kiro-cli chat --no-interactive --v2 "/usage"`. The V2 harness

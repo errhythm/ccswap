@@ -198,7 +198,7 @@ def _unregistered_usage(view: AccountView, tool_usage: UsageResult | None) -> Us
     """A discovered, unregistered login gets the tool-level reading only when the tool
     reported that reading for exactly this identity (e.g. Kiro's whoami login)."""
     ident = dict(tool_usage.identity) if tool_usage is not None else {}
-    keys = [k for k in ("email", "startUrl", "accountType") if k in ident]
+    keys = [k for k in ("email", "startUrl", "accountType", "profileArn") if k in ident]
     if (
         tool_usage is not None
         and view.active
@@ -275,10 +275,59 @@ def usage_headline(result: UsageResult | None) -> str:
             return f"stale · {text}"
         # Numbers kept beside a problem are the *last* reading, never presented as live.
         return f"{_STATE_WORDS.get(result.state, result.state.value)} · last {text}"
-    local = local_cost_line(result)
+    local = go_headline(result) or local_cost_line(result)
     if local:
         return local
     return _STATE_WORDS.get(result.state, result.state.value)
+
+
+def _obs_data(result: UsageResult, key: str):
+    for obs in result.observations:
+        if isinstance(obs.data, dict) and key in obs.data:
+            return obs.data[key]
+    return None
+
+
+def go_lines(result: UsageResult) -> list[str]:
+    """OpenCode Go as Go meters it: dollar-equivalent usage per model in its windows."""
+    go = _obs_data(result, "go")
+    if not isinstance(go, dict):
+        return []
+    lines = ["OpenCode Go usage (dollar-equivalent per model, from local records; not credits):"]
+    for m in go.get("models", [])[:8]:
+        lines.append(
+            f"  {m['model']:<28} 5h ${m['fiveHourUsd']:,.2f} · week ${m['weekUsd']:,.2f}"
+            f" · 30d ${m['thirtyDayUsd']:,.2f}"
+        )
+    if not go.get("models"):
+        lines.append("  no Go usage in the last 30 days")
+    lines.append(
+        f"  {go.get('rule', '')}; your plan's per-model limits are in the OpenCode console"
+    )
+    error = (_obs_data(result, "lastErrors") or {}).get("opencode-go")
+    if error:
+        when = (
+            datetime.fromtimestamp(error["at"]).strftime("%Y-%m-%d %H:%M")
+            if error.get("at")
+            else "?"
+        )
+        status = f" {error['status']}" if error.get("status") else ""
+        lines.append(f"  ! last Go request refused{status}: {error['message']} ({when})")
+    return lines
+
+
+def go_headline(result: UsageResult) -> str | None:
+    go = _obs_data(result, "go")
+    if not isinstance(go, dict):
+        return None
+    models = go.get("models") or []
+    text = "Go · no usage in 30d"
+    if models:
+        top = models[0]  # busiest this week: limits apply per model
+        text = f"Go · 5h ${top['fiveHourUsd']:,.2f} · wk ${top['weekUsd']:,.2f} ({top['model']})"
+    if (_obs_data(result, "lastErrors") or {}).get("opencode-go"):
+        text += " · last request refused"
+    return text
 
 
 def local_cost_line(result: UsageResult, period: str = "30d") -> str | None:
@@ -360,13 +409,15 @@ def render_usage_lines(result: UsageResult, indent: str = "    ") -> list[str]:
     for obs in result.observations:
         providers = obs.data.get("providers") if isinstance(obs.data, dict) else None
         if isinstance(providers, list):
+            lines.extend(f"{indent}{line}" for line in go_lines(result))
             lines.append(f"{indent}local statistics ({obs.source}; not a quota):")
             for p in providers[:12]:
                 t = p["totals"]
+                unit = "usage" if p["provider"] == "opencode-go" else "cost est."
                 lines.append(
                     f"{indent}  {p['provider']:<18} 24h {t['24h']['messages']:>6,} msgs"
                     f"  30d {t['30d']['messages']:>7,} msgs ${t['30d']['costUsd']:>8,.2f}"
-                    f"  all ${t['all']['costUsd']:>8,.2f}"
+                    f"  all ${t['all']['costUsd']:>8,.2f} {unit}"
                 )
         elif isinstance(obs.data, dict) and isinstance(obs.data.get("text"), str):
             lines.extend(f"{indent}{line}" for line in obs.data["text"].splitlines()[:30])
