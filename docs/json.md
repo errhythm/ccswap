@@ -62,3 +62,16 @@ Codex list account rows carry an additive `session` object. This is preserved bo
 ```
 
 `state` is `absent`, `idle`, `live`, `uncertain`, `stale` or `conflict` (priority: conflict, uncertain, live, stale, idle, absent). `capturePending` is true for live/uncertain homes, unapplied committed intents or unadopted session credentials. `runCount` is a nonnegative count of alive supervisors, not a guessed writer-PID count; `shared` is true when an active run opted into sharing. Session fields contain no paths, token claims, fingerprints, environment or prompts. See [Codex session mode](codex.md#session-mode-codex-run) for launch and recovery behavior. `codex run` has no wrapper `--json`; Codex's own JSON arguments belong after `--`.
+
+## Vendor commands (`ccswap vendors`, `ccswap muse|opencode|kiro`)
+
+All carry `"schemaVersion": 1` and are additive. Errors use the usual envelope
+(`{"schemaVersion":1,"error":{"type","message"}}`); exit status `3` means the vendor product
+cannot perform the operation (`error.type` is `UnsupportedCapability`).
+
+- `vendors --json`: `{"vendors":[{"tool","label","installed","path","version","capabilities":{<name>:{"support","mechanism"}},"accounts":N,"auth":{...}|null,"error":null|string}]}`. `support` is `supported|conditional|unsupported|unverified`. `auth` never contains secrets.
+- `<tool> list --json`: `{"tool","installed","version","accounts":[{"alias","kind","provider","identity","registered","active","note"}]}`. `active` is `true`, `false` or **`null` when the vendor cannot say**; treat `null` as unknown, not inactive.
+- `<tool> usage --json`: the usage object below for the tool's current credential, plus `accounts: [{...account, "usage": {...}, "headline"}]`, each with **its own** usage.
+- `ccswap usage [TOOL ...] --json` (all tools, including Claude Code, Codex and Antigravity): `{"schemaVersion":1,"tools":[{"tool","label","installed","version","surface","headline","error","refreshedAt","auth","usage","accounts"}]}`.
+- **Usage object:** `{"state":"available|unavailable|unsupported|unauthenticated|stale|error","reason","hint","plan","source","authoritative","attributedTo","observedAt","error","windows":[...],"observations":[...]}`. Each window is one independently reported limit: `{"key","label","unit","used","limit","remaining","usedPercent","resetsAt","resetsOn","scope","note"}`. Fields the tool did not report are `null`; `usedPercent` is never derived from different units; `resetsOn` is a date the tool gave without a time. `stale` keeps the last good reading (and its `observedAt`) with the failed refresh's reason in `error`. `authoritative:false` marks local statistics (OpenCode), which are never a quota.
+- `<tool> switch --json`: `{"verified","restartRequired","message","warnings":[]}`. `verified:false` means the vendor offers no way to confirm the result (Muse).

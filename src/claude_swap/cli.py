@@ -1455,6 +1455,18 @@ def main() -> None:
     except Exception:
         pass  # theme is cosmetic; never block the CLI on it
 
+    # `ccswap claude <verb>` is the established top-level Claude command, so rewrite it
+    # before any other dispatch (`claude run 1` must reach `run`).
+    if argv and argv[0] == "claude":
+        from claude_swap.vendors.cli import claude_argv
+
+        try:
+            argv = claude_argv(argv[1:])
+        except ValueError as exc:
+            error(f"Error: {exc}")
+            sys.exit(2)
+        sys.argv = [sys.argv[0], *argv]
+
     # `run` and `auto` keep their dedicated pre-dispatch parsers.
     if argv and argv[0] == "run":
         _run_command(argv[1:])
@@ -1465,6 +1477,19 @@ def main() -> None:
     if argv and argv[0] == "agy":
         _agy_command(argv[1:])
         return
+    if argv and argv[0] == "usage":
+        from claude_swap.vendors.cli import usage_command
+
+        sys.exit(usage_command(argv[1:]))
+    if argv and argv[0] in ("vendors", "tools", "muse", "opencode", "kiro"):
+        from claude_swap.vendors.cli import tool_command, vendors_command
+
+        code = (
+            vendors_command(argv[1:])
+            if argv[0] in ("vendors", "tools")
+            else tool_command(argv[0], argv[1:])
+        )
+        sys.exit(code)
     if argv and argv[0] == "auto":
         _auto_command(argv[1:])
         return  # only reachable in tests where sys.exit is mocked
@@ -1878,8 +1903,12 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     # Self-upgrade runs before switcher init so we don't touch config/keychain
     # just to upgrade the tool itself.
     if args.upgrade:
-        from claude_swap.update_check import run_self_upgrade
+        from claude_swap.update_check import fork_upgrade_refusal, run_self_upgrade
 
+        refusal = fork_upgrade_refusal(__version__)
+        if refusal:
+            error(refusal)
+            sys.exit(1)
         try:
             sys.exit(run_self_upgrade())
         except KeyboardInterrupt:

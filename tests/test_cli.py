@@ -421,7 +421,8 @@ class TestCLI:
              patch(
                  "claude_swap.update_check.run_self_upgrade", return_value=0
              ) as upgrade_fn, \
-             patch.object(sys, "argv", ["claude-swap", "--upgrade"]):
+             patch.object(cli, "__version__", "0.47.0"), \
+             patch.object(sys, "argv", ["claude-swap", "--upgrade"]):  # an upstream-style version: fork builds refuse
             with pytest.raises(SystemExit) as excinfo:
                 cli.main()
 

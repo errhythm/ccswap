@@ -266,8 +266,31 @@ def held_back_release_notice(current_version: str) -> str | None:
     return "\n".join(lines)
 
 
+def _is_fork_build(version: str) -> bool:
+    """True for builds of this fork's PEP 440 local version (``X.Y.Z+vendors.N``)."""
+    return "+vendors" in version
+
+
+def fork_upgrade_refusal(version: str) -> str | None:
+    """Why ``--upgrade`` must not run on a fork build, or None when it may."""
+    if not _is_fork_build(version):
+        return None
+    return (
+        f"ccswap {version} is a fork build; upgrading would install upstream ccswap from "
+        "PyPI and remove the Muse/OpenCode/Kiro integrations. Reinstall from the fork "
+        "instead (see README)."
+    )
+
+
 def check_for_update(current_version: str) -> str | None:
-    """Return a notification string if a newer version exists, else None."""
+    """Return a notification string if a newer version exists, else None.
+
+    Fork builds carry a PEP 440 local version (``0.48.0+vendors.1``). PyPI's
+    ``ccswap`` is the upstream project without the Muse/OpenCode/Kiro
+    integrations, so it is never offered as an "update" to such a build.
+    """
+    if _is_fork_build(current_version):
+        return None
     try:
         method = _detect_install_method()
         cached_data = read_cache(CACHE_PATH, CACHE_TTL)

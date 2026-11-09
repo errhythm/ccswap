@@ -9,6 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13', '3.14']
 
     steps:
       - uses: actions/checkout@v4
@@ -19,13 +23,34 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: uv sync --locked
 
       - name: Run tests
         run: uv run pytest
+
+  # Lint, types and security scan for the vendor integration (new code only).
+  vendors-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv sync --locked
+      - name: ruff
+        run: uvx ruff check src/claude_swap/vendors src/claude_swap/tui/vendors.py tests/test_vendors_*.py tests/vendor_helpers.py
+      - name: ruff format
+        run: uvx ruff format --check src/claude_swap/vendors src/claude_swap/tui/vendors.py tests/test_vendors_*.py tests/vendor_helpers.py
+      - name: mypy
+        run: uvx mypy --ignore-missing-imports --follow-imports=silent src/claude_swap/vendors
+      - name: bandit
+        run: uvx bandit -q -r src/claude_swap/vendors -ll
+      - name: pip-audit
+        run: uvx pip-audit
 
   test-windows:
     runs-on: windows-latest

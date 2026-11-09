@@ -62,9 +62,9 @@ export function errorMessage(stdout: string, stderr: string): string | undefined
   return stderr.trim() || undefined;
 }
 
-export function run(bin: string, args: string[]): Promise<string> {
+export function run(bin: string, args: string[], timeout = 30_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile(bin, args, { timeout: 30_000 }, (error, stdout, stderr) => {
+    const child = execFile(bin, args, { timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) reject(new Error(errorMessage(stdout, stderr) ?? error.message));
       else resolve(stdout);
     });

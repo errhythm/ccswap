@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/pypi/l/ccswap.svg)](https://github.com/errhythm/ccswap/blob/main/LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/errhythm/ccswap?style=social)](https://github.com/errhythm/ccswap)
 
-Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. Save multiple logins, check their quota windows, and manage them from one dashboard. Claude Code and Codex also support automatic switching.
+Multi-account and usage manager for Claude Code, OpenAI Codex, Muse Code, Kiro CLI, OpenCode and Antigravity. Save multiple logins, check each account's usage, limits and reset times, and manage every tool from one dashboard. Claude Code and Codex also support automatic switching.
 
 <img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-watch.png" width="760" alt="ccswap watch: live usage bars for every Claude Code and Codex account, with reset times and the active account marked">
 
@@ -20,6 +20,46 @@ Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. S
 - A full-screen dashboard (`ccswap`) on macOS, Linux and Windows, and an optional macOS menu bar app.
 - A Raycast extension that lists accounts with their usage and switches with one keystroke.
 - `--json` output and exit codes for scripts and cron.
+
+## Fork: Muse Code, OpenCode and Kiro CLI
+
+> This is a **fork** of [errhythm/ccswap](https://github.com/errhythm/ccswap) (MIT, original
+> attribution kept) that adds Muse Code, OpenCode and Kiro CLI. It is not the official
+> upstream release and does not publish to the upstream `ccswap` PyPI package; its version is
+> `0.48.0+vendors.1`, and `ccswap --upgrade` refuses to replace it with upstream. Install:
+> `uv tool install git+https://github.com/jaykang-heo/ccswap`.
+
+```sh
+ccswap usage                        # every tool and every account: usage, limits, resets  (--json)
+ccswap usage kiro muse              # just those tools
+ccswap claude list                  # Claude Code as a peer of `ccswap codex|muse|kiro|opencode`
+ccswap vendors                      # installed? version? registered accounts?  (--json)
+ccswap vendors capabilities kiro    # what ccswap can truthfully do for each tool
+
+ccswap muse add work --api-key-stdin ; ccswap muse run work -- exec "hi"
+ccswap opencode list ; ccswap opencode switch anthropic work
+ccswap kiro add work ; ccswap kiro list ; ccswap kiro run ci -- --no-interactive "fix it"
+```
+
+Features follow what each product really offers, not a uniform fake:
+
+| | Muse Code | OpenCode | Kiro CLI |
+|---|---|---|---|
+| List / status | registered aliases (Muse has no whoami) | provider-aware, from the vendor | active login via `whoami` |
+| Switch | API-key accounts (`muse auth set`); browser sessions: login only | native `auth switch` where the installed version has it (not 1.18.x), verified | interactive logout/login, guarded and verified; API keys are *run*, not switched |
+| Usage | plan, 5-hour and weekly used % with resets (`muse usage --json`) | local tokens and USD estimate per provider/model; provider quotas not reported | plan credits used/limit and reset date (`/usage` via the V2 harness, no credits used) |
+| Per-account usage | API-key accounts; browser login = "active credential" | none (records have no account) | signed-in login; others keep their own last reading, marked stale |
+| Isolated run | API-key accounts | not possible | API-key accounts |
+| Auto-switch | no | no | no |
+
+In the dashboard, the number keys open each tool's own page: `1` Claude Code, `2` Codex,
+`3` Muse, `4` Kiro, `5` OpenCode, `6` Antigravity, `0` (or `v`) all tools. The menu bar has
+one submenu per tool, and Raycast has a "Show … Accounts" command per tool plus "Show All
+Usage". All of them read the same backend. Secrets are only read from stdin or a hidden
+prompt, never from arguments. Unknown values are shown as unknown. Details:
+[compatibility matrix](docs/vendor-compatibility.md), [Muse](docs/muse.md),
+[OpenCode](docs/opencode.md), [Kiro](docs/kiro.md), [architecture and how to add a vendor](docs/architecture.md).
+Exit codes for these commands: `0` ok, `1` error, `2` usage, `3` the vendor product cannot do it.
 
 ## Quick start
 
@@ -61,6 +101,8 @@ Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-wi
 **Inside Claude Code.** An optional statusline and a `/ccswap` pane, both off until you turn them on. [Statusline and mod](https://github.com/errhythm/ccswap/blob/main/docs/statusline-and-mod.md)
 
 ## Documentation
+
+- [Vendor compatibility matrix (Muse, OpenCode, Kiro)](docs/vendor-compatibility.md), [architecture](docs/architecture.md)
 
 - [Commands](https://github.com/errhythm/ccswap/blob/main/docs/commands.md): every command, expired tokens, adding a raw token or API key
 - [Automatic switching](https://github.com/errhythm/ccswap/blob/main/docs/auto-switching.md)

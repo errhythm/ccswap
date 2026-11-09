@@ -1,7 +1,7 @@
 [project]
 name = "ccswap"
-version = "0.47.0"
-description = "Multi-account and usage manager for Claude Code and OpenAI Codex"
+version = "0.49.0+vendors.1"
+description = "Multi-account and usage manager for Claude Code, OpenAI Codex, Muse Code, OpenCode and Kiro CLI (fork of errhythm/ccswap)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -25,6 +25,9 @@ keywords = [
     "claude-max",
     "codex",
     "codex-cli",
+    "muse",
+    "opencode",
+    "kiro",
     "openai",
     "account-switcher",
     "multi-account",
@@ -109,3 +112,9 @@ markers = [
     "no_keychain_fake: opt out of the autouse in-memory Keychain guard (test mocks subprocess itself, or runs against a temp keychain on GitHub Actions)",
     "no_oauth_profile_fake: opt out of the autouse fetch_oauth_profile stub (test exercises fetch_oauth_profile itself against a mocked urlopen)",
 ]
+
+# Lint/format config used by the vendor integration (new code only; CI scopes it
+# to src/claude_swap/vendors, tui/vendors.py and their tests).
+[tool.ruff]
+line-length = 100
+target-version = "py312"

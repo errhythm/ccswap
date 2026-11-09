@@ -1032,6 +1032,10 @@ class TestDashboard:
                 "disable-menu",
                 "remove-menu",
                 "settings-menu",
+                "tool:muse",
+                "tool:kiro",
+                "tool:opencode",
+                "tool:overview",
                 "quit",
             ]
             from textual.widgets import Static

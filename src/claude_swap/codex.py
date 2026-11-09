@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import uuid
@@ -1460,7 +1461,27 @@ class CodexAccountSwitcher:
                 "Reset accepted but could not be confirmed; run 'ccswap codex usage' to check"
             )
 
+    _snapshot_guard = threading.Lock()
+
+    def _snapshot_lock(self) -> threading.RLock:
+        """One snapshot pass at a time per switcher.
+
+        The menu bar's display and the Codex auto-switch engine share an instance (and its
+        in-memory usage cache): a second concurrent caller waits, then is served the fresh
+        reading instead of fetching every account again.  Created lazily because some
+        callers build switchers without ``__init__``.
+        """
+        lock = self.__dict__.get("_snapshot_rlock")
+        if lock is None:
+            with CodexAccountSwitcher._snapshot_guard:
+                lock = self.__dict__.setdefault("_snapshot_rlock", threading.RLock())
+        return lock
+
     def accounts_snapshot(self, fetch: set[str] | None = None) -> AccountsSnapshot:
+        with self._snapshot_lock():
+            return self._accounts_snapshot(fetch)
+
+    def _accounts_snapshot(self, fetch: set[str] | None = None) -> AccountsSnapshot:
         data = self._read_sequence()
         active = self.current_account_number()
         now = time.time()
@@ -1536,7 +1557,12 @@ class CodexAccountSwitcher:
         auth = effective["auth"]
         previous = self._usage_cache.get(number)
         if auth is None:
-            entry = UsageEntry(last_error=effective["reason"])
+            if effective.get("source") == "unavailable" and previous is not None and previous.last_good:
+                # The store was only busy (another ccswap held its lock): keep the last
+                # good reading, which the auto-switch engine decides on.
+                entry = replace(previous, last_error=effective["reason"])
+            else:
+                entry = UsageEntry(last_error=effective["reason"])
         elif auth.get("auth_mode") == "api_key" or (
             isinstance(auth.get("OPENAI_API_KEY"), str)
             and not isinstance(auth.get("tokens"), dict)
