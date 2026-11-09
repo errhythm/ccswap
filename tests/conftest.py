@@ -518,6 +518,10 @@ def _isolate_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    # Vendor adapters resolve Muse/OpenCode config under XDG_CONFIG_HOME (or OPENCODE_CONFIG);
+    # a developer shell that sets them must not leak the real login files into tests.
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_GEMINI_DIR", raising=False)
     if "temp_home" in request.fixturenames:
         return  # temp_home provides its own isolated home

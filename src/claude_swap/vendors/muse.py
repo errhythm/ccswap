@@ -20,10 +20,11 @@ Facts this adapter relies on:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -213,6 +214,23 @@ class MuseAdapter(ToolAdapter):
         except (OSError, ValueError):
             return None
 
+    def live_email(self) -> str | None:
+        """The signed-in Meta account's email, from Muse's own ``auth.json``.
+
+        ``muse`` has no whoami.  Its login file records ``providers.meta.user_email`` (the
+        field muse-swap identifies accounts by, verified on 1.4.14).  Only that field is
+        read; tokens are never read out, copied or logged.  ``None`` when unknown.
+        """
+        path = _config_dir() / "auth.json"
+        try:
+            if path.is_symlink() or not path.is_file():
+                return None
+            meta = (json.loads(path.read_text(encoding="utf-8")).get("providers") or {}).get("meta")
+            email = meta.get("user_email") if isinstance(meta, dict) else None
+        except (OSError, ValueError, AttributeError):
+            return None
+        return email if isinstance(email, str) and "@" in email and len(email) < 255 else None
+
     def auth_summary(self) -> dict:
         return {
             "envKeyPresent": bool(os.environ.get(ENV_KEY)),
@@ -225,11 +243,19 @@ class MuseAdapter(ToolAdapter):
     def observe(
         self, records: Sequence[AccountRecord], last_active: str | None = None
     ) -> list[AccountView]:
-        """``active`` is always unknown: muse cannot say which credential it will use."""
+        """Browser logins are matched by the email Muse recorded for its login.
+
+        API-key accounts stay unknown (Muse cannot say which key it stored), and so does
+        everything while an exported ``META_API_KEY`` overrides the stored login.
+        """
         env = bool(os.environ.get(ENV_KEY))
+        live = None if env else self.live_email()
         views = []
         for rec in records:
             notes = []
+            active: bool | None = None
+            if rec.kind == "browser" and live and rec.identity.get("email"):
+                active = rec.identity["email"].lower() == live.lower()
             if rec.kind == "api-key" and last_active == rec.alias:
                 notes.append("last switched to by ccswap; unconfirmed (muse cannot report its key)")
             if env:
@@ -240,11 +266,20 @@ class MuseAdapter(ToolAdapter):
                     alias=rec.alias,
                     kind=rec.kind,
                     identity=rec.identity,
-                    active=None,
+                    active=active,
                     note="; ".join(notes),
                 )
             )
         return views
+
+    @staticmethod
+    def owner_of(record: AccountRecord, identity: Mapping[str, str]) -> bool:
+        email = identity.get("email", "").lower()
+        return (
+            record.kind == "browser"
+            and bool(email)
+            and record.identity.get("email", "").lower() == email
+        )
 
     # ---- registration ----------------------------------------------------
 
@@ -255,7 +290,12 @@ class MuseAdapter(ToolAdapter):
                 raise VendorError("A valid Meta API key is required")
             return AccountRecord(self.key, alias, "api-key", created_at=time.time()), key
         if kind == "browser":
-            return AccountRecord(self.key, alias, "browser", created_at=time.time()), None
+            # The current browser login: identified by the email Muse recorded for it.
+            email = self.live_email()
+            identity = {"email": email} if email else {}
+            return AccountRecord(
+                self.key, alias, "browser", identity=identity, created_at=time.time()
+            ), None
         raise VendorError("Muse account kind must be 'api-key' or 'browser'")
 
     # ---- switching -------------------------------------------------------
@@ -328,13 +368,15 @@ class MuseAdapter(ToolAdapter):
         usage is the *active credential's*, reported at tool level only.
         """
         info = self.require_installed()
+        live = None if os.environ.get(ENV_KEY) else self.live_email()
         if record is not None and record.kind != "api-key":
-            return UsageResult(
-                UsageState.UNAVAILABLE,
-                "Muse keeps one browser login and does not say whose it is, so usage cannot "
-                "be attributed to this alias",
-                hint="The tool-level usage shows the active credential",
-            )
+            email = record.identity.get("email", "")
+            if not email or not live or email.lower() != live.lower():
+                return UsageResult(
+                    UsageState.UNAVAILABLE,
+                    f"'{record.alias}' is not the signed-in Muse login; Muse only reports the "
+                    "signed-in login's allowance",
+                )
         # An API-key account's key overrides any exported META_API_KEY for this child.  The
         # tool-level reading deliberately keeps an exported key: that *is* the credential
         # Muse uses in this environment, and it is labelled so.
@@ -347,7 +389,7 @@ class MuseAdapter(ToolAdapter):
             else (
                 "META_API_KEY from the environment"
                 if os.environ.get(ENV_KEY)
-                else "active credential"
+                else (live or "active credential")
             )
         )
         text = f"{result.stdout}\n{result.stderr}".lower()
@@ -383,9 +425,18 @@ class MuseAdapter(ToolAdapter):
                 source="muse usage --json",
                 attributed_to=who,
             )
-        return parse_allowance(
+        parsed = parse_allowance(
             allowance, attributed_to=who, account_scoped=record is not None, secrets=secrets
         )
+        if secret is None and live:
+            # The reading is the signed-in login's only if that login did not change meanwhile.
+            if self.live_email() != live:
+                return UsageResult(
+                    UsageState.UNAVAILABLE,
+                    "The Muse login changed during the usage check; not recorded",
+                )
+            parsed = dataclasses.replace(parsed, identity={"email": live})
+        return parsed
 
     # ---- sessions --------------------------------------------------------
 

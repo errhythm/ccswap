@@ -246,3 +246,92 @@ def test_browser_login_does_not_become_the_recorded_active_account(adapter, runn
         AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True
     )
     assert outcome.activates is False
+
+
+# ---- Browser logins identified by the email Muse records for them --------------------
+
+
+def write_login(tmp_path, monkeypatch, email):
+    cfg = tmp_path / "cfg"
+    (cfg / "muse").mkdir(parents=True, exist_ok=True)
+    (cfg / "muse" / "auth.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "providers": {
+                    "meta": {
+                        "access_token": "dca:SECRET-TOKEN-VALUE-0123456789",
+                        "user_email": email,
+                        "mechanism": "oauth",
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+
+
+def test_live_email_reads_only_the_email(adapter, tmp_path, monkeypatch):
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    assert adapter.live_email() == "j@x.com"
+    summary = json.dumps(adapter.auth_summary())
+    assert "SECRET-TOKEN" not in summary
+
+
+def test_two_browser_logins_are_told_apart(adapter, tmp_path, monkeypatch):
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    j, _ = adapter.register("jay", kind="browser")
+    write_login(tmp_path, monkeypatch, "m@x.com")
+    m, _ = adapter.register("mis", kind="browser")
+    assert (j.identity, m.identity) == ({"email": "j@x.com"}, {"email": "m@x.com"})
+    assert {v.alias: v.active for v in adapter.observe([j, m])} == {"jay": False, "mis": True}
+
+
+def test_env_key_makes_browser_activity_unknown(adapter, tmp_path, monkeypatch):
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    j, _ = adapter.register("jay", kind="browser")
+    monkeypatch.setenv(ENV_KEY, KEY)
+    assert adapter.observe([j])[0].active is None
+
+
+def test_browser_usage_is_attributed_by_email_and_never_to_the_other_login(
+    tmp_path, monkeypatch, runner
+):
+    from claude_swap.vendors.registry import ToolRegistry
+    from claude_swap.vendors.service import VendorService
+    from claude_swap.vendors.store import VendorStore
+
+    allowance = {
+        "tier": "High",
+        "window": {"usedPercent": 40, "resetsAtMs": 4102444800000},
+        "weekly": {"usedPercent": 9, "resetsAtMs": 4103049600000},
+        "asOfMs": 4102400000000,
+    }
+    runner.on(MUSE, "usage", "--json", result=ok(json.dumps({"allowance": allowance})))
+    svc = VendorService(ToolRegistry.default(runner), VendorStore(tmp_path / "v"))
+    adapter = svc.adapter("muse")
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    svc.store.add(adapter.register("jay", kind="browser")[0])
+    write_login(tmp_path, monkeypatch, "m@x.com")
+    svc.store.add(adapter.register("mis", kind="browser")[0])
+    tool = svc.usage("muse")
+    assert tool.attributed_to == "mis" and svc.usage("muse", "mis").windows == tool.windows
+    jay = svc.usage("muse", "jay")
+    assert jay.windows == () and "not the signed-in Muse login" in jay.reason
+    # jay signs in later: its own reading, mis keeps its own (stale)
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    svc2 = VendorService(svc.registry, svc.store)
+    assert svc2.usage("muse").attributed_to == "jay"
+    assert svc2.usage("muse", "mis").state.value == "stale"
+
+
+def test_login_change_during_the_muse_probe_is_not_recorded(tmp_path, monkeypatch, runner, adapter):
+    write_login(tmp_path, monkeypatch, "j@x.com")
+
+    def swap_during_probe(call):
+        write_login(tmp_path, monkeypatch, "m@x.com")
+        return ok(json.dumps({"allowance": {"tier": "x", "window": {"usedPercent": 1}}}))
+
+    runner.on(MUSE, "usage", "--json", result=swap_during_probe)
+    result = adapter.usage(None, None)
+    assert result.state is UsageState.UNAVAILABLE and "changed during" in result.reason
