@@ -182,6 +182,76 @@ class UsageState(str, enum.Enum):
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"  # supported, but the vendor returned nothing now
     UNSUPPORTED = "unsupported"  # no stable programmatic interface exists
+    UNAUTHENTICATED = "unauthenticated"  # the tool reports no usable login
+    STALE = "stale"  # last good observation, kept because a refresh failed or is impossible now
+    ERROR = "error"  # the source exists but failed, and there is no earlier observation
+
+
+@dataclass(frozen=True)
+class UsageWindow:
+    """One independently reported limit.  Never merged with another window.
+
+    Fields the vendor did not report stay ``None``; ``used_percent`` is only set when the
+    vendor reported it or both ``used`` and ``limit`` are known in the same unit.
+    """
+
+    key: str  # stable id: "five-hour", "weekly", "monthly-credits", "bonus-credits", ...
+    label: str  # human label as the vendor names it
+    unit: str  # "percent" | "credits" | "tokens" | "usd" | ...
+    used: float | None = None
+    limit: float | None = None
+    remaining: float | None = None
+    used_percent: float | None = None
+    resets_at: float | None = None  # epoch seconds, UTC
+    scope: str = "account"  # account | organization | active-credential | local
+    note: str = ""
+    resets_on: str | None = None  # ISO date when the vendor reports a day but no time
+
+    def to_json(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "unit": self.unit,
+            "used": self.used,
+            "limit": self.limit,
+            "remaining": self.remaining,
+            "usedPercent": self.used_percent,
+            "resetsAt": self.resets_at,
+            "scope": self.scope,
+            "note": self.note,
+            "resetsOn": self.resets_on,
+        }
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> UsageWindow:
+        def num(name: str) -> float | None:
+            value = raw.get(name)
+            return (
+                float(value)
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                else None
+            )
+
+        return cls(
+            key=str(raw.get("key", "")),
+            label=str(raw.get("label", "")),
+            unit=str(raw.get("unit", "")),
+            used=num("used"),
+            limit=num("limit"),
+            remaining=num("remaining"),
+            used_percent=num("usedPercent"),
+            resets_at=num("resetsAt"),
+            scope=str(raw.get("scope", "account")),
+            note=str(raw.get("note", "")),
+            resets_on=raw.get("resetsOn") if isinstance(raw.get("resetsOn"), str) else None,
+        )
+
+
+def percent(used: float | None, limit: float | None) -> float | None:
+    """Used share, only when both are known and the limit is a real positive denominator."""
+    if used is None or limit is None or limit <= 0:
+        return None
+    return round(used / limit * 100.0, 1)
 
 
 @dataclass(frozen=True)
@@ -205,21 +275,81 @@ class UsageObservation:
             "cached": self.cached,
         }
 
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> UsageObservation:
+        return cls(
+            kind=UsageKind(raw.get("kind", UsageKind.LOCAL_TOKENS.value)),
+            source=str(raw.get("source", "")),
+            authoritative=bool(raw.get("authoritative")),
+            scope=str(raw.get("scope", "account")),
+            data=data if isinstance(data := raw.get("data"), dict) else {},
+            fetched_at=raw.get("fetchedAt")
+            if isinstance(raw.get("fetchedAt"), (int, float))
+            else None,
+            cached=bool(raw.get("cached")),
+        )
+
 
 @dataclass(frozen=True)
 class UsageResult:
+    """One usage answer for one tool/account.  ``windows`` are authoritative limits;
+    ``observations`` carry everything else (local statistics, raw vendor payloads)."""
+
     state: UsageState
     reason: str = ""
     observations: tuple[UsageObservation, ...] = ()
     hint: str = ""
+    windows: tuple[UsageWindow, ...] = ()
+    plan: str | None = None
+    source: str = ""  # the vendor mechanism the windows came from
+    authoritative: bool = False
+    attributed_to: str | None = None  # alias / identity the numbers belong to, when known
+    observed_at: float | None = None  # when the vendor measured (or ccswap fetched) it
+    error: str | None = None  # last refresh failure, kept beside stale data
+
+    @property
+    def has_data(self) -> bool:
+        return bool(self.windows or self.observations)
 
     def to_json(self) -> dict:
         return {
             "state": self.state.value,
             "reason": self.reason,
             "hint": self.hint,
+            "plan": self.plan,
+            "source": self.source,
+            "authoritative": self.authoritative,
+            "attributedTo": self.attributed_to,
+            "observedAt": self.observed_at,
+            "error": self.error,
+            "windows": [w.to_json() for w in self.windows],
             "observations": [o.to_json() for o in self.observations],
         }
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> UsageResult:
+        observed = raw.get("observedAt")
+        return cls(
+            state=UsageState(raw.get("state", UsageState.UNAVAILABLE.value)),
+            reason=str(raw.get("reason") or ""),
+            hint=str(raw.get("hint") or ""),
+            plan=raw.get("plan") if isinstance(raw.get("plan"), str) else None,
+            source=str(raw.get("source") or ""),
+            authoritative=bool(raw.get("authoritative")),
+            attributed_to=raw.get("attributedTo")
+            if isinstance(raw.get("attributedTo"), str)
+            else None,
+            observed_at=float(observed) if isinstance(observed, (int, float)) else None,
+            error=raw.get("error") if isinstance(raw.get("error"), str) else None,
+            windows=tuple(
+                UsageWindow.from_json(w) for w in raw.get("windows", []) if isinstance(w, dict)
+            ),
+            observations=tuple(
+                UsageObservation.from_json(o)
+                for o in raw.get("observations", [])
+                if isinstance(o, dict)
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -277,6 +407,7 @@ class Runner(Protocol):
         env: Mapping[str, str] | None = None,
         unset_env: Sequence[str] = (),
         input_text: str | None = None,
+        cwd: str | None = None,
     ) -> RunResult: ...
 
     def run_interactive(
@@ -316,6 +447,7 @@ class SubprocessRunner:
         env: Mapping[str, str] | None = None,
         unset_env: Sequence[str] = (),
         input_text: str | None = None,
+        cwd: str | None = None,
     ) -> RunResult:
         try:
             proc = spawn.run(
@@ -328,6 +460,7 @@ class SubprocessRunner:
                 input=input_text,
                 env=_child_env(env, unset_env, plain=True),
                 stdin=None if input_text is not None else subprocess.DEVNULL,
+                cwd=cwd,
             )
         except FileNotFoundError:
             return RunResult(127, missing=True)
@@ -387,6 +520,11 @@ def redact(text: str, secrets: Sequence[str] = ()) -> str:
         if secret:
             text = text.replace(secret, "[redacted]")
     return _TOKENISH.sub("[redacted]", text)
+
+
+def help_text(result: RunResult) -> str:
+    """CLI help, wherever the tool prints it (OpenCode/yargs writes it to stderr)."""
+    return f"{result.stdout}\n{result.stderr}"
 
 
 def short_detail(result: RunResult, secrets: Sequence[str] = ()) -> str:

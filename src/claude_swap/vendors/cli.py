@@ -80,18 +80,10 @@ def render_accounts(tool: str, views: Sequence[AccountView]) -> None:
 
 
 def render_usage(result: UsageResult) -> None:
-    if result.state is not UsageState.AVAILABLE:
-        print(f"Usage {result.state.value}: {result.reason}")
-        if result.hint:
-            print(f"  {result.hint}")
-        return
-    for obs in result.observations:
-        label = "authoritative" if obs.authoritative else "local, not a quota"
-        print(f"{obs.kind.value} ({label}; source: {obs.source}{'; cached' if obs.cached else ''})")
-        text = obs.data.get("text") if isinstance(obs.data, dict) else None
-        print(text if isinstance(text, str) else json.dumps(obs.data, indent=2, sort_keys=True))
-    if result.hint:
-        print(f"  {result.hint}")
+    from claude_swap.vendors.overview import render_usage_lines
+
+    lines = render_usage_lines(result, indent="")
+    print("\n".join(lines) if lines else f"Usage {result.state.value}")
 
 
 def render_status(payload: dict) -> None:
@@ -260,10 +252,18 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
         if getattr(args, "local", False):
             result = adapter.local_stats()  # type: ignore[attr-defined]
             payload = {"schemaVersion": 1, "tool": tool, **result.to_json()}
-        else:
+            return _emit(payload, as_json, lambda: render_usage(result))
+        if args.account:
             result = service.usage(tool, args.account, refresh=args.refresh)
             payload = service.usage_envelope(tool, args.account, result)
-        return _emit(payload, as_json, lambda: render_usage(result))
+            return _emit(payload, as_json, lambda: render_usage(result))
+        from claude_swap.vendors.overview import Overview, account_json, render_summary
+
+        summary = Overview(service, legacy=[]).collect_one(tool, refresh=args.refresh)
+        tool_usage = summary.tool_usage or UsageResult(UsageState.UNAVAILABLE, "not installed")
+        payload = service.usage_envelope(tool, None, tool_usage)
+        payload["accounts"] = [account_json(v, u) for v, u in summary.accounts]
+        return _emit(payload, as_json, lambda: print("\n".join(render_summary(summary))))
     if action == "add":
         options: dict = {}
         if tool == "opencode":
@@ -390,3 +390,63 @@ def vendors_command(argv: list[str], service: VendorService | None = None) -> in
         return _emit(payload, as_json, human)
     except (ClaudeSwitchError, OSError) as exc:
         return _fail(exc, as_json)
+
+
+# ---- ccswap usage (all tools) / ccswap claude --------------------------------
+
+
+def usage_command(argv: list[str], overview=None) -> int:
+    """``ccswap usage [TOOL ...] [--json] [--refresh]``: every tool, every account."""
+    from claude_swap.vendors.overview import Overview, overview_json, render_summary
+
+    overview = overview or Overview()
+    parser = argparse.ArgumentParser(
+        prog=f"{_prog()} usage",
+        description="Usage, remaining allowance and reset times for every AI coding tool "
+        "and each of its accounts, in one pass. Unknown values are shown as unknown.",
+    )
+    parser.add_argument(
+        "tools", nargs="*", metavar="TOOL", help=f"limit to: {', '.join(overview.tools())}"
+    )
+    parser.add_argument("--json", action="store_true", help="Machine-readable output")
+    parser.add_argument("--refresh", action="store_true", help="Bypass short-lived caches")
+    args = parser.parse_args(argv)
+    unknown = [t for t in args.tools if t not in overview.tools()]
+    if unknown:
+        return _fail(VendorError(f"Unknown tool: {', '.join(unknown)}"), args.json)
+    try:
+        summaries = overview.collect(args.tools or None, refresh=args.refresh)
+    except KeyboardInterrupt:
+        printer.error("Interrupted.")
+        return 130
+    if args.json:
+        print(json.dumps(overview_json(summaries), indent=2))
+        return 0
+    for index, summary in enumerate(summaries):
+        if index:
+            print()
+        for line in render_summary(summary):
+            print(line)
+    return 0
+
+
+_CLAUDE_VERBS = {
+    "list": ["--list", "--provider", "claude"],
+    "ls": ["--list", "--provider", "claude"],
+    "usage": ["--list", "--provider", "claude"],
+}
+
+
+def claude_argv(argv: list[str]) -> list[str]:
+    """``ccswap claude <verb> ...`` -> the established top-level Claude command line.
+
+    Claude Code is ccswap's original tool, so its commands already live at the top level
+    (``ccswap switch``, ``ccswap add``, ...); this namespace only makes it a peer of
+    ``ccswap codex|muse|kiro|opencode`` without changing any of them.
+    """
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        return ["--help"]
+    verb, rest = argv[0], argv[1:]
+    if verb in _CLAUDE_VERBS:
+        return [*_CLAUDE_VERBS[verb], *rest]
+    return argv

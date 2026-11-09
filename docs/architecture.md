@@ -33,14 +33,31 @@ Adapters implement only the protocols the vendor really supports (`runtime_check
 protocols; `VendorService._need` turns a missing one into `UnsupportedCapability`, exit
 status 3). There is no giant interface with `NotImplemented` stubs.
 
+## First-class tools on every surface
+
+`vendors/overview.py` is the one place that collects every tool (Claude Code, Codex and
+Antigravity through read-only `legacy.py` bridges over their switchers' snapshots; Muse,
+Kiro and OpenCode through `VendorService`). Each tool runs on its own worker with its own
+deadline, and it defines the shared presentation (`headline`, `window_text`, `reset_text`).
+`ccswap usage`, the TUI tool pages (`tui/tools.py`), the menu-bar model (`vendors/menu.py`)
+and Raycast (`ccswap usage --json`) all consume it. A vendor added to `registry.py` shows
+up in the overview, `ccswap usage` and Raycast's all-tools view with no UI change.
+
 ## Usage model
 
-`UsageResult.state` is `available | unavailable | unsupported`. An observation carries its
-`kind` (subscription allowance, rate-limit window, credits, local tokens, local cost
-estimate), its `source`, `authoritative` (vendor-reported vs locally derived), `scope`,
-`fetchedAt` and `cached`. Nothing is inferred: unknown stays unknown, there is no
-percentage field, and different kinds are never compared. Results are cached in the service
-(60 s success, 15 s failure) and every vendor call has a bounded timeout.
+`UsageResult.state` is `available | unavailable | unsupported | unauthenticated | stale |
+error`. Authoritative limits are `UsageWindow`s (`key`, `label`, `unit`, `used`, `limit`,
+`remaining`, `usedPercent`, `resetsAt` or a date-only `resetsOn`, `scope`), one per
+independently reported limit and never merged. Local statistics (OpenCode) are
+`observations` with `authoritative: false`. Every result names its `source`,
+`attributedTo` and `observedAt`. Fields a tool did not report stay `null`, and a percentage
+is computed only from a `used`/`limit` pair in one unit.
+
+`VendorService.usage` adds per-tool TTLs (Muse 60 s, Kiro 180 s, OpenCode 300 s), request
+coalescing (one vendor call for concurrent askers), and a persistent last-good cache
+(`vendors/usage.json`, usage figures only). A failed or impossible refresh returns the
+earlier reading as `stale` with the new error. Readings are filed under the account they
+were *attributed to when observed* (for Kiro, the `whoami` login), never under another.
 
 ## Auto-switching
 

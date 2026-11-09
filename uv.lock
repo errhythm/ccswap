@@ -13,7 +13,7 @@ wheels = [
 
 [[package]]
 name = "ccswap"
-version = "0.48.0+vendors.1"
+version = "0.49.0+vendors.1"
 source = { editable = "." }
 dependencies = [
     { name = "keyring", marker = "sys_platform == 'win32'" },

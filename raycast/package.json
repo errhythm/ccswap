@@ -27,15 +27,96 @@
       "title": "Show Accounts",
       "subtitle": "ccswap",
       "description": "List Claude Code and Codex accounts with their usage, and switch between them",
-      "keywords": ["claude", "codex", "account", "usage", "quota", "rate limit"],
+      "keywords": [
+        "claude",
+        "codex",
+        "account",
+        "usage",
+        "quota",
+        "rate limit"
+      ],
       "mode": "view"
     },
     {
-      "name": "show-vendors",
-      "title": "Show Muse, OpenCode and Kiro",
+      "name": "show-all-usage",
+      "title": "Show All Usage",
       "subtitle": "ccswap",
-      "description": "See Muse Code, OpenCode and Kiro CLI accounts and switch OpenCode accounts",
-      "keywords": ["muse", "opencode", "kiro", "account"],
+      "description": "Every AI coding tool's accounts, usage, remaining allowance and reset times",
+      "keywords": [
+        "usage",
+        "quota",
+        "claude",
+        "codex",
+        "muse",
+        "kiro",
+        "opencode"
+      ],
+      "mode": "view"
+    },
+    {
+      "name": "show-claude",
+      "title": "Show Claude Code Accounts",
+      "subtitle": "ccswap",
+      "description": "Claude Code accounts with their own usage, limits and reset times",
+      "keywords": [
+        "claude",
+        "anthropic",
+        "account",
+        "usage"
+      ],
+      "mode": "view"
+    },
+    {
+      "name": "show-codex",
+      "title": "Show Codex Accounts",
+      "subtitle": "ccswap",
+      "description": "Codex accounts with their own usage, limits and reset times",
+      "keywords": [
+        "codex",
+        "openai",
+        "account",
+        "usage"
+      ],
+      "mode": "view"
+    },
+    {
+      "name": "show-muse",
+      "title": "Show Muse Code Accounts",
+      "subtitle": "ccswap",
+      "description": "Muse Code accounts with their own usage, limits and reset times",
+      "keywords": [
+        "muse",
+        "meta",
+        "account",
+        "usage"
+      ],
+      "mode": "view"
+    },
+    {
+      "name": "show-kiro",
+      "title": "Show Kiro CLI Accounts",
+      "subtitle": "ccswap",
+      "description": "Kiro CLI accounts with their own usage, limits and reset times",
+      "keywords": [
+        "kiro",
+        "aws",
+        "credits",
+        "account",
+        "usage"
+      ],
+      "mode": "view"
+    },
+    {
+      "name": "show-opencode",
+      "title": "Show OpenCode Accounts",
+      "subtitle": "ccswap",
+      "description": "OpenCode accounts with their own usage, limits and reset times",
+      "keywords": [
+        "opencode",
+        "providers",
+        "account",
+        "usage"
+      ],
       "mode": "view"
     },
     {
@@ -43,7 +124,12 @@
       "title": "Switch to Best Account",
       "subtitle": "ccswap",
       "description": "Switch Claude Code to the account with the most quota left",
-      "keywords": ["claude", "account", "quota", "rate limit"],
+      "keywords": [
+        "claude",
+        "account",
+        "quota",
+        "rate limit"
+      ],
       "mode": "no-view"
     }
   ],

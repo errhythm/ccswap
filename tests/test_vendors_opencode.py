@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from claude_swap.vendors.core import UnsupportedCapability, UsageState, VendorError
+from claude_swap.vendors.core import RunResult, UnsupportedCapability, UsageState, VendorError
 from claude_swap.vendors.opencode import OpenCodeAdapter, valid_selector
 from tests.vendor_helpers import FakeRunner, fail, ok
 
@@ -158,8 +158,12 @@ def test_observe_marks_registered_and_missing():
 
 
 def test_usage_never_fabricates_a_quota():
-    result = OpenCodeAdapter(make(new=True)).usage(None, None)
-    assert result.state is UsageState.UNSUPPORTED and result.observations == ()
+    runner = make(new=True)
+    runner.on(OC, "db", "--help", result=RunResult(0, stderr="query  --format json|tsv"))
+    runner.on(OC, "db", result=ok("[]"))
+    result = OpenCodeAdapter(runner).usage(None, None)
+    assert result.windows == () and result.authoritative is False
+    assert result.state is UsageState.UNAVAILABLE
 
 
 def test_local_stats_are_labelled_non_authoritative():

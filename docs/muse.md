@@ -11,8 +11,15 @@ details and evidence: [vendor-compatibility.md](vendor-compatibility.md#muse-cod
 - Credential precedence in Muse is `META_API_KEY` > stored key > stored browser session. If
   `META_API_KEY` is exported, nothing ccswap stores can take effect in that shell. ccswap
   warns about it.
-- Usage is whatever `muse usage --json` reports. It runs no model turn. It is usually empty
-  for pay-as-you-go keys, and ccswap then prints the vendor's reason instead of a number.
+- Usage comes from `muse usage --json`, which runs no model turn: your tier, the 5-hour
+  window and the weekly window, each with its used % and reset time. Muse reports
+  percentages only, so ccswap never shows a made-up "N of M". A pay-as-you-go key has no
+  allowance (`api_key`), and a new window can be empty (`server_sent_no_usage`); both are
+  shown as *unavailable* with the reason, never as 0%.
+- API-key accounts are measured **one by one** (`META_API_KEY` set for that child only).
+  Browser logins cannot be: Muse stores one login in the macOS Keychain (so even a
+  different `HOME` sees it) and never says whose it is. The tool-level reading is therefore
+  labelled "active credential", and browser aliases show no numbers of their own.
 
 ## Commands
 

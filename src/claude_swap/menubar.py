@@ -38,7 +38,7 @@ REFRESH_CHOICES: tuple[int, ...] = (30, 60, 300)
 AUTO_THRESHOLD_CHOICES: tuple[int, ...] = (80, 90, 95, 98)
 TITLE_PCT_CHOICES: tuple[str, ...] = ("off", "5h", "7d", "both")
 SWITCH_HISTORY_LIMIT = 10
-VENDOR_REFRESH_SECONDS = 120  # vendor CLIs are subprocesses; poll them sparingly
+VENDOR_REFRESH_SECONDS = 180  # Muse/Kiro/OpenCode CLIs are subprocesses; poll them sparingly
 NOTIFICATION_BUNDLE_ID = "com.ccswap.menubar"
 
 
@@ -518,6 +518,19 @@ def _adapt_snapshot(snap) -> dict:
 MIN_AFFECTED_MACOS = 26
 
 
+def _tool_headline(tool: str, raw_snapshot) -> str | None:
+    """Claude/Codex menu headline from the same model the CLI and TUI use."""
+    try:
+        from claude_swap.vendors.legacy import ClaudeTool, CodexTool
+        from claude_swap.vendors.overview import headline, summary_from_snapshot
+
+        bridge = {"claude": ClaudeTool, "codex": CodexTool}[tool]()
+        summary = summary_from_snapshot(bridge, raw_snapshot)
+        return headline(summary) if summary.accounts else None
+    except Exception:  # noqa: BLE001 - a headline is cosmetic
+        return None
+
+
 def _macos_major(mac_ver: str | None = None) -> int | None:
     """Major version of the running macOS, or None if it cannot be read."""
     raw = platform.mac_ver()[0] if mac_ver is None else mac_ver
@@ -639,9 +652,13 @@ def run(switcher) -> int:
             self._dirty = False
             self._snapshot_at = 0.0
             self._refreshing = False
-            self.vendor_rows = {}  # tool -> [MenuRow]; filled by the refresh worker
+            # tool -> MenuSection (vendors/menu.py), filled by the vendor worker
+            self.tool_sections = {}
             self._vendor_at = 0.0
             self._vendor_refreshing = False
+            self._vendor_force: set = set()
+            self._claude_headline = None  # "5h 34% · wk 39%", from the same model as the CLI
+            self._codex_headline = None
             self._config_path = switcher._get_claude_config_path()
             self._config_mtime = 0.0
             self._last_usage_log: dict = {}  # (provider, account num) -> last-logged (5h, 7d) key
@@ -716,6 +733,7 @@ def run(switcher) -> int:
                     self.switcher._logger.debug("menubar snapshot failed", exc_info=True)
                 else:
                     snap = _adapt_snapshot(raw)
+                    self._claude_headline = _tool_headline("claude", raw)
                     self._log_usage(snap, "claude")
                     self.snapshot = snap
                     self._snapshot_at = time.time()
@@ -732,6 +750,7 @@ def run(switcher) -> int:
                         self.switcher._logger.debug("menubar codex snapshot failed", exc_info=True)
                     else:
                         codex_snap = _adapt_snapshot(craw)
+                        self._codex_headline = _tool_headline("codex", craw)
                         self._log_usage(codex_snap, "codex")
                         self.codex_snapshot = codex_snap
                         dirty = True
@@ -741,30 +760,47 @@ def run(switcher) -> int:
                 self._refreshing = False
             self._maybe_refresh_vendors()
 
-        def _maybe_refresh_vendors(self):
-            """Vendor CLIs are spawned processes: poll sparingly, on their own thread, so a slow
-            or hung vendor never delays the Claude/Codex snapshot or a manual refresh."""
-            if self._vendor_refreshing or time.time() - self._vendor_at <= VENDOR_REFRESH_SECONDS:
+        def _maybe_refresh_vendors(self, force_tools=None):
+            """Muse/Kiro/OpenCode: spawned CLIs, so polled sparingly on their own thread;
+            a slow or hung tool never delays the Claude/Codex snapshot or a manual refresh."""
+            if force_tools:
+                self._vendor_force |= set(force_tools)
+            due = time.time() - self._vendor_at > VENDOR_REFRESH_SECONDS
+            if self._vendor_refreshing or not (due or self._vendor_force):
                 return
             self._vendor_refreshing = True
             self._vendor_at = time.time()
-            threading.Thread(target=self._vendor_worker, daemon=True).start()
+            forced, self._vendor_force = self._vendor_force, set()
+            threading.Thread(target=self._vendor_worker, args=(forced,), daemon=True).start()
 
-        def _vendor_worker(self):
+        def _vendor_worker(self, forced):
+            from claude_swap.vendors.menu import MENU_TOOLS, MenuRow, MenuSection, collect_sections
+            from claude_swap.vendors.overview import Overview
+
             try:
-                from claude_swap.vendors.menu import MenuRow, collect
-                from claude_swap.vendors.service import VendorService
-
-                self.vendor_rows = collect(VendorService())
-                self._dirty = True
+                overview = Overview(self._vendor_service(), legacy=[])
+                sections = {}
+                for tool in MENU_TOOLS:  # one tool per call: isolation + per-tool forced refresh
+                    sections.update(collect_sections(overview, (tool,), refresh=tool in forced))
+                    self.tool_sections = {**self.tool_sections, **sections}
+                    self._dirty = True
             except Exception:  # noqa: BLE001 - optional surface; never break the menu bar
-                self.switcher._logger.debug("menubar vendor refresh failed", exc_info=True)
-                from claude_swap.vendors.menu import MenuRow
-
-                self.vendor_rows = {"error": [MenuRow("Vendor status unavailable", "error")]}
+                self.switcher._logger.debug("menubar tool refresh failed", exc_info=True)
+                for tool in MENU_TOOLS:
+                    if tool not in self.tool_sections:
+                        self.tool_sections[tool] = MenuSection(
+                            tool, f"{tool} · unavailable", [MenuRow("Status unavailable", tool)]
+                        )
                 self._dirty = True
             finally:
                 self._vendor_refreshing = False
+
+        def _vendor_service(self):
+            if getattr(self, "_vservice", None) is None:
+                from claude_swap.vendors.service import VendorService
+
+                self._vservice = VendorService()  # one cache + lock set for the app's lifetime
+            return self._vservice
 
         def _log_usage(self, snap, provider):
             """Log each account's session/weekly limits when they change.
@@ -1020,7 +1056,12 @@ def run(switcher) -> int:
             if not account_items:
                 account_items.append(rumps.MenuItem("No managed accounts", callback=None))
 
+            claude_header = rumps.MenuItem(
+                f"Claude Code · {self._claude_headline}" if self._claude_headline else "Claude Code",
+                callback=None,
+            )
             self.menu = [
+                claude_header,
                 *account_items,
                 None,
                 rumps.MenuItem("Rotate to next", callback=self._switch(None)),
@@ -1028,7 +1069,7 @@ def run(switcher) -> int:
                 rumps.MenuItem("Next available", callback=self._switch("next-available")),
                 None,
                 self._codex_menu(rumps),
-                self._vendors_menu(rumps),
+                *(self._tool_menu(rumps, tool) for tool in ("muse", "kiro", "opencode")),
                 None,
                 self._add_menu(rumps),
                 self._disable_menu(rumps),
@@ -1037,39 +1078,56 @@ def run(switcher) -> int:
                 self._history_menu(rumps),
                 None,
                 self._settings_menu(rumps),
-                rumps.MenuItem("Refresh now", callback=self.on_refresh_now),
+                rumps.MenuItem("Refresh all now", callback=self.on_refresh_now),
                 rumps.MenuItem("Quit", callback=self.on_quit),
             ]
 
-        def _vendors_menu(self, rumps):
-            menu = rumps.MenuItem("Muse / OpenCode / Kiro")
-            if not self.vendor_rows:
-                menu.add(rumps.MenuItem("Loading…", callback=None))
-                return menu
-            for rows in self.vendor_rows.values():
-                for row in rows:
-                    cb = self._make_vendor_switch(row) if row.selector else None
-                    menu.add(rumps.MenuItem(row.label, callback=cb))
-                menu.add(None)
+        def _tool_menu(self, rumps, tool):
+            """One submenu per tool, rendered verbatim from vendors/menu.py."""
+            from claude_swap.vendors.menu import loading_section
+
+            section = self.tool_sections.get(tool) or loading_section(tool)
+            menu = rumps.MenuItem(section.title)
+            seen = set()
+            for row in section.rows:
+                if row is None:
+                    menu.add(None)
+                    continue
+                label = row.label
+                while label in seen:  # rumps keys items by title; keep duplicates visible
+                    label += "\u200b"
+                seen.add(label)
+                item = rumps.MenuItem(label, callback=self._tool_row_callback(row))
+                item.state = 1 if row.checked else 0
+                menu.add(item)
             return menu
 
-        def _make_vendor_switch(self, row):
-            def cb(_sender):
-                threading.Thread(target=self._vendor_switch_work, args=(row,), daemon=True).start()
-            return cb
+        def _tool_row_callback(self, row):
+            if row.action == "switch" and row.selector:
+                return lambda _sender: threading.Thread(
+                    target=self._vendor_switch_work, args=(row,), daemon=True
+                ).start()
+            if row.action == "refresh":
+                return lambda _sender: self._maybe_refresh_vendors(force_tools={row.tool})
+            if row.action == "open" and row.url:
+                return lambda _sender: self._open_url(row.url)
+            return None
+
+        def _open_url(self, url):
+            if url.startswith("https://"):
+                import subprocess
+
+                subprocess.Popen(["/usr/bin/open", url])  # nosec B603 - fixed binary, https only
 
         def _vendor_switch_work(self, row):
-            from claude_swap.vendors.service import VendorService
-
             try:
-                outcome, _ = VendorService().switch(
+                outcome, _ = self._vendor_service().switch(
                     row.tool, row.selector, provider=row.provider, raw=True
                 )
-                rumps.notification("ccswap", "OpenCode account switched", outcome.message)
+                rumps.notification("ccswap", f"{row.provider} account switched", outcome.message)
             except ClaudeSwitchError as e:
                 rumps.notification("ccswap", "Switch failed", str(e))
-            self._vendor_at = 0.0  # re-read on the next refresh
-            self.refresh_async()
+            self._maybe_refresh_vendors(force_tools={row.tool})
 
         def _add_menu(self, rumps):
             menu = rumps.MenuItem("Add account")
@@ -1105,7 +1163,9 @@ def run(switcher) -> int:
             return menu
 
         def _codex_menu(self, rumps):
-            menu = rumps.MenuItem("Codex")
+            menu = rumps.MenuItem(
+                f"Codex · {self._codex_headline}" if self._codex_headline else "Codex"
+            )
             if self.codex_switcher is None:
                 menu.add(rumps.MenuItem("Codex unavailable", callback=None))
                 return menu
@@ -1414,6 +1474,7 @@ def run(switcher) -> int:
 
         def on_refresh_now(self, _sender):
             self.refresh_async(full=True)  # explicit user refresh → full pass
+            self._maybe_refresh_vendors(force_tools={"muse", "kiro", "opencode"})
 
         def on_quit(self, _sender):
             self._stop_engine()

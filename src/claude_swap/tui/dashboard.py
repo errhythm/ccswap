@@ -97,7 +97,13 @@ class DashboardScreen(Screen):
         Binding("question_mark", "option_help", mark("Option help")),
         # Power shortcuts; the menu is the discoverable path.
         Binding("g", "app.open_auto", mark("Auto view"), show=False),
-        Binding("v", "app.open_vendors", mark("Vendors"), show=False),
+        Binding("v", "app.open_tool('overview')", mark("All tools"), show=False),
+        # The peer row: 1 Claude Code, 2 Codex, 3 Muse, 4 Kiro, 5 OpenCode, 6 Antigravity.
+        *(
+            Binding(str(i), f"app.open_tool('{tool}')", show=False)
+            for i, tool in enumerate(("claude", "codex", "muse", "kiro", "opencode", "agy"), 1)
+        ),
+        Binding("0", "app.open_tool('overview')", show=False),
         Binding("f", "app.refresh_full", mark("Refresh usage"), show=False),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
@@ -118,6 +124,11 @@ class DashboardScreen(Screen):
         self._claude_busy = False
 
     def compose(self) -> ComposeResult:
+        from claude_swap.tui.tools import strip_text
+
+        yield Static(
+            strip_text(self.app._view if self.app._view != "combined" else ""), id="tool-strip"
+        )
         yield AccountsPanel(
             provider=None if self.app._view == "combined" else self.app._view,
             id="accounts-panel",
@@ -144,7 +155,10 @@ class DashboardScreen(Screen):
             (self.app.gettext("Disable / enable account…"), "disable-menu"),
             (self.app.gettext("Remove account…"), "remove-menu"),
             (self.app.gettext("Settings…"), "settings-menu"),
-            (self.app.gettext("Muse / OpenCode / Kiro…"), "vendors"),
+            (self.app.gettext("Muse Code…"), "tool:muse"),
+            (self.app.gettext("Kiro CLI…"), "tool:kiro"),
+            (self.app.gettext("OpenCode…"), "tool:opencode"),
+            (self.app.gettext("All tools overview…"), "tool:overview"),
             (self.app.gettext("Quit"), "quit"),
         ]
 
@@ -405,11 +419,14 @@ class DashboardScreen(Screen):
         actions: dict[str, Callable[[], None]] = {
             "switch": self.action_open_switch,
             "watch": app.action_open_watch,
-            "vendors": app.action_open_vendors,
             "add-token": app.action_add_token,
             "quit": app.exit,
         }
-        if action_id == "back":
+        if action_id.startswith("tool:"):
+            from claude_swap.tui.tools import navigate
+
+            navigate(app, action_id.split(":", 1)[1])
+        elif action_id == "back":
             await self._pop_menu()
         elif action_id == "add-menu":
             await self._push_menu("add account", self._add_entries())

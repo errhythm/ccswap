@@ -25,6 +25,8 @@ Facts this adapter relies on:
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import json
 import os
 import re
@@ -45,8 +47,12 @@ from claude_swap.vendors.core import (
     UnsupportedCapability,
     UsageResult,
     UsageState,
+    UsageWindow,
     VendorError,
     cap,
+    help_text,
+    percent,
+    short_detail,
 )
 
 ENV_KEY = "KIRO_API_KEY"
@@ -98,12 +104,129 @@ def _hint_args(hint: Mapping[str, str]) -> list[str]:
     return args
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+_NUM = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
+
+
+def _f(value: str) -> float:
+    return float(value.replace(",", ""))
+
+
+def _reset_date(text: str, today: datetime.date) -> str | None:
+    iso = re.search(r"resets? on (\d{4}-\d{2}-\d{2})", text)
+    if iso:
+        return iso.group(1)
+    short = re.search(r"resets? on (\d{1,2})/(\d{1,2})", text)  # legacy MM/DD, year implied
+    if short:
+        month, day = int(short.group(1)), int(short.group(2))
+        try:
+            candidate = datetime.date(today.year, month, day)
+        except ValueError:
+            return None
+        if candidate < today:
+            candidate = datetime.date(today.year + 1, month, day)
+        return candidate.isoformat()
+    return None
+
+
+def parse_usage_report(text: str, today: datetime.date | None = None) -> UsageResult | None:
+    """Parse the V2 ``/usage`` report (kiro-cli 3.1 and the older box layout).
+
+    3.1.0, verified live::
+
+        Estimated Usage | resets on 2026-12-01 | KIRO PRO+
+        Credits (1086.43 of 2000 covered in plan), 54.3%
+        Overages: Disabled
+        Your plan is managed by your organization's administrator.
+
+    The percentage is recomputed from used/limit (same unit) rather than trusted, and a
+    report without a plan allowance is plan-only: no zero is invented.
+    """
+    today = today or datetime.date.today()
+    clean = re.sub(r"[┃┏┓┗┛┣┫━│║█▓▒░]+", " ", _ANSI.sub("", text or ""))
+    lines = [re.sub(r"\s+", " ", line).strip() for line in clean.splitlines()]
+    body = "\n".join(line for line in lines if line)
+    if not re.search(r"covered in plan|credits used|Estimated Usage|Plan:", body, re.IGNORECASE):
+        return None
+    plan = None
+    head = re.search(r"Estimated Usage\s*\|[^|\n]*\|\s*([^\n|]+)", body)
+    if head:
+        plan = head.group(1).strip()
+    else:
+        named = re.search(r"Plan:\s*([^|\n]+)", body) or re.search(
+            r"\|\s*(KIRO[^|\n]*)$", body, re.MULTILINE
+        )
+        plan = named.group(1).strip() if named else None
+    org = bool(re.search(r"managed by your organi[sz]ation", body, re.IGNORECASE))
+    scope = "organization-managed" if org else "account"
+    windows = []
+    plan_credits = re.search(_NUM + r" of " + _NUM + r" covered in plan", body)
+    reset = _reset_date(body, today)
+    if plan_credits:
+        used, limit = _f(plan_credits.group(1)), _f(plan_credits.group(2))
+        if limit > 0:
+            windows.append(
+                UsageWindow(
+                    key="monthly-credits",
+                    label="Plan credits",
+                    unit="credits",
+                    used=used,
+                    limit=limit,
+                    remaining=round(max(0.0, limit - used), 2),
+                    used_percent=percent(used, limit),
+                    resets_on=reset,
+                    scope=scope,
+                    note="Kiro labels this an estimate",
+                )
+            )
+    bonus = re.search(
+        r"Bonus credits:?\s*" + _NUM + r"\s*/\s*" + _NUM + r"[^\n]*", body, re.IGNORECASE
+    )
+    if bonus:
+        used, limit = _f(bonus.group(1)), _f(bonus.group(2))
+        expires = re.search(r"expires in (\d+) days?", bonus.group(0))
+        windows.append(
+            UsageWindow(
+                key="bonus-credits",
+                label="Bonus credits",
+                unit="credits",
+                used=used,
+                limit=limit,
+                remaining=round(max(0.0, limit - used), 2),
+                used_percent=percent(used, limit),
+                scope=scope,
+                note=f"expires in {expires.group(1)} days" if expires else "",
+            )
+        )
+    overage = re.search(r"Overages?:\s*([^\n]+)", body)
+    notes = []
+    if overage:
+        notes.append(f"Overages: {overage.group(1).strip()}")
+    if org:
+        notes.append("Plan managed by your organization")
+    return UsageResult(
+        UsageState.AVAILABLE if windows else UsageState.UNAVAILABLE,
+        reason="" if windows else "Kiro reported a plan without a credit allowance",
+        windows=tuple(windows),
+        plan=plan,
+        source="kiro-cli chat --no-interactive --v2 /usage",
+        authoritative=True,
+        observed_at=time.time(),
+        hint="; ".join(notes),
+    )
+
+
 class KiroAdapter(ToolAdapter):
     key = "kiro"
     label = "Kiro CLI"
     binary = "kiro-cli"
     docs = "https://kiro.dev/docs/cli/"
     kinds = ("login", "api-key")
+
+    def __init__(self, runner=None, probe_dir=None) -> None:
+        super().__init__(runner)
+        self.probe_dir = probe_dir
+        self._v2: bool | None = None
 
     def capabilities(self, info: ToolInfo) -> dict[Capability, CapabilityStatus]:
         S = Support
@@ -135,7 +258,7 @@ class KiroAdapter(ToolAdapter):
             ),
             Capability.RATE_LIMIT_DETECTION: cap(S.UNSUPPORTED, "no stable kiro-cli interface"),
             Capability.AUTO_SWITCH: cap(
-                S.UNSUPPORTED, "no programmatic usage and no non-interactive login switch"
+                S.UNSUPPORTED, "switching a login needs an interactive logout/login"
             ),
             Capability.SESSION_ISOLATION: cap(
                 S.CONDITIONAL,
@@ -369,12 +492,79 @@ class KiroAdapter(ToolAdapter):
 
     # ---- usage ---------------------------------------------------------
 
+    def _probe_dir(self) -> str:
+        """Fixed working directory for the probe: Kiro saves an empty V2 session per run,
+        keyed by cwd, so this keeps them out of the user's project resume lists."""
+        from claude_swap import paths
+
+        root = self.probe_dir or (paths.get_backup_root() / "vendors" / "kiro-probe")
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return str(root)
+
+    def _supports_v2(self, exe: str) -> bool:
+        if self._v2 is None:
+            result = self.runner.run([exe, "chat", "--help"], timeout=15)
+            self._v2 = result.ok and "--v2" in help_text(result)
+        return self._v2
+
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
-        return UsageResult(
-            UsageState.UNSUPPORTED,
-            "Kiro usage/credits are only available through the interactive /usage command",
-            hint="Run `kiro-cli chat`, then type /usage",
+        """``kiro-cli chat --no-interactive --v2 /usage``: plan credits, bonus credits, reset.
+
+        Verified on kiro-cli 3.1.0: the V2 harness answers ``/usage`` locally (no model
+        turn; repeated runs leave the credit count unchanged) and exits 0.  Without
+        ``--v2`` a V3 engine may forward the text to the model, so a CLI without the
+        flag is never probed.  Kiro measures only the signed-in login (or the
+        ``KIRO_API_KEY`` given to the child), so a registered login that is not active
+        is reported unavailable; the service then shows its last observation as stale.
+        """
+        info = self.require_installed()
+        if not self._supports_v2(info.exe):
+            return UsageResult(
+                UsageState.UNSUPPORTED,
+                "This kiro-cli has no --v2 harness; /usage could be sent to the model as a "
+                "prompt, so ccswap does not run it",
+                hint="Run `kiro-cli chat` and type /usage",
+            )
+        env: dict[str, str] | None = None
+        unset: tuple[str, ...] = (ENV_KEY,)
+        if record is not None and record.kind == "api-key":
+            if secret is None:
+                return UsageResult(
+                    UsageState.ERROR, f"Account '{record.alias}' has no stored API key"
+                )
+            env, unset, who = {ENV_KEY: secret}, (), record.alias
+        else:
+            state, current = self.whoami_state()
+            if state == "out":
+                return UsageResult(UsageState.UNAUTHENTICATED, "Kiro CLI is not logged in")
+            if state == "error" or not current:
+                return UsageResult(UsageState.ERROR, "`kiro-cli whoami` failed; usage not read")
+            if record is not None and not _same_login(record.identity, current):
+                return UsageResult(
+                    UsageState.UNAVAILABLE,
+                    f"'{record.alias}' is not the signed-in Kiro login; Kiro only reports the "
+                    "active login's usage",
+                )
+            who = record.alias if record is not None else current.get("email", "active login")
+        result = self.runner.run(
+            [info.exe, "chat", "--no-interactive", "--v2", "/usage"],
+            timeout=40,
+            env=env,
+            unset_env=unset,
+            cwd=self._probe_dir(),
         )
+        secrets = [secret] if secret else []
+        text = _ANSI.sub("", f"{result.stdout}\n{result.stderr}")
+        if not result.ok:
+            if re.search(r"not logged in|log ?in required|please log ?in", text, re.IGNORECASE):
+                return UsageResult(UsageState.UNAUTHENTICATED, "Kiro CLI is not logged in")
+            return UsageResult(
+                UsageState.ERROR, f"Kiro /usage failed: {short_detail(result, secrets)}"
+            )
+        parsed = parse_usage_report(text)
+        if parsed is None:
+            return UsageResult(UsageState.ERROR, "Kiro /usage printed an unrecognised report")
+        return dataclasses.replace(parsed, attributed_to=who)
 
     # ---- sessions -------------------------------------------------------
 

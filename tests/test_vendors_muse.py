@@ -56,7 +56,7 @@ def test_capabilities_are_honest(adapter):
     by = {c.value: s.support.value for c, s in caps.items()}
     assert by["account-enumeration"] == "unsupported"
     assert by["auto-switch"] == "unsupported"
-    assert by["switch"] == "conditional" and by["usage"] == "conditional"
+    assert by["switch"] == "conditional" and by["usage"] == "supported"
 
 
 def test_register_api_key_validates(adapter):
@@ -142,8 +142,25 @@ def test_usage_null_allowance_is_unavailable_not_zero(adapter, runner):
         ),
     )
     result = adapter.usage(None, None)
-    assert result.state is UsageState.UNAVAILABLE and result.observations == ()
-    assert result.reason == "server_sent_no_usage"
+    assert (
+        result.state is UsageState.UNAVAILABLE
+        and result.windows == ()
+        and result.observations == ()
+    )
+    assert "no allowance data" in result.reason
+
+
+def test_usage_api_key_reason_is_explained(adapter, runner):
+    runner.on(MUSE, "usage", "--json", result=ok('{"allowance": null, "reason": "api_key"}'))
+    result = adapter.usage(api_record(), KEY)
+    assert result.state is UsageState.UNAVAILABLE and "pay-as-you-go" in result.reason
+
+
+def test_usage_not_logged_in_is_unauthenticated(adapter, runner):
+    runner.on(
+        MUSE, "usage", "--json", result=fail("muse usage: not logged in: run `muse login` first")
+    )
+    assert adapter.usage(None, None).state is UsageState.UNAUTHENTICATED
 
 
 def test_usage_available_passes_vendor_data_through_uninterpreted(adapter, runner):
@@ -168,9 +185,10 @@ def test_usage_available_passes_vendor_data_through_uninterpreted(adapter, runne
 
 
 @pytest.mark.parametrize("stdout", ["not json", "[]", ""])
-def test_usage_malformed_is_unavailable(adapter, runner, stdout):
+def test_usage_malformed_is_an_error_not_zero(adapter, runner, stdout):
     runner.on(MUSE, "usage", "--json", result=ok(stdout))
-    assert adapter.usage(None, None).state is UsageState.UNAVAILABLE
+    result = adapter.usage(None, None)
+    assert result.state is UsageState.ERROR and result.windows == ()
 
 
 def test_usage_timeout_and_failure_isolated(adapter, runner):
@@ -212,7 +230,7 @@ def test_observe_flags_env_override(adapter, monkeypatch):
 
 def test_browser_alias_usage_is_not_attributed_to_the_ambient_session(adapter, runner):
     result = adapter.usage(AccountRecord("muse", "b", "browser"), None)
-    assert result.state is UsageState.UNSUPPORTED
+    assert result.state is UsageState.UNAVAILABLE and result.windows == ()
     assert not any(c.argv[1:2] == ("usage",) for c in runner.calls)
 
 

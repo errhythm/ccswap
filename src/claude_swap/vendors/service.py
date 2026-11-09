@@ -9,6 +9,7 @@ OpenCode ``provider`` qualifier, which is data (``AccountRecord.provider``).
 from __future__ import annotations
 
 import dataclasses
+import threading
 import time
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -35,9 +36,17 @@ from claude_swap.vendors.core import (
 )
 from claude_swap.vendors.registry import ToolRegistry
 from claude_swap.vendors.store import VendorStore, validate_alias
+from claude_swap.vendors.usage_cache import ACTIVE_KEY, UsageCache
 
 USAGE_TTL_OK = 60.0
 USAGE_TTL_FAIL = 15.0
+# Per-tool (success, failure) freshness: each probe spawns a CLI, OpenCode's aggregate
+# scans every local message, so these are polled less often than a cheap status call.
+USAGE_TTLS: dict[str, tuple[float, float]] = {
+    "muse": (60.0, 20.0),
+    "kiro": (180.0, 30.0),
+    "opencode": (300.0, 60.0),
+}
 
 
 class VendorService:
@@ -51,6 +60,9 @@ class VendorService:
         self.store = store or VendorStore()
         self._clock = clock
         self._usage_cache: dict[tuple[str, str], tuple[float, UsageResult]] = {}
+        self._locks: dict[tuple[str, str], threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+        self.usage_store = UsageCache(self.store.root)
 
     # ---- helpers ---------------------------------------------------------
 
@@ -196,7 +208,9 @@ class VendorService:
     def remove(self, tool: str, selector: str, provider: str | None = None) -> AccountRecord:
         """Forget a registration only; the vendor's login is left untouched."""
         record = self.resolve(tool, selector, provider)
-        return self.store.remove(tool, record.alias, record.provider)
+        removed = self.store.remove(tool, record.alias, record.provider)
+        self.usage_store.drop(tool, removed.alias)
+        return removed
 
     def switch(
         self,
@@ -248,26 +262,92 @@ class VendorService:
     def usage(
         self, tool: str, selector: str | None = None, *, refresh: bool = False
     ) -> UsageResult:
+        """One tool/account's usage: in-memory TTL cache, request coalescing, and the
+        persistent last-good fallback (returned as ``STALE`` with the new error)."""
         adapter = self.adapter(tool)
         self._need(adapter, UsageCapability, Capability.USAGE, "usage reporting")
         record = self.resolve(tool, selector) if selector else None
-        key = (tool, record.alias if record else "")
-        now = self._clock()
-        cached = self._usage_cache.get(key)
-        if cached and not refresh:
-            age = now - cached[0]
-            ttl = USAGE_TTL_OK if cached[1].state is UsageState.AVAILABLE else USAGE_TTL_FAIL
-            if age < ttl:
-                result = cached[1]
-                return dataclasses.replace(
-                    result,
-                    observations=tuple(
-                        dataclasses.replace(o, cached=True) for o in result.observations
-                    ),
-                )
-        result = adapter.usage(record, self._secret(record) if record else None)  # type: ignore[attr-defined]
-        self._usage_cache[key] = (now, result)
-        return result
+        account_key = record.alias if record else ACTIVE_KEY
+        key = (tool, account_key)
+        with self._key_lock(key):  # concurrent askers share one vendor call
+            now = self._clock()
+            cached = self._usage_cache.get(key)
+            if cached and not refresh:
+                ttl_ok, ttl_fail = USAGE_TTLS.get(tool, (USAGE_TTL_OK, USAGE_TTL_FAIL))
+                ttl = ttl_ok if cached[1].state is UsageState.AVAILABLE else ttl_fail
+                if now - cached[0] < ttl:
+                    result = cached[1]
+                    return dataclasses.replace(
+                        result,
+                        observations=tuple(
+                            dataclasses.replace(o, cached=True) for o in result.observations
+                        ),
+                    )
+            try:
+                fresh = adapter.usage(record, self._secret(record) if record else None)  # type: ignore[attr-defined]
+            except ClaudeSwitchError as exc:
+                fresh = UsageResult(UsageState.ERROR, str(exc))
+            result = self._settle(tool, account_key, fresh)
+            self._usage_cache[key] = (now, result)
+            if account_key == ACTIVE_KEY and result.state is UsageState.AVAILABLE:
+                owner = result.attributed_to
+                if owner and any(r.alias == owner for r in self.store.records(tool)):
+                    # Same reading, same owner: an account-level ask is answered without a
+                    # second vendor call.
+                    self._usage_cache[(tool, owner)] = (now, result)
+            return result
+
+    def _settle(self, tool: str, account_key: str, fresh: UsageResult) -> UsageResult:
+        """Persist good data under the account it belongs to; fall back to it when stale."""
+        if fresh.state is UsageState.AVAILABLE:
+            self.usage_store.put(tool, account_key, fresh)
+            if account_key == ACTIVE_KEY and fresh.attributed_to:
+                # The tool told us whose numbers these are (e.g. Kiro's whoami email): file
+                # them under that registered account too, never under any other.
+                owner = self._owner(tool, fresh.attributed_to)
+                if owner is not None:
+                    self.usage_store.put(tool, owner, fresh)
+                    fresh = dataclasses.replace(fresh, attributed_to=owner)
+            return fresh
+        if fresh.state in (UsageState.UNSUPPORTED, UsageState.UNAUTHENTICATED):
+            return fresh
+        last = self.usage_store.get(tool, account_key)
+        if last is None:
+            return fresh
+        return dataclasses.replace(
+            last,
+            state=UsageState.STALE,
+            error=fresh.reason or fresh.error or "refresh failed",
+            hint=last.hint,
+        )
+
+    def _owner(self, tool: str, attributed: str) -> str | None:
+        wanted = attributed.lower()
+        matches = [
+            r.alias
+            for r in self.store.records(tool)
+            if r.alias.lower() == wanted or r.identity.get("email", "").lower() == wanted
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _key_lock(self, key: tuple[str, str]) -> threading.Lock:
+        with self._locks_guard:
+            return self._locks.setdefault(key, threading.Lock())
+
+    def accounts_usage(
+        self, tool: str, *, refresh: bool = False
+    ) -> list[tuple[AccountView, UsageResult]]:
+        """Every registered account with *its own* usage (never the active one's)."""
+        out = []
+        for view in self.list_views(tool):
+            if not view.registered:
+                continue
+            try:
+                result = self.usage(tool, view.alias, refresh=refresh)
+            except ClaudeSwitchError as exc:
+                result = UsageResult(UsageState.ERROR, str(exc))
+            out.append((view, result))
+        return out
 
     def usage_payload(
         self, tool: str, selector: str | None = None, *, refresh: bool = False

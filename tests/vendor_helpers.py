@@ -17,6 +17,7 @@ class Call:
     unset_env: tuple[str, ...] = ()
     input_text: str | None = None
     interactive: bool = False
+    cwd: str | None = None
 
 
 class FakeRunner:
@@ -47,9 +48,16 @@ class FakeRunner:
         return table[best] if best is not None else None
 
     def run(
-        self, argv: Sequence[str], *, timeout: float = 20.0, env=None, unset_env=(), input_text=None
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float = 20.0,
+        env=None,
+        unset_env=(),
+        input_text=None,
+        cwd=None,
     ) -> RunResult:
-        call = Call(tuple(argv), dict(env or {}), tuple(unset_env), input_text)
+        call = Call(tuple(argv), dict(env or {}), tuple(unset_env), input_text, cwd=cwd)
         self.calls.append(call)
         handler = self._match(self.routes, argv)
         if handler is None:

@@ -15,6 +15,7 @@ from functools import partial
 from textual.app import App
 from textual.binding import Binding
 from textual.reactive import reactive
+from textual.widgets import Static
 from textual.worker import WorkerState
 
 from claude_swap import printer
@@ -107,7 +108,7 @@ class CswapApp(App):
             provider: SnapshotSource(provider_switcher)
             for provider, provider_switcher in self.switchers.items()
         }
-        self.vendor_service = None  # built lazily by VendorsScreen; tests may inject one
+        self.vendor_service = None  # built lazily by the tool pages; tests may inject one
         self._start = start  # "dashboard" | "watch" (`cswap watch`)
         self._detected = detected  # terminal background sensed pre-driver, or None
         self.snapshots = {provider: None for provider in PROVIDERS}
@@ -628,12 +629,14 @@ class CswapApp(App):
         self._last_auto_provider = provider
         self.push_screen(AutoScreen(provider))
 
-    def action_open_vendors(self) -> None:
-        from claude_swap.tui.vendors import VendorsScreen
+    def action_open_tool(self, target: str) -> None:
+        """Number keys / menu: every tool's own page (Claude/Codex/Antigravity: dashboard)."""
+        from claude_swap.tui.tools import navigate
 
-        if isinstance(self.screen, VendorsScreen):
-            return
-        self.push_screen(VendorsScreen())
+        navigate(self, target)
+
+    def action_open_vendors(self) -> None:  # kept for scripts/keymaps that used `v`
+        self.action_open_tool("overview")
 
     def action_open_watch(self) -> None:
         if isinstance(self.screen, WatchScreen):
@@ -685,6 +688,9 @@ class CswapApp(App):
         provider = None if name == "combined" else name
         for screen in self.screen_stack:
             if isinstance(screen, DashboardScreen):
+                from claude_swap.tui.tools import strip_text
+
+                screen.query_one("#tool-strip", Static).update(strip_text(provider or ""))
                 panel = screen.query_one("#accounts-panel", AccountsPanel)
                 panel.provider = provider
                 panel.refresh(layout=True)

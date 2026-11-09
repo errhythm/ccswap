@@ -23,9 +23,23 @@ ccswap kiro list [--json]                 # * marks the login whoami reports; ma
 ccswap kiro status [--json]
 ccswap kiro switch me --login --yes       # kiro-cli logout, then kiro-cli login <flags>, then verify
 ccswap kiro run ci -- --no-interactive "fix the build"   # kiro-cli chat with KIRO_API_KEY for that child only
-ccswap kiro usage                         # unsupported programmatically; run `kiro-cli chat` and type /usage
+ccswap kiro usage                         # plan, credits used/limit, reset date (runs /usage locally, no credits)
 ccswap kiro remove work                   # forget the registration; Kiro untouched
 ```
+
+## Usage
+
+`ccswap kiro usage` runs `kiro-cli chat --no-interactive --v2 "/usage"`. The V2 harness
+answers the slash command itself, so no model turn runs and no credits are used (verified
+on 3.1.0 with repeated runs). ccswap shows the plan, credits used of the plan allowance,
+what remains, the reset date, bonus credits when present, and whether overages are on or
+the plan is managed by an organization. Kiro reports a reset *date*, not a time, so none is
+invented. Each probe leaves an empty V2 session behind; ccswap runs it from its own
+`vendors/kiro-probe` directory, so those sessions never show up in your projects.
+
+Only the signed-in login can be measured. A registered login that isn't active keeps
+showing **its own** last reading, marked stale with its age, and never another account's.
+API-key accounts are measured with `KIRO_API_KEY` set for that child only.
 
 ## Why switching is guarded
 

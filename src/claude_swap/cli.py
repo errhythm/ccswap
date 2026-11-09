@@ -1465,11 +1465,22 @@ def main() -> None:
     if argv and argv[0] == "agy":
         _agy_command(argv[1:])
         return
-    if argv and argv[0] in ("vendors", "muse", "opencode", "kiro"):
+    if argv and argv[0] == "usage":
+        from claude_swap.vendors.cli import usage_command
+
+        sys.exit(usage_command(argv[1:]))
+    if argv and argv[0] == "claude":
+        from claude_swap.vendors.cli import claude_argv
+
+        argv = claude_argv(argv[1:])
+        sys.argv = [sys.argv[0], *argv]
+    if argv and argv[0] in ("vendors", "tools", "muse", "opencode", "kiro"):
         from claude_swap.vendors.cli import tool_command, vendors_command
 
         code = (
-            vendors_command(argv[1:]) if argv[0] == "vendors" else tool_command(argv[0], argv[1:])
+            vendors_command(argv[1:])
+            if argv[0] in ("vendors", "tools")
+            else tool_command(argv[0], argv[1:])
         )
         sys.exit(code)
     if argv and argv[0] == "auto":

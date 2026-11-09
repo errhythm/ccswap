@@ -23,6 +23,7 @@ documented as unverified.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -47,6 +48,7 @@ from claude_swap.vendors.core import (
     UsageState,
     VendorError,
     cap,
+    help_text,
     redact,
     short_detail,
 )
@@ -79,6 +81,101 @@ def _config_file() -> Path:
     return root / "opencode" / "opencode.json"
 
 
+_PERIODS = ("24h", "7d", "30d", "all")
+_TOKEN_FIELDS = (
+    ("input", "$.tokens.input"),
+    ("output", "$.tokens.output"),
+    ("reasoning", "$.tokens.reasoning"),
+    ("cacheRead", "$.tokens.cache.read"),
+    ("cacheWrite", "$.tokens.cache.write"),
+)
+
+
+def _cutoffs(now: float) -> dict[str, int]:
+    day = 86400 * 1000
+    ms = int(now * 1000)
+    return {"d1": ms - day, "d7": ms - 7 * day, "d30": ms - 30 * day}
+
+
+def _sums() -> str:
+    parts = []
+    for period, cond in (
+        ("24h", "time_created > {d1}"),
+        ("7d", "time_created > {d7}"),
+        ("30d", "time_created > {d30}"),
+        ("all", "1"),
+    ):
+        parts.append(f'sum(case when {cond} then 1 else 0 end) as "n_{period}"')
+        parts.append(
+            f"sum(case when {cond} then coalesce(json_extract(data,'$.cost'),0) else 0 end) "
+            f'as "cost_{period}"'
+        )
+        for name, path in _TOKEN_FIELDS:
+            parts.append(
+                f"sum(case when {cond} then coalesce(json_extract(data,'{path}'),0) else 0 end) "
+                f'as "{name}_{period}"'
+            )
+    return ", ".join(parts)
+
+
+# A constant, read-only aggregate over the message table only.  It never touches the
+# credential/account tables, selects no message content, and takes no user input.
+# Built at import time from module constants; only integer cutoffs are formatted in later.
+_STATS_SQL = (
+    "select json_extract(data,'$.providerID') as provider, json_extract(data,'$.modelID') as model, "  # nosec B608
+    "max(time_created) as last, "
+    + _sums()
+    + " from message where json_extract(data,'$.role')='assistant' group by provider, model"
+)
+
+
+def summarize(rows: list) -> list[dict]:
+    """Rows from ``_STATS_SQL`` -> [{provider, totals{period}, models[...]}] sorted by use."""
+    providers: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("provider"), str):
+            continue
+        model = row.get("model") if isinstance(row.get("model"), str) else "unknown"
+        entry = {
+            "model": model,
+            "last": row.get("last") if isinstance(row.get("last"), (int, float)) else None,
+        }
+        for period in _PERIODS:
+
+            def n(name: str, row: dict = row, period: str = period) -> float:
+                value = row.get(f"{name}_{period}")
+                return float(value) if isinstance(value, (int, float)) else 0.0
+
+            entry[period] = {
+                "messages": int(n("n")),
+                "costUsd": round(n("cost"), 4),
+                "tokens": {name: int(n(name)) for name, _ in _TOKEN_FIELDS},
+            }
+        bucket = providers.setdefault(
+            row["provider"], {"provider": row["provider"], "models": [], "last": None}
+        )
+        bucket["models"].append(entry)
+        if entry["last"] and (bucket["last"] is None or entry["last"] > bucket["last"]):
+            bucket["last"] = entry["last"]
+    out = []
+    for bucket in providers.values():
+        totals = {}
+        for period in _PERIODS:
+            totals[period] = {
+                "messages": sum(m[period]["messages"] for m in bucket["models"]),
+                "costUsd": round(sum(m[period]["costUsd"] for m in bucket["models"]), 4),
+                "tokens": {
+                    name: sum(m[period]["tokens"][name] for m in bucket["models"])
+                    for name, _ in _TOKEN_FIELDS
+                },
+            }
+        bucket["totals"] = totals
+        bucket["models"].sort(key=lambda m: (-m["all"]["costUsd"], -m["all"]["messages"]))
+        out.append(bucket)
+    out.sort(key=lambda b: (-b["totals"]["30d"]["messages"], -b["totals"]["all"]["messages"]))
+    return out
+
+
 class OpenCodeAdapter(ToolAdapter):
     key = "opencode"
     label = "OpenCode"
@@ -89,6 +186,7 @@ class OpenCodeAdapter(ToolAdapter):
     def __init__(self, runner=None) -> None:
         super().__init__(runner)
         self._probe: dict[str, bool] | None = None
+        self._db: bool | None = None
         self._probed_at = 0.0
 
     # ---- probing -----------------------------------------------------
@@ -109,13 +207,13 @@ class OpenCodeAdapter(ToolAdapter):
             if group.ok:
                 flags["switch"] = bool(
                     re.search(
-                        r"^\s*opencode (?:auth|providers) switch\b", group.stdout, re.MULTILINE
+                        r"^\s*opencode (?:auth|providers) switch\b", help_text(group), re.MULTILINE
                     )
                 )
             listing = self.runner.run([info.exe, "auth", "list", "--help"], timeout=15)
-            flags["json"] = listing.ok and "--format" in listing.stdout
+            flags["json"] = listing.ok and "--format" in help_text(listing)
             login = self.runner.run([info.exe, "auth", "login", "--help"], timeout=15)
-            flags["provider-flag"] = login.ok and "--provider" in login.stdout
+            flags["provider-flag"] = login.ok and "--provider" in help_text(login)
         self._probe = flags
         self._probed_at = time.monotonic()
         return flags
@@ -151,9 +249,10 @@ class OpenCodeAdapter(ToolAdapter):
                 "use `opencode auth login` or the TUI /connect",
             ),
             Capability.USAGE: cap(
-                S.UNSUPPORTED,
-                "no authoritative provider quota; `opencode stats` gives local, "
-                "non-per-account token/cost statistics only",
+                S.CONDITIONAL,
+                "local statistics per provider and model (tokens, OpenCode's USD cost estimate; "
+                "24h/7d/30d/all) via a read-only `opencode db` aggregate, or `opencode stats` "
+                "text on older releases. Provider quotas and per-account usage: not reported",
             ),
             Capability.RATE_LIMIT_DETECTION: cap(
                 S.UNSUPPORTED, "provider-specific; not exposed by OpenCode"
@@ -447,12 +546,70 @@ class OpenCodeAdapter(ToolAdapter):
     # ---- usage -------------------------------------------------------
 
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
-        return UsageResult(
-            UsageState.UNSUPPORTED,
-            "OpenCode exposes no authoritative provider quota or per-account usage",
-            hint="Run `ccswap opencode usage --local` for OpenCode's local token/cost statistics "
-            "(not provider quota, not per account)",
+        """Local token and cost statistics per provider and model.
+
+        OpenCode exposes no provider quota (subscription windows, credits, rate limits),
+        so nothing here is authoritative.  Its message records carry provider and model
+        but no account, so a provider *account* gets no numbers: two accounts of one
+        provider would otherwise show each other's usage.
+        """
+        if record is not None:
+            return UsageResult(
+                UsageState.UNAVAILABLE,
+                "OpenCode records usage per provider and model, not per account",
+                hint="The OpenCode tool view shows the per-provider statistics",
+            )
+        info = self.require_installed()
+        if not self._db_supported(info.exe):
+            stats = self.local_stats()
+            return dataclasses.replace(
+                stats, hint="Provider quotas are not reported by OpenCode. " + stats.hint
+            )
+        now = time.time()
+        result = self.runner.run(
+            [info.exe, "db", _STATS_SQL.format(**_cutoffs(now)), "--format", "json"],
+            timeout=45,
         )
+        if not result.ok:
+            return UsageResult(UsageState.ERROR, f"`opencode db` failed: {short_detail(result)}")
+        try:
+            rows = json.loads(result.stdout or "[]")
+        except ValueError:
+            return UsageResult(UsageState.ERROR, "`opencode db` returned malformed JSON")
+        if not isinstance(rows, list):
+            return UsageResult(UsageState.ERROR, "`opencode db` returned an unexpected shape")
+        providers = summarize(rows)
+        if not providers:
+            return UsageResult(
+                UsageState.UNAVAILABLE,
+                "OpenCode has no recorded model usage yet",
+                source="opencode db (local message records)",
+            )
+        return UsageResult(
+            UsageState.AVAILABLE,
+            observations=(
+                UsageObservation(
+                    UsageKind.LOCAL_TOKENS,
+                    "opencode db (local message records)",
+                    False,
+                    scope="local",
+                    data={"periods": list(_PERIODS), "providers": providers},
+                    fetched_at=now,
+                ),
+            ),
+            source="opencode db (local message records)",
+            authoritative=False,
+            observed_at=now,
+            hint="Local statistics. Costs are OpenCode's own USD estimates; provider "
+            "subscription quotas are not reported by OpenCode",
+        )
+
+    def _db_supported(self, exe: str) -> bool:
+        if self._db is None:
+            result = self.runner.run([exe, "db", "--help"], timeout=15)
+            text = help_text(result)
+            self._db = result.ok and "--format" in text and "query" in text
+        return self._db
 
     def local_stats(self) -> UsageResult:
         info = self.require_installed()

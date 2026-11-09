@@ -28,9 +28,17 @@ ccswap opencode switch openai personal
 ccswap opencode login [provider]          # opencode auth login (interactive)
 ccswap opencode logout anthropic work --yes   # deletes OpenCode's own credential
 ccswap opencode remove work               # forget the alias only
-ccswap opencode usage                     # explains that no provider quota exists
-ccswap opencode usage --local             # `opencode stats`: local, all providers, NOT a quota
+ccswap opencode usage                     # local tokens + cost per provider/model (24h/7d/30d/all)
+ccswap opencode usage --local             # raw `opencode stats` text
 ```
+
+Usage is **local statistics**: a constant, read-only `SELECT` through the official
+`opencode db` command over the `message` table (never the credential or account tables,
+never message content). It gives message counts, token types and OpenCode's own USD cost
+estimate per provider and model. These are not provider quotas, and OpenCode exposes none
+(subscription windows, credits or rate limits). Messages record provider and model but no
+account, so per-account numbers do not exist; a provider account shows none rather than
+its provider's total.
 
 There is no `opencode run <provider> <account>`: OpenCode resolves credentials in a shared
 server, so per-process account isolation does not exist and ccswap does not pretend it does.

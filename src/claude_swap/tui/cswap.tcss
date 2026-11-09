@@ -67,15 +67,18 @@ Screen {
 MenuItem Static { color: $foreground; }
 MenuItem Static.menu-item-muted { color: $secondary; }
 
-/* -- vendors screen ------------------------------------------------------------ */
+/* -- tool pages (Muse, Kiro, OpenCode, overview) and the peer row ------------ */
 
-#vendor-tabs { height: 1; margin-top: 1; padding: 0 3; }
-#vendor-info { height: auto; max-height: 6; padding: 1 3 0 3; color: $secondary; }
-#vendor-detail { height: auto; max-height: 12; padding: 0 3; color: $foreground; }
-#vaccounts { background: $background; padding: 1 2 0 1; scrollbar-size-vertical: 1; }
-#vaccounts ListItem { background: transparent; padding: 0 1; border-left: thick $background; }
-#vaccounts ListItem.-highlight,
-#vaccounts:focus ListItem.-highlight {
+#tool-strip { height: 1; margin-top: 1; padding: 0 2; overflow: hidden; }
+#tool-head { height: auto; max-height: 8; padding: 1 3 0 3; }
+#tool-usage { height: auto; max-height: 10; padding: 1 3 0 3; }
+#accounts-title { height: 1; margin-top: 1; padding: 0 3; color: $secondary; }
+#tool-detail { height: auto; max-height: 12; padding: 0 3 1 3; }
+#taccounts, #overview { background: $background; padding: 1 2 0 1; scrollbar-size-vertical: 1; min-height: 4; }
+#taccounts ListItem, #overview ListItem { background: transparent; padding: 0 1; border-left: thick $background; }
+#overview ListItem { margin-bottom: 1; }
+#taccounts ListItem.-highlight, #taccounts:focus ListItem.-highlight,
+#overview ListItem.-highlight, #overview:focus ListItem.-highlight {
     color: $foreground;
     background: $surface;
     text-style: none;

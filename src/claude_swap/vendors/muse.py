@@ -42,6 +42,7 @@ from claude_swap.vendors.core import (
     UsageObservation,
     UsageResult,
     UsageState,
+    UsageWindow,
     VendorError,
     cap,
     redact,
@@ -70,6 +71,77 @@ def _scalars(value: Any, depth: int = 0) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return redact(value) if isinstance(value, str) else value
     return None
+
+
+_WINDOWS = (("window", "five-hour", "5-hour window"), ("weekly", "weekly", "Weekly"))
+
+
+def parse_allowance(
+    allowance: dict, *, attributed_to: str | None, account_scoped: bool
+) -> UsageResult:
+    """Map Muse 1.4's allowance (verified live) to independent windows.
+
+    ``{"tier", "window": {"usedPercent", "resetsAtMs"}, "weekly": {...}, "asOfMs", "source"}``.
+    Muse reports percentages only; no request/token denominator is invented.
+    """
+    scope = "account" if account_scoped else "active-credential"
+    windows = []
+    for field_name, key, label in _WINDOWS:
+        raw = allowance.get(field_name)
+        if not isinstance(raw, dict):
+            continue
+        pct = raw.get("usedPercent")
+        reset = raw.get("resetsAtMs")
+        pct_value = (
+            float(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
+        )
+        windows.append(
+            UsageWindow(
+                key=key,
+                label=label,
+                unit="percent",
+                used_percent=pct_value,
+                remaining=None if pct_value is None else max(0.0, 100.0 - pct_value),
+                resets_at=float(reset) / 1000
+                if isinstance(reset, (int, float)) and reset > 0
+                else None,
+                scope=scope,
+            )
+        )
+    known = {"tier", "window", "weekly", "asOfMs", "source"}
+    extra = {k: v for k, v in allowance.items() if k not in known}
+    as_of = allowance.get("asOfMs")
+    observed = float(as_of) / 1000 if isinstance(as_of, (int, float)) and as_of > 0 else time.time()
+    observations: tuple[UsageObservation, ...] = ()
+    if extra:  # keep anything a newer Muse adds, unmodified, instead of dropping it
+        observations = (
+            UsageObservation(
+                UsageKind.SUBSCRIPTION_ALLOWANCE,
+                "muse usage --json",
+                True,
+                scope=scope,
+                data=_scalars(extra),
+                fetched_at=observed,
+            ),
+        )
+    tier = allowance.get("tier")
+    if not windows and not observations:
+        return UsageResult(
+            UsageState.UNAVAILABLE,
+            "Muse returned an allowance without usage windows",
+            source="muse usage --json",
+            attributed_to=attributed_to,
+        )
+    return UsageResult(
+        UsageState.AVAILABLE,
+        windows=tuple(windows),
+        observations=observations,
+        plan=redact(tier)[:80] if isinstance(tier, str) else None,
+        source="muse usage --json",
+        authoritative=True,
+        attributed_to=attributed_to,
+        observed_at=observed,
+    )
 
 
 class MuseAdapter(ToolAdapter):
@@ -105,9 +177,10 @@ class MuseAdapter(ToolAdapter):
                 "credential). Browser sessions: not switchable; `muse login` only",
             ),
             Capability.USAGE: cap(
-                S.CONDITIONAL,
-                "`muse usage --json` (subscription allowance, no model turn); "
-                "empty for pay-as-you-go keys; payload schema unverified",
+                S.SUPPORTED,
+                "`muse usage --json` (no model turn): tier, 5-hour and weekly used % with reset "
+                "times. Per account for API-key accounts (META_API_KEY child env); browser "
+                "logins: the active credential only. Pay-as-you-go keys report no allowance",
             ),
             Capability.RATE_LIMIT_DETECTION: cap(S.UNSUPPORTED, "no stable muse interface"),
             Capability.AUTO_SWITCH: cap(
@@ -243,48 +316,69 @@ class MuseAdapter(ToolAdapter):
     # ---- usage -----------------------------------------------------------
 
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
+        """``muse usage --json``: subscription windows without a model turn.
+
+        API-key accounts are measured in isolation (``META_API_KEY`` for that child
+        only, the documented top precedence).  Browser aliases cannot be: Muse keeps
+        one login (in the macOS Keychain, so not even ``HOME`` isolates it), so their
+        usage is the *active credential's*, reported at tool level only.
+        """
         info = self.require_installed()
         if record is not None and record.kind != "api-key":
             return UsageResult(
-                UsageState.UNSUPPORTED,
-                "Muse usage cannot be attributed to a browser alias: it is read from whichever "
-                "credential Muse is using now",
-                hint="Run `ccswap muse usage` without an alias for the active credential",
+                UsageState.UNAVAILABLE,
+                "Muse keeps one browser login and does not say whose it is, so usage cannot "
+                "be attributed to this alias",
+                hint="The tool-level usage shows the active credential",
             )
         env = {ENV_KEY: secret} if secret else None
-        result = self.runner.run([info.exe, "usage", "--json"], timeout=20, env=env)
+        # An exported META_API_KEY would otherwise silently answer for every lookup.
+        unset: tuple[str, ...] = ()
+        result = self.runner.run(
+            [info.exe, "usage", "--json"], timeout=20, env=env, unset_env=unset
+        )
         secrets = [secret] if secret else []
-        if not result.ok:
-            return UsageResult(
-                UsageState.UNAVAILABLE, f"muse usage failed: {short_detail(result, secrets)}"
+        who = (
+            record.alias
+            if record is not None
+            else (
+                "META_API_KEY from the environment"
+                if os.environ.get(ENV_KEY)
+                else "active credential"
             )
+        )
+        text = f"{result.stdout}\n{result.stderr}".lower()
+        if "not logged in" in text:
+            return UsageResult(
+                UsageState.UNAUTHENTICATED,
+                "Muse has no login (run `muse login` or register an API key)",
+                source="muse usage --json",
+            )
+        if not result.ok:
+            state = UsageState.ERROR if not result.timed_out else UsageState.UNAVAILABLE
+            return UsageResult(state, f"muse usage failed: {short_detail(result, secrets)}")
         try:
             doc = json.loads(result.stdout)
         except ValueError:
-            return UsageResult(UsageState.UNAVAILABLE, "muse usage returned malformed JSON")
+            return UsageResult(UsageState.ERROR, "muse usage returned malformed JSON")
         if not isinstance(doc, dict):
-            return UsageResult(UsageState.UNAVAILABLE, "muse usage returned an unexpected payload")
+            return UsageResult(UsageState.ERROR, "muse usage returned an unexpected payload")
         allowance = doc.get("allowance")
         if not isinstance(allowance, dict):
+            reason = str(doc.get("reason") or "")
+            message = {
+                "api_key": "This is a pay-as-you-go API key; it has no subscription allowance",
+                "server_sent_no_usage": "The connected account returned no allowance data "
+                "(this happens before the first use in a new window)",
+            }.get(reason, redact(reason or "no allowance reported", secrets)[:120])
             return UsageResult(
                 UsageState.UNAVAILABLE,
-                redact(str(doc.get("reason") or "no allowance reported"))[:120],
+                message,
                 hint=redact(str(doc.get("hint") or ""), secrets)[:240],
+                source="muse usage --json",
+                attributed_to=who,
             )
-        return UsageResult(
-            UsageState.AVAILABLE,
-            observations=(
-                UsageObservation(
-                    UsageKind.SUBSCRIPTION_ALLOWANCE,
-                    "muse usage --json",
-                    True,
-                    scope="account" if record is not None else "active-credential",
-                    data=_scalars(allowance),
-                    fetched_at=time.time(),
-                ),
-            ),
-            hint="Vendor payload shown as reported; ccswap does not derive percentages from it",
-        )
+        return parse_allowance(allowance, attributed_to=who, account_scoped=record is not None)
 
     # ---- sessions --------------------------------------------------------
 

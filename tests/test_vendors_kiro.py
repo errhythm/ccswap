@@ -254,11 +254,12 @@ def test_launch_spec_login_requires_active_and_ignores_stray_env_key():
         KiroAdapter(make(OTHER)[0]).launch_spec(login_rec(), None, [])
 
 
-def test_usage_is_unsupported_and_never_scrapes():
+def test_usage_without_v2_harness_is_never_sent_to_the_model(tmp_path):
     runner, _ = make()
-    result = KiroAdapter(runner).usage(None, None)
-    assert result.state is UsageState.UNSUPPORTED and result.observations == ()
-    assert not any(c.argv[1:2] == ("chat",) for c in runner.calls)
+    runner.on(KIRO, "chat", "--help", result=ok("--no-interactive  --v3"))
+    result = KiroAdapter(runner, probe_dir=tmp_path).usage(None, None)
+    assert result.state is UsageState.UNSUPPORTED
+    assert not any("/usage" in c.argv for c in runner.calls)
 
 
 def test_capability_table_marks_auto_switch_unsupported():
