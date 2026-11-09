@@ -137,7 +137,12 @@ def _parser(tool: str) -> argparse.ArgumentParser:
             add.add_argument(
                 "--browser",
                 action="store_true",
-                help="Register the current browser login (alias only)",
+                help="Register the current browser login (ccswap keeps it so it can switch back)",
+            )
+            add.add_argument(
+                "--from-file",
+                metavar="PATH",
+                help="With --browser: a saved Muse login file instead",
             )
         else:
             add.add_argument(
@@ -276,7 +281,10 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
         if tool == "opencode":
             options = {"provider": args.provider, "account": args.account}
         elif tool == "muse":
-            options = {"kind": "browser" if args.browser else "api-key"}
+            options = {
+                "kind": "browser" if args.browser else "api-key",
+                "from_file": args.from_file,
+            }
         else:
             options = {
                 "kind": "api-key" if args.api_key else "login",

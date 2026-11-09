@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
 from claude_swap.vendors.core import (
-    AccountRecord,
     AccountView,
     UsageResult,
     UsageState,
@@ -54,12 +51,16 @@ def labels(section):
     return [r.label for r in section.rows if r is not None]
 
 
-def test_only_inactive_known_opencode_accounts_are_switchable():
+def test_which_accounts_a_click_can_switch():
     assert switchable("opencode", False, "anthropic")
     assert not switchable("opencode", True, "anthropic")
     assert not switchable("opencode", None, "anthropic")
-    assert not switchable("muse", False, None)
-    assert not switchable("kiro", False, "x")
+    assert switchable("muse", False, None, "browser")
+    assert switchable("muse", None, None, "api-key")
+    assert switchable("kiro", False, None, "login")
+    assert not switchable("kiro", False, None, "api-key")  # process-scoped: `kiro run`
+    assert not switchable("muse", True, None, "browser")  # already active
+    assert not switchable("kiro", False, None, "login", registered=False)
 
 
 def test_kiro_section_title_and_rows_carry_real_numbers_and_reset():
@@ -148,15 +149,6 @@ def test_account_rows_keep_each_accounts_own_usage_and_switchability():
     ]
 
 
-def test_muse_and_kiro_account_rows_are_never_clickable_switches():
-    for tool in ("muse", "kiro"):
-        view = AccountView(tool, "b", "login", active=False)
-        summary = ToolSummary(tool, tool, installed=True, accounts=[(view, credits())])
-        rows = [r for r in section_for(summary, None, NOW).rows if r and "b ·" in r.label]
-        assert rows and all(r.action is None for r in rows)
-        assert "switch in terminal" in rows[0].label
-
-
 def test_loading_section_is_explicit():
     assert loading_section("kiro").title == "Kiro CLI · loading…"
 
@@ -177,17 +169,57 @@ def test_collect_sections_isolates_a_broken_tool(tmp_path):
     assert any("malformed" in label for label in labels(sections["opencode"]))
 
 
-def test_registered_muse_rows_say_switch_in_terminal(tmp_path):
-    r = FakeRunner({"muse": "/b/muse"})
-    r.on("/b/muse", "--version", result=ok("Muse Code 1.4.14"))
-    r.on(
-        "/b/muse",
-        "usage",
-        "--json",
-        result=ok(json.dumps({"allowance": None, "reason": "api_key"})),
+def test_top_level_account_rows_look_like_claude_codes():
+    arn = "arn:aws:codewhisperer:us-east-1:151869951925:profile/QXHDHVXUCRC4"
+    accounts = [
+        (
+            AccountView("kiro", "kiro-a", "login", identity={"email": "a@c.com"}, active=True),
+            credits(),
+        ),
+        (
+            AccountView(
+                "kiro",
+                "kiro-b",
+                "login",
+                identity={"email": "a@c.com", "profileArn": arn},
+                active=False,
+            ),
+            credits(used=10000.0, limit=10000.0, state=UsageState.STALE),
+        ),
+        (
+            AccountView("kiro", "ci", "api-key", active=None),
+            UsageResult(UsageState.UNAVAILABLE, "x"),
+        ),
+    ]
+    section = section_for(
+        ToolSummary("kiro", "Kiro CLI", installed=True, accounts=accounts), None, NOW
     )
-    svc = VendorService(ToolRegistry.default(r), VendorStore(tmp_path / "v"))
-    svc.store.add(AccountRecord("muse", "work", "api-key"), "key-aaaaaaaa")
-    section = collect_sections(Overview(svc, legacy=[]), ("muse",), now=NOW)["muse"]
-    row = next(r for r in section.rows if r and "work" in r.label)
-    assert row.action is None and "pay-as-you-go" not in section.title
+    rows = section.accounts
+    assert [r.label.split("  ")[0] for r in rows] == ["1", "2", "3"]
+    assert rows[0].checked and rows[0].action is None  # active: the check mark, no action
+    assert rows[1].action == "switch" and rows[1].selector == "kiro-b" and not rows[1].raw
+    assert (
+        "[AWS 151869951925]" in rows[1].label and "stale · credits 10,000/10,000" in rows[1].label
+    )
+    assert rows[2].action is None  # an API key is run, not switched
+
+
+def test_unregistered_opencode_rows_switch_by_vendor_id():
+    accounts = [
+        (
+            AccountView(
+                "opencode",
+                "anthropic/alt",
+                "oauth",
+                "anthropic",
+                {"account": "alt", "id": "c2"},
+                registered=False,
+                active=False,
+            ),
+            UsageResult(UsageState.UNAVAILABLE, "x"),
+        )
+    ]
+    (row,) = section_for(
+        ToolSummary("opencode", "OpenCode", installed=True, accounts=accounts), None, NOW
+    ).accounts
+    assert (row.action, row.selector, row.provider, row.raw) == ("switch", "c2", "anthropic", True)

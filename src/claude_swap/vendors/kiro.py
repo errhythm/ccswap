@@ -159,6 +159,7 @@ def _hint_args(hint: Mapping[str, str]) -> list[str]:
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+_ARN_IN_TEXT = re.compile(r"arn:aws:codewhisperer:[a-z0-9-]+:\d{12}:profile/[A-Za-z0-9]+")
 _NUM = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
 
 
@@ -276,6 +277,89 @@ def parse_usage_report(text: str, today: datetime.date | None = None) -> UsageRe
     )
 
 
+def pick_profile_in_pty(exe: str, arn: str, timeout: float = 60.0) -> bool | str:
+    """Select ``arn`` in ``kiro-cli profile`` (Kiro's own picker) without a terminal.
+
+    The picker lists ``<name> (arn: <arn>)`` rows with the cursor on the ``(active)`` one
+    (verified on 3.1.0); this moves the cursor to the target row and presses Enter, the same
+    keys a person would.  Returns True, or a short reason.  The caller verifies the result
+    with ``whoami`` either way.  POSIX only.
+    """
+    if os.name == "nt":
+        return "not available on Windows; run `kiro-cli profile`"
+    import pty
+    import select
+
+    pid, fd = pty.fork()
+    if pid == 0:  # child: Kiro's picker in its own terminal
+        try:
+            os.environ.setdefault("TERM", "xterm-256color")
+            os.execv(exe, [exe, "profile"])
+        finally:
+            os._exit(127)
+    buffer = b""
+    acted = False
+    exited = False
+    started = time.monotonic()
+    try:
+        while time.monotonic() - started < timeout:
+            ready, _, _ = select.select([fd], [], [], 0.3)
+            if fd in ready:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                buffer += chunk
+            done, _status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                exited = True
+                break
+            if acted:
+                continue
+            text = _ANSI.sub("", buffer.decode("utf-8", "replace")).replace("\r", "\n")
+            if "Select an IAM Identity Center profile" not in text:
+                continue
+            rows = [
+                line
+                for line in text.split("Select an IAM Identity Center profile")[-1].splitlines()
+                if "arn:aws:codewhisperer" in line
+            ]
+            arns = []
+            for line in rows:
+                found = _ARN_IN_TEXT.search(line)
+                if found:
+                    arns.append(found.group(0))
+            active = [i for i, line in enumerate(rows) if "(active)" in line]
+            if not active:
+                continue
+            if arn not in arns:
+                os.write(fd, b"\x1b")
+                return "that profile is not offered by Kiro for this login"
+            time.sleep(0.4)  # let the list finish rendering
+            step = arns.index(arn) - active[0]
+            if step:
+                os.write(fd, (b"\x1b[B" if step > 0 else b"\x1b[A") * abs(step))
+                time.sleep(0.3)
+            os.write(fd, b"\r")
+            acted = True
+        else:
+            return "Kiro's profile picker timed out"
+    finally:
+        if not exited:
+            try:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    return True if acted else "Kiro's profile picker closed before a profile could be chosen"
+
+
 class KiroAdapter(ToolAdapter):
     key = "kiro"
     label = "Kiro CLI"
@@ -283,9 +367,10 @@ class KiroAdapter(ToolAdapter):
     docs = "https://kiro.dev/docs/cli/"
     kinds = ("login", "api-key")
 
-    def __init__(self, runner=None, probe_dir=None) -> None:
+    def __init__(self, runner=None, probe_dir=None, profile_picker=None) -> None:
         super().__init__(runner)
         self.probe_dir = probe_dir
+        self.profile_picker = profile_picker or pick_profile_in_pty
         self._v2: bool | None = None
 
     def capabilities(self, info: ToolInfo) -> dict[Capability, CapabilityStatus]:
@@ -668,13 +753,14 @@ class KiroAdapter(ToolAdapter):
         """Same login, other profile: Kiro's own picker (`kiro-cli profile`), no logout."""
         arn = record.identity.get("profileArn", "")
         target = f"{record.identity.get('profileName', 'profile')} in AWS account {profile_account_id(arn)}"
-        if not interactive:
-            raise UnsupportedCapability(
-                f"Choosing a Kiro profile needs Kiro's interactive picker. Re-run with --login and "
-                f"pick {target}"
-            )
-        print(f"Kiro's profile picker opens next: choose {target}.")
-        self.runner.run_interactive([exe, "profile"])
+        if interactive:
+            print(f"Kiro's profile picker opens next: choose {target}.")
+            self.runner.run_interactive([exe, "profile"])
+        else:
+            # Kiro's own picker, driven in a pseudo-terminal: select the row with this ARN.
+            picked = self.profile_picker(exe, arn)
+            if picked is not True:
+                raise VendorError(f"Kiro's profile picker did not take the choice: {picked}")
         state, after = self.whoami_state()
         if state != "in" or not after:
             raise VendorError(

@@ -56,7 +56,7 @@ def test_capabilities_are_honest(adapter):
     by = {c.value: s.support.value for c, s in caps.items()}
     assert by["account-enumeration"] == "unsupported"
     assert by["auto-switch"] == "unsupported"
-    assert by["switch"] == "conditional" and by["usage"] == "supported"
+    assert by["switch"] == "supported" and by["usage"] == "supported"
 
 
 def test_register_api_key_validates(adapter):
@@ -65,11 +65,6 @@ def test_register_api_key_validates(adapter):
     for bad in ("", "short", "has space inside1"):
         with pytest.raises(VendorError):
             adapter.register("w", kind="api-key", api_key=bad)
-
-
-def test_register_browser_has_no_secret(adapter):
-    record, secret = adapter.register("me", kind="browser")
-    assert secret is None and record.kind == "browser"
 
 
 def test_switch_api_key_sends_secret_on_stdin_only(adapter, runner):
@@ -100,29 +95,6 @@ def test_switch_warns_when_env_key_overrides(adapter, runner, monkeypatch):
     runner.on(MUSE, "auth", "set", result=ok())
     outcome = adapter.switch(api_record(), KEY, assume_yes=True, interactive=False)
     assert any("META_API_KEY" in w for w in outcome.warnings)
-
-
-def test_browser_switch_is_unsupported_non_interactively(adapter):
-    with pytest.raises(UnsupportedCapability, match="muse login"):
-        adapter.switch(
-            AccountRecord("muse", "b", "browser"), None, assume_yes=True, interactive=False
-        )
-
-
-def test_browser_switch_interactive_runs_login_and_admits_no_verification(adapter, runner):
-    runner.on_interactive(MUSE, "login", code=0)
-    outcome = adapter.switch(
-        AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True
-    )
-    assert outcome.verified is False and "cannot verify" in outcome.message
-
-
-def test_browser_login_failure_propagates(adapter, runner):
-    runner.on_interactive(MUSE, "login", code=1)
-    with pytest.raises(VendorError, match="status 1"):
-        adapter.switch(
-            AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True
-        )
 
 
 def test_usage_null_allowance_is_unavailable_not_zero(adapter, runner):
@@ -240,17 +212,6 @@ def test_unselected_usage_is_labelled_as_the_active_credential(adapter, runner):
     assert obs.scope == "active-credential"
 
 
-def test_browser_login_does_not_become_the_recorded_active_account(adapter, runner):
-    runner.on_interactive(MUSE, "login", code=0)
-    outcome = adapter.switch(
-        AccountRecord("muse", "b", "browser"), None, assume_yes=False, interactive=True
-    )
-    assert outcome.activates is False
-
-
-# ---- Browser logins identified by the email Muse records for them --------------------
-
-
 def write_login(tmp_path, monkeypatch, email):
     cfg = tmp_path / "cfg"
     (cfg / "muse").mkdir(parents=True, exist_ok=True)
@@ -335,3 +296,100 @@ def test_login_change_during_the_muse_probe_is_not_recorded(tmp_path, monkeypatc
     runner.on(MUSE, "usage", "--json", result=swap_during_probe)
     result = adapter.usage(None, None)
     assert result.state is UsageState.UNAVAILABLE and "changed during" in result.reason
+
+
+# ---- Switching browser logins inside ccswap (login custody) --------------------------
+
+
+def test_register_browser_keeps_the_login_for_switching(adapter, tmp_path, monkeypatch):
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    record, secret = adapter.register("jay", kind="browser")
+    assert record.identity == {"email": "j@x.com"} and "SECRET-TOKEN" in secret
+    assert "SECRET-TOKEN" not in json.dumps(record.to_json())  # metadata never holds it
+
+
+def test_register_browser_from_a_saved_login_file(adapter, tmp_path, monkeypatch):
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    saved = tmp_path / "other.json"
+    saved.write_text(
+        json.dumps({"providers": {"meta": {"access_token": "t2", "user_email": "m@x.com"}}})
+    )
+    record, secret = adapter.register("mis", kind="browser", from_file=str(saved))
+    assert record.identity == {"email": "m@x.com"} and '"t2"' in secret
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}")
+    with pytest.raises(VendorError, match="not a Muse login"):
+        adapter.register("x", kind="browser", from_file=str(bad))
+
+
+def muse_switch_world(tmp_path, monkeypatch, runner):
+    from claude_swap.vendors.registry import ToolRegistry
+    from claude_swap.vendors.service import VendorService
+    from claude_swap.vendors.store import VendorStore
+
+    runner.on(
+        MUSE, "usage", "--json", result=ok('{"allowance": null, "reason": "server_sent_no_usage"}')
+    )
+    svc = VendorService(ToolRegistry.default(runner), VendorStore(tmp_path / "v"))
+    a = svc.adapter("muse")
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    svc.add("muse", "jay", kind="browser")
+    write_login(tmp_path, monkeypatch, "m@x.com")
+    svc.add("muse", "mis", kind="browser")
+    return svc, a
+
+
+def live_doc(tmp_path):
+    return json.loads((tmp_path / "cfg" / "muse" / "auth.json").read_text())["providers"]["meta"]
+
+
+def test_browser_switch_swaps_the_login_and_verifies(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    outcome, _ = svc.switch("muse", "jay")
+    assert outcome.verified and live_doc(tmp_path)["user_email"] == "j@x.com"
+    import stat
+
+    mode = stat.S_IMODE((tmp_path / "cfg" / "muse" / "auth.json").stat().st_mode)
+    assert mode == 0o600
+    assert {v.alias: v.active for v in svc.list_views("muse")} == {"jay": True, "mis": False}
+    assert svc.switch("muse", "jay")[0].message.endswith("already the signed-in Muse login")
+
+
+def test_outgoing_login_is_saved_back_before_switching(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    # Muse refreshed mis's token in place since it was registered
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    doc = json.loads(path.read_text())
+    doc["providers"]["meta"]["access_token"] = "REFRESHED"
+    path.write_text(json.dumps(doc))
+    svc.switch("muse", "jay")
+    svc.switch("muse", "mis")
+    assert live_doc(tmp_path)["access_token"] == "REFRESHED"
+
+
+def test_unregistered_live_login_is_never_overwritten(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    write_login(tmp_path, monkeypatch, "stranger@x.com")
+    with pytest.raises(VendorError, match="not registered"):
+        svc.switch("muse", "jay")
+    assert live_doc(tmp_path)["user_email"] == "stranger@x.com"
+
+
+def test_rejected_login_is_rolled_back(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    runner.on(MUSE, "usage", "--json", result=fail("muse usage: not logged in"))
+    with pytest.raises(VendorError, match="previous login was restored"):
+        svc.switch("muse", "jay")
+    assert live_doc(tmp_path)["user_email"] == "m@x.com"
+
+
+def test_symlinked_login_file_is_refused(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    target = tmp_path / "elsewhere.json"
+    target.write_text(path.read_text())
+    path.unlink()
+    path.symlink_to(target)
+    with pytest.raises(VendorError):
+        svc.switch("muse", "jay")
+    assert json.loads(target.read_text())["providers"]["meta"]["user_email"] == "m@x.com"

@@ -243,6 +243,7 @@ class VendorService:
         if not lock.acquire():
             raise VendorError(f"Another {adapter.label} switch is already running")
         try:
+            self._save_back(adapter, tool, records)
             if record is None:
                 outcome = adapter.switch_account(provider, selector)  # type: ignore[attr-defined]
             else:
@@ -325,6 +326,21 @@ class VendorService:
             return result
         finally:
             lock.release()
+
+    def _save_back(self, adapter: ToolAdapter, tool: str, records: list[AccountRecord]) -> None:
+        """Before a switch, store the live login under its registered account (tools that
+        refresh tokens in place, like Muse, would otherwise leave ccswap a stale copy)."""
+        capture = getattr(adapter, "capture_live", None)
+        matcher = getattr(adapter, "owner_of", None)
+        if capture is None or matcher is None:
+            return
+        live = capture()
+        if live is None:
+            return
+        identity, secret = live
+        owners = [r for r in records if r.secret_ref and matcher(r, identity)]
+        if len(owners) == 1:
+            self.store.replace_secret(owners[0], secret)
 
     def _settle(
         self, adapter: ToolAdapter, tool: str, account_key: str, fresh: UsageResult

@@ -7,7 +7,7 @@ import json
 import pytest
 from textual.widgets import ListView, Static
 
-from claude_swap.tui.modals import ConfirmModal, OutputModal
+from claude_swap.tui.modals import ConfirmModal
 from claude_swap.tui.tools import AccountRow, OverviewRow, OverviewScreen, ToolScreen, strip_text
 from claude_swap.vendors.core import AccountRecord
 from claude_swap.vendors.registry import ToolRegistry
@@ -268,7 +268,7 @@ async def test_muse_switch_needs_confirmation_and_never_shows_the_key(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_kiro_login_switch_is_explained_never_run_from_the_tui(tmp_path):
+async def test_kiro_switch_to_another_login_reports_what_it_needs_without_running_logout(tmp_path):
     svc, runner = world(tmp_path)
     svc.store.add(AccountRecord("kiro", "a", "login", identity=IDC))
     svc.store.add(AccountRecord("kiro", "b", "login", identity=OTHER))
@@ -277,10 +277,43 @@ async def test_kiro_login_switch_is_explained_never_run_from_the_tui(tmp_path):
         await goto(pilot, "4")
         app.screen.query_one("#taccounts", ListView).index = 1
         await pilot.pause()
-        await pilot.press("s")
+        await goto(pilot, "s")
+        assert not any(c.interactive for c in runner.calls)  # never logout/login from the TUI
+        assert "--login" in text_of(app.screen, "#tool-detail")
+
+
+@pytest.mark.asyncio
+async def test_muse_browser_accounts_switch_inside_ccswap(tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg" / "muse"
+    cfg.mkdir(parents=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+
+    def login(email):
+        (cfg / "auth.json").write_text(
+            json.dumps({"providers": {"meta": {"access_token": "t-" + email, "user_email": email}}})
+        )
+
+    svc, _ = world(tmp_path)
+    login("j@x.com")
+    svc.add("muse", "jay", kind="browser")
+    login("m@x.com")
+    svc.add("muse", "mis", kind="browser")
+    app = app_with(tmp_path, svc)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await goto(pilot, "3")
+        rows = {r.view.alias: r for r in app.screen.query(AccountRow)}
+        assert rows["mis"].view.active is True and rows["jay"].view.active is False
+        app.screen.query_one("#taccounts", ListView).index = list(rows).index("jay")
         await pilot.pause()
-        assert isinstance(app.screen, OutputModal)
-        assert not any(c.interactive for c in runner.calls)
+        await goto(pilot, "s")
+        assert (
+            json.loads((cfg / "auth.json").read_text())["providers"]["meta"]["user_email"]
+            == "j@x.com"
+        )
+        assert {r.view.alias: r.view.active for r in app.screen.query(AccountRow)} == {
+            "jay": True,
+            "mis": False,
+        }
 
 
 @pytest.mark.asyncio

@@ -217,7 +217,7 @@ def test_missing_binary_is_actionable(tmp_path, capsys):
 
 def test_ambiguous_and_numeric_selectors(service, capsys, monkeypatch):
     run("muse", ["add", "Work", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch)
-    run("muse", ["add", "play", "--browser"], service, capsys)
+    run("muse", ["add", "play", "--api-key-stdin"], service, capsys, KEY + "x\n", monkeypatch)
     assert service.resolve("muse", "2").alias == "play"
     assert service.resolve("muse", "work").alias == "Work"
     assert service.resolve("muse", "1").alias == "Work"

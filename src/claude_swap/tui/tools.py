@@ -485,26 +485,29 @@ class ToolScreen(_ToolPage):
         elif tool == "muse" and view.kind == "api-key":
             self.app.push_screen(
                 ConfirmModal(
-                    "This replaces the credential stored by Muse (including a browser login). "
-                    "Running sessions keep the old one until restarted. Tip: `ccswap muse run "
-                    f"{view.alias}` changes nothing global.",
+                    "This stores the key as Muse's credential (replacing a browser login, which "
+                    "ccswap keeps if it is registered). Running sessions keep the old one until "
+                    f"restarted. Tip: `ccswap muse run {view.alias}` changes nothing global.",
                     title=f"Switch Muse to '{view.alias}'?",
                 ),
                 lambda ok: self._start_switch(view, assume_yes=True) if ok else None,
             )
+        elif (tool, view.kind) in (("muse", "browser"), ("kiro", "login")):
+            # ccswap swaps the Muse login it keeps; a Kiro profile goes through Kiro's own
+            # picker.  Both are verified; a different Kiro login reports what it needs.
+            self._start_switch(view, assume_yes=True)
+        elif (tool, view.kind) == ("kiro", "api-key"):
+            self.app.push_screen(
+                OutputModal(
+                    "Switch",
+                    "KIRO_API_KEY is process-scoped. Start a session as this account with "
+                    f"`ccswap kiro run {view.alias}`.",
+                )
+            )
         else:
-            explain = {
-                ("muse", "browser"): "Muse keeps one browser login and cannot switch between them. "
-                "Sign in again with `muse login`.",
-                ("kiro", "api-key"): "KIRO_API_KEY is process-scoped. Start a session as this "
-                f"account with `ccswap kiro run {view.alias}`.",
-                (
-                    "kiro",
-                    "login",
-                ): "Changing the Kiro login runs `kiro-cli logout` and an interactive "
-                f"`kiro-cli login`. From a terminal: ccswap kiro switch {view.alias} --login --yes",
-            }.get((tool, view.kind), "This tool does not support switching to this account.")
-            self.app.push_screen(OutputModal("Switch", explain))
+            self.app.push_screen(
+                OutputModal("Switch", "This tool does not support switching to this account.")
+            )
 
     def _start_switch(self, view: AccountView, *, assume_yes: bool) -> None:
         self._busy = True

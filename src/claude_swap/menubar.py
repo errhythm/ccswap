@@ -1071,9 +1071,9 @@ def run(switcher) -> int:
                 rumps.MenuItem("Switch to best", callback=self._switch("best")),
                 rumps.MenuItem("Next available", callback=self._switch("next-available")),
                 None,
-                self._codex_menu(rumps),
-                *(self._tool_menu(rumps, tool) for tool in ("muse", "kiro", "opencode")),
+                *self._codex_section(rumps),
                 None,
+                *self._tool_sections(rumps),
                 self._add_menu(rumps),
                 self._disable_menu(rumps),
                 self._remove_menu(rumps),
@@ -1084,6 +1084,57 @@ def run(switcher) -> int:
                 rumps.MenuItem("Refresh all now", callback=self.on_refresh_now),
                 rumps.MenuItem("Quit", callback=self.on_quit),
             ]
+
+        def _codex_section(self, rumps):
+            """Codex like Claude Code: a header, then one clickable row per account."""
+            header = rumps.MenuItem(
+                f"Codex · {self._codex_headline}" if self._codex_headline else "Codex", callback=None
+            )
+            rows = [header]
+            if self.codex_switcher is None:
+                rows.append(rumps.MenuItem("Codex unavailable", callback=None))
+                return rows
+            for num, email, is_active, display, _lg, alias, disabled, fetched_at in self.codex_snapshot["accounts"]:
+                item = rumps.MenuItem(
+                    format_account_label(num, email, display, alias=alias, disabled=disabled, fetched_at=fetched_at),
+                    callback=self._make_codex_switch_to(num),
+                )
+                item.state = 1 if is_active else 0
+                rows.append(item)
+            if len(rows) == 1:
+                rows.append(rumps.MenuItem("No managed Codex accounts", callback=None))
+            options = self._codex_menu(rumps)
+            options.title = "Codex options"
+            rows.append(options)
+            return rows
+
+        def _tool_sections(self, rumps):
+            """Muse, Kiro and OpenCode like Claude Code: header + one row per account."""
+            from claude_swap.vendors.menu import loading_section
+
+            items = []
+            for tool in ("muse", "kiro", "opencode"):
+                section = self.tool_sections.get(tool) or loading_section(tool)
+                items.append(rumps.MenuItem(section.title, callback=None))
+                seen = set()
+                for row in section.accounts:
+                    label = row.label
+                    while label in seen:
+                        label += "\u200b"
+                    seen.add(label)
+                    item = rumps.MenuItem(label, callback=self._tool_row_callback(row))
+                    item.state = 1 if row.checked else 0
+                    items.append(item)
+                if not section.accounts:
+                    items.append(rumps.MenuItem(
+                        "Loading…" if tool not in self.tool_sections else "No accounts registered",
+                        callback=None,
+                    ))
+                details = self._tool_menu(rumps, tool)
+                details.title = f"{section.title.split(' · ')[0]} details"
+                items.append(details)
+                items.append(None)
+            return items
 
         def _tool_menu(self, rumps, tool):
             """One submenu per tool, rendered verbatim from vendors/menu.py."""
@@ -1125,9 +1176,13 @@ def run(switcher) -> int:
         def _vendor_switch_work(self, row):
             try:
                 outcome, _ = self._vendor_service().switch(
-                    row.tool, row.selector, provider=row.provider, raw=True
+                    row.tool,
+                    row.selector,
+                    provider=row.provider,
+                    raw=row.raw,
+                    assume_yes=True,  # an explicit click, like switching a Claude account
                 )
-                rumps.notification("ccswap", f"{row.provider} account switched", outcome.message)
+                rumps.notification("ccswap", "Account switched", outcome.message)
             except ClaudeSwitchError as e:
                 rumps.notification("ccswap", "Switch failed", str(e))
             self._maybe_refresh_vendors(force_tools={row.tool})

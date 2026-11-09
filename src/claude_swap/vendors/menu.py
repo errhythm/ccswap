@@ -38,17 +38,37 @@ class MenuRow:
     provider: str | None = None
     url: str | None = None
     checked: bool = False
+    raw: bool = False  # selector is a vendor id (unregistered OpenCode account), not an alias
 
 
 @dataclass
 class MenuSection:
     tool: str
     title: str  # "Kiro CLI · credits 1,136/2,000 (56.8%)"
-    rows: list[MenuRow | None] = field(default_factory=list)  # None = separator
+    rows: list[MenuRow | None] = field(default_factory=list)  # details submenu; None = separator
+    # One row per account, shown at the top level like Claude Code's: "1  alias  usage".
+    accounts: list[MenuRow] = field(default_factory=list)
 
 
-def switchable(tool: str, active: bool | None, provider: str | None) -> bool:
-    return tool == "opencode" and active is False and bool(provider)
+def switchable(
+    tool: str, active: bool | None, provider: str | None, kind: str = "", registered: bool = True
+) -> bool:
+    """Can a click switch to this account without a terminal?
+
+    OpenCode: native ``auth switch``.  Muse: ccswap swaps the login it keeps (browser) or
+    stores the key (API key).  Kiro: another profile of the signed-in login, via Kiro's own
+    picker.  A different Kiro *login* still needs an interactive sign-in, and a Kiro API
+    key is process-scoped (``ccswap kiro run``).
+    """
+    if active is True:
+        return False
+    if tool == "opencode":
+        return active is False and bool(provider)
+    if tool == "muse":
+        return registered and kind in ("browser", "api-key")
+    if tool == "kiro":
+        return registered and kind == "login"
+    return False
 
 
 def _ago(ts: float | None, now: float) -> str:
@@ -141,6 +161,31 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
     rows.append(MenuRow("Accounts", tool))
     if not summary.accounts:
         rows.append(MenuRow(f"  No {label} accounts registered", tool))
+    for number, (view, usage) in enumerate(summary.accounts, 1):
+        can = switchable(tool, view.active, view.provider, view.kind, view.registered)
+        selector = (
+            (view.identity.get("id") or view.identity.get("account"))
+            if tool == "opencode"
+            else view.alias
+        )
+        email = view.identity.get("email", "")
+        label = f"{number}  {view.alias}"
+        if email and email != view.alias:
+            label += f"  {email}"
+        if view.identity.get("profileArn"):
+            label += f"  [AWS {view.identity['profileArn'].split(':')[4]}]"
+        label += f"  {usage_headline(usage)}"
+        section.accounts.append(
+            MenuRow(
+                label[:140],
+                tool,
+                action="switch" if can else None,
+                selector=selector if can else None,
+                provider=view.provider,
+                checked=bool(view.active),
+                raw=tool == "opencode" and not view.registered,
+            )
+        )
     for view, usage in summary.accounts:
         mark = {True: "●", False: "○", None: "?"}[view.active]
         where = (
@@ -148,16 +193,22 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
             if view.provider and not view.alias.startswith(f"{view.provider}/")
             else ""
         )
-        ok = switchable(tool, view.active, view.provider)
+        ok = switchable(tool, view.active, view.provider, view.kind, view.registered)
         hint = "" if ok or view.active else ("  — switch in terminal" if tool != "opencode" else "")
         text = f"  {mark} {where}{view.alias} · {usage_headline(usage)}{hint}"
-        selector = (view.identity.get("id") or view.identity.get("account")) if ok else None
+        if not ok:
+            selector = None
+        elif tool == "opencode":
+            selector = view.identity.get("id") or view.identity.get("account")
+        else:
+            selector = view.alias
         rows.append(
             MenuRow(
                 text[:110],
                 tool,
                 action="switch" if ok else None,
                 selector=selector,
+                raw=tool == "opencode" and not view.registered,
                 provider=view.provider,
                 checked=bool(view.active),
             )

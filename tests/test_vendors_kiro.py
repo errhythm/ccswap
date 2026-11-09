@@ -394,15 +394,6 @@ def test_profile_switch_to_the_wrong_profile_is_reported():
         adapter.switch(b, None, assume_yes=False, interactive=True, context=[b])
 
 
-def test_profile_switch_non_interactive_explains_the_picker():
-    r, _ = profile_world(ARN_A)
-    adapter = KiroAdapter(r)
-    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
-    with pytest.raises(UnsupportedCapability, match="151869951925"):
-        adapter.switch(b, None, assume_yes=False, interactive=False, context=[b])
-    assert not any(c.interactive for c in r.calls)
-
-
 def test_profile_usage_is_filed_under_the_active_profile_only(tmp_path):
     from claude_swap.vendors.registry import ToolRegistry
     from claude_swap.vendors.service import VendorService
@@ -430,3 +421,37 @@ def test_profile_usage_is_filed_under_the_active_profile_only(tmp_path):
     assert svc.usage("kiro").attributed_to == "acct-a"
     assert svc.usage("kiro", "acct-a").windows[0].used == 100.0
     assert svc.usage("kiro", "acct-b").windows == ()  # not the active profile
+
+
+def test_profile_switch_without_a_terminal_uses_kiros_picker_and_verifies():
+    r, state = profile_world(ARN_A)
+    picked = []
+
+    def picker(exe, arn):
+        picked.append(arn)
+        state["arn"] = arn
+        return True
+
+    adapter = KiroAdapter(r, profile_picker=picker)
+    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    outcome = adapter.switch(b, None, assume_yes=False, interactive=False, context=[b])
+    assert picked == [ARN_B] and outcome.verified
+    assert not any(c.interactive for c in r.calls)  # no terminal, no logout
+
+
+def test_picker_refusal_is_reported():
+    r, _ = profile_world(ARN_A)
+    adapter = KiroAdapter(r, profile_picker=lambda exe, arn: "that profile is not offered")
+    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    with pytest.raises(VendorError, match="not offered"):
+        adapter.switch(b, None, assume_yes=False, interactive=False, context=[b])
+
+
+def test_picker_that_lands_elsewhere_is_not_success():
+    r, _ = profile_world(ARN_A)
+    adapter = KiroAdapter(
+        r, profile_picker=lambda exe, arn: True
+    )  # claims success, nothing changed
+    b, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    with pytest.raises(VendorError, match="276673691073"):
+        adapter.switch(b, None, assume_yes=False, interactive=False, context=[b])

@@ -28,6 +28,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from claude_swap.fsutil import atomic_write_text
 from claude_swap.vendors.core import (
     AccountRecord,
     AccountView,
@@ -75,6 +76,16 @@ def _scalars(value: Any, depth: int = 0, secrets: Sequence[str] = ()) -> Any:
 
 
 _WINDOWS = (("window", "five-hour", "5-hour window"), ("weekly", "weekly", "Weekly"))
+
+
+def _login_email(text: str) -> str | None:
+    """``providers.meta.user_email`` of a Muse login file's contents (nothing else is read)."""
+    try:
+        meta = (json.loads(text).get("providers") or {}).get("meta")
+    except (ValueError, AttributeError):
+        return None
+    email = meta.get("user_email") if isinstance(meta, dict) else None
+    return email if isinstance(email, str) and "@" in email and len(email) < 255 else None
 
 
 def parse_allowance(
@@ -177,9 +188,11 @@ class MuseAdapter(ToolAdapter):
                 "browser sessions register as an alias only (no token copied)",
             ),
             Capability.SWITCH: cap(
-                S.CONDITIONAL,
-                "API-key accounts: `muse auth set --api-key-stdin` (replaces the stored "
-                "credential). Browser sessions: not switchable; `muse login` only",
+                S.SUPPORTED,
+                "Browser logins: ccswap keeps each login (0600) and swaps Muse's auth.json, "
+                "saving the live login back first; verified by its recorded email and a "
+                "`muse usage` check, rolled back on failure. API-key accounts: `muse auth set "
+                "--api-key-stdin`",
             ),
             Capability.USAGE: cap(
                 S.SUPPORTED,
@@ -225,11 +238,9 @@ class MuseAdapter(ToolAdapter):
         try:
             if path.is_symlink() or not path.is_file():
                 return None
-            meta = (json.loads(path.read_text(encoding="utf-8")).get("providers") or {}).get("meta")
-            email = meta.get("user_email") if isinstance(meta, dict) else None
-        except (OSError, ValueError, AttributeError):
+            return _login_email(path.read_text(encoding="utf-8"))
+        except OSError:
             return None
-        return email if isinstance(email, str) and "@" in email and len(email) < 255 else None
 
     def auth_summary(self) -> dict:
         return {
@@ -283,20 +294,123 @@ class MuseAdapter(ToolAdapter):
 
     # ---- registration ----------------------------------------------------
 
-    def register(self, alias: str, *, kind: str = "api-key", api_key: str | None = None, **_: Any):
+    def register(
+        self,
+        alias: str,
+        *,
+        kind: str = "api-key",
+        api_key: str | None = None,
+        from_file: str | None = None,
+        **_: Any,
+    ):
         if kind == "api-key":
             key = (api_key or "").strip()
             if len(key) < _SECRET_MIN or any(c.isspace() for c in key):
                 raise VendorError("A valid Meta API key is required")
             return AccountRecord(self.key, alias, "api-key", created_at=time.time()), key
         if kind == "browser":
-            # The current browser login: identified by the email Muse recorded for it.
-            email = self.live_email()
-            identity = {"email": email} if email else {}
+            # ccswap keeps the login itself (0600 store) so it can switch to it later, the way
+            # it keeps Claude Code logins.  Default: the live login; or a saved login file.
+            text = self._read_login(
+                Path(from_file).expanduser() if from_file else self._auth_path()
+            )
+            email = _login_email(text)
+            if email is None:
+                raise VendorError("That is not a Muse login file (no providers.meta.user_email)")
             return AccountRecord(
-                self.key, alias, "browser", identity=identity, created_at=time.time()
-            ), None
+                self.key, alias, "browser", identity={"email": email}, created_at=time.time()
+            ), text
         raise VendorError("Muse account kind must be 'api-key' or 'browser'")
+
+    # ---- login custody (browser accounts) ------------------------------
+
+    @staticmethod
+    def _auth_path() -> Path:
+        return _config_dir() / "auth.json"
+
+    @staticmethod
+    def _read_login(path: Path) -> str:
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise OSError
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            raise VendorError(f"Cannot read the Muse login file {path}") from None
+        if _login_email(text) is None:
+            raise VendorError(f"{path} is not a Muse login file")
+        return text
+
+    def capture_live(self) -> tuple[dict[str, str], str] | None:
+        """The live login (identity, file contents) so the service can save it back to its
+        account before a switch: Muse refreshes tokens in place, and a stale copy would be
+        rejected later."""
+        try:
+            text = self._read_login(self._auth_path())
+        except VendorError:
+            return None
+        email = _login_email(text)
+        return ({"email": email}, text) if email else None
+
+    def _write_login(self, text: str) -> None:
+        path = self._auth_path()
+        if path.is_symlink():
+            raise VendorError("Muse's login file is a symbolic link; refusing to replace it")
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        atomic_write_text(path, text, mode=0o600, follow_symlinks=False)
+
+    def _switch_browser(
+        self,
+        exe: str,
+        record: AccountRecord,
+        secret: str | None,
+        context: Sequence[AccountRecord],
+        warnings: list[str],
+    ) -> SwitchOutcome:
+        target_email = record.identity.get("email", "")
+        if secret is None or (_login_email(secret) or "").lower() != target_email.lower():
+            raise VendorError(
+                f"ccswap holds no login for '{record.alias}'. Sign in to it once with `muse login`, "
+                f"then run `ccswap muse remove {record.alias}` and `ccswap muse add {record.alias} --browser`"
+            )
+        live = self.capture_live()
+        if live and live[0]["email"].lower() == target_email.lower():
+            return SwitchOutcome(
+                True,
+                False,
+                f"'{record.alias}' is already the signed-in Muse login",
+                tuple(warnings),
+            )
+        if live and not any(
+            r.kind == "browser" and r.identity.get("email", "").lower() == live[0]["email"].lower()
+            for r in context
+        ):
+            raise VendorError(
+                "The signed-in Muse login is not registered with ccswap, so replacing it would lose "
+                "it. Register it first: ccswap muse add <alias> --browser"
+            )
+        previous = live[1] if live else None
+        self._write_login(secret)
+        problem = None
+        if (self.live_email() or "").lower() != target_email.lower():
+            problem = "Muse's login file did not take the new login"
+        else:
+            check = self.runner.run([exe, "usage", "--json"], timeout=20, unset_env=(ENV_KEY,))
+            if "not logged in" in f"{check.stdout}\n{check.stderr}".lower():
+                problem = "Muse does not accept the stored login (it may have expired)"
+        if problem:
+            if previous is not None:
+                self._write_login(previous)  # put the previous login back exactly
+            raise VendorError(
+                f"{problem}; the previous login was restored. Sign in to '{record.alias}' again "
+                "with `muse login` and re-add it"
+            )
+        return SwitchOutcome(
+            True,
+            True,
+            f"Muse login is now '{record.alias}' (verified by its recorded email). Running Muse "
+            "sessions keep the previous login until restarted",
+            tuple(warnings),
+        )
 
     # ---- switching -------------------------------------------------------
 
@@ -317,22 +431,7 @@ class MuseAdapter(ToolAdapter):
                 "unset it for the stored login to take effect"
             )
         if record.kind == "browser":
-            if not interactive:
-                raise UnsupportedCapability(
-                    "Muse cannot switch between browser sessions. Run `muse login` "
-                    "(or pass --login to ccswap muse switch) to sign in again"
-                )
-            code = self.runner.run_interactive([info.exe, "login"])
-            if code != 0:
-                raise VendorError(f"`muse login` exited with status {code}")
-            return SwitchOutcome(
-                False,
-                True,
-                "Signed in with `muse login`. Muse exposes no identity, so ccswap "
-                "cannot verify which account is now active",
-                tuple(warnings),
-                activates=False,
-            )
+            return self._switch_browser(info.exe, record, secret, context, warnings)
         if secret is None:
             raise VendorError(f"Account '{record.alias}' has no stored API key")
         if not assume_yes:

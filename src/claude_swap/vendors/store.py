@@ -223,7 +223,7 @@ class VendorStore:
     def read_secret(self, record: AccountRecord) -> str:
         ref = record.secret_ref
         if not ref or not _SECRET_REF_RE.match(ref):
-            raise VendorError(f"Account '{record.alias}' has no stored API key")
+            raise VendorError(f"Account '{record.alias}' has no stored credential")
         path = self.secrets_dir / f"{ref}.secret"
         try:
             if path.is_symlink() or self.secrets_dir.is_symlink():
@@ -240,6 +240,17 @@ class VendorStore:
         if not value.strip():
             raise VendorError(f"The stored API key for '{record.alias}' is empty")
         return value
+
+    def replace_secret(self, record: AccountRecord, secret: str) -> None:
+        """Overwrite an account's stored secret in place (e.g. a refreshed login)."""
+        ref = record.secret_ref
+        if not ref or not _SECRET_REF_RE.match(ref):
+            raise VendorError(f"Account '{record.alias}' has no stored credential")
+        _private_dir(self.secrets_dir)
+        path = self.secrets_dir / f"{ref}.secret"
+        if path.is_symlink():
+            raise VendorError("Stored credential is unsafe (symbolic link)")
+        atomic_write_text(path, secret, mode=0o600, follow_symlinks=False)
 
     def _drop_secret(self, ref: str | None) -> None:
         if ref and _SECRET_REF_RE.match(ref):
