@@ -14,6 +14,7 @@ Raycast.  Every vendor call runs in a thread worker; unknown values stay unknown
 from __future__ import annotations
 
 import contextvars
+import logging
 import threading
 import time
 import weakref
@@ -48,6 +49,8 @@ from claude_swap.vendors.overview import (
     usage_headline,
 )
 from claude_swap.vendors.service import VendorService
+
+_log = logging.getLogger(__name__)
 
 # Background threads started by tool pages (tests join them; the app never waits on them).
 BACKGROUND: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
@@ -189,12 +192,16 @@ class _ToolPage(Screen):
 
             try:
                 app.call_from_thread(apply)
-            except RuntimeError:  # the app already stopped
-                pass
+            except Exception:  # noqa: BLE001 - the app stopped (RuntimeError/CancelledError)
+                _log.debug("tool page result dropped: app stopped", exc_info=True)
 
-        thread = threading.Thread(
-            target=context.run, args=(work, post), name=f"ccswap-tui-{group}", daemon=True
-        )
+        def body() -> None:
+            try:
+                context.run(work, post)
+            except Exception:  # noqa: BLE001 - a background read must never print a traceback
+                _log.debug("tool page background read failed", exc_info=True)
+
+        thread = threading.Thread(target=body, name=f"ccswap-tui-{group}", daemon=True)
         BACKGROUND.add(thread)
         thread.start()
 

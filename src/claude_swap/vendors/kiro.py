@@ -521,9 +521,9 @@ class KiroAdapter(ToolAdapter):
     def _supports_v2(self, exe: str) -> bool:
         if self._v2 is None:
             result = self.runner.run([exe, "chat", "--help"], timeout=15)
-            if not result.ok:
-                return False  # transient: ask again next time, never cache a failure
-            self._v2 = "--v2" in help_text(result)
+            if result.timed_out or result.missing:
+                return False  # transient: ask again next time
+            self._v2 = result.ok and "--v2" in help_text(result)
         return self._v2
 
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
@@ -590,8 +590,11 @@ class KiroAdapter(ToolAdapter):
             # account's numbers.  Only keep them if the same login is still signed in.
             state_after, after = self.whoami_state()
             if state_after != "in" or not after or not current or not _same_login(current, after):
+                # Definitive, not transient: the credential changed, so the previous
+                # login's numbers must not stand in for the new one.
                 return UsageResult(
-                    UsageState.ERROR, "The Kiro login changed during the usage check; not recorded"
+                    UsageState.UNAVAILABLE,
+                    "The Kiro login changed during the usage check; not recorded",
                 )
             identity = {
                 k: v

@@ -40,7 +40,7 @@ from claude_swap.vendors.usage_cache import ACTIVE_KEY, UsageCache
 
 USAGE_TTL_OK = 60.0
 USAGE_TTL_FAIL = 15.0
-LOCK_WAIT_S = 50.0  # longest wait behind another refresh of the same account
+LOCK_WAIT_S = 100.0  # > the slowest probe chain (Kiro: help + whoami + 40 s probe + whoami)
 # Per-tool (success, failure) freshness: each probe spawns a CLI, OpenCode's aggregate
 # scans every local message, so these are polled less often than a cheap status call.
 USAGE_TTLS: dict[str, tuple[float, float]] = {
@@ -280,12 +280,14 @@ class VendorService:
         # Concurrent askers share one vendor call.  A bounded wait: an orphaned worker that
         # is still inside a hung CLI must not wedge every later refresh.
         if not lock.acquire(timeout=LOCK_WAIT_S):
+            busy = "Another usage refresh for this account is still running"
             cached = self._usage_cache.get(key)
-            if cached:
+            if cached and not refresh:
                 return cached[1]
-            return UsageResult(
-                UsageState.ERROR, "Another usage refresh for this account is still running"
-            )
+            last = self.usage_store.get(tool, account_key)
+            if last is not None:
+                return dataclasses.replace(last, state=UsageState.STALE, error=busy)
+            return UsageResult(UsageState.ERROR, busy)
         try:
             now = self._clock()
             cached = self._usage_cache.get(key)
@@ -337,6 +339,10 @@ class VendorService:
         """
         owner = None
         if fresh.state is UsageState.AVAILABLE:
+            if account_key != ACTIVE_KEY and not any(
+                r.alias == account_key for r in self.store.records(tool)
+            ):
+                return fresh, None  # removed meanwhile (a late worker): never resurrect it
             self.usage_store.put(tool, account_key, fresh)
             if account_key == ACTIVE_KEY:
                 owner = self._owner(adapter, tool, fresh)

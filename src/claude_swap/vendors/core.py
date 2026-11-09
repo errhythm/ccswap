@@ -606,7 +606,10 @@ class ToolAdapter:
     def require_installed(self) -> ToolInfo:
         info = self.detect()
         if not info.installed:
-            raise ToolMissing(f"{self.label} is not installed ({self.binary} not found on PATH)")
+            raise ToolMissing(
+                f"{self.label} is not installed ({self.binary} not found on PATH or in its "
+                "usual install directories)"
+            )
         return info
 
 

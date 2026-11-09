@@ -1153,3 +1153,50 @@ def test_usage_expiry_warning_preserves_json_and_survives_status(switcher, monke
     payload = instance.usage_status(json_output=True)
     assert payload["accounts"][0]["usage"] == usage
     assert "⚠" not in capsys.readouterr().out
+
+
+def test_concurrent_snapshots_share_one_fetch(switcher, monkeypatch):
+    """The menu bar display and the auto-switch engine share a switcher: one fetch."""
+    import threading
+
+    instance, home = switcher
+    _write_live(home, _auth("one@example.com", "account-one"))
+    instance.add_account(assume_yes=True)
+    calls = []
+    gate = threading.Event()
+
+    def fetch(auth, *, base_url):
+        calls.append(1)
+        gate.wait(2)
+        return {"five_hour": {"pct": 25}}
+
+    monkeypatch.setattr(codex, "fetch_codex_usage", fetch)
+    threads = [threading.Thread(target=instance.accounts_snapshot) for _ in range(3)]
+    [t.start() for t in threads]
+    import time as _t
+
+    _t.sleep(0.2)
+    gate.set()
+    [t.join(5) for t in threads]
+    assert len(calls) == 1
+
+
+def test_busy_store_keeps_the_last_good_reading(switcher, monkeypatch):
+    instance, home = switcher
+    _write_live(home, _auth("one@example.com", "account-one"))
+    instance.add_account(assume_yes=True)
+    monkeypatch.setattr(codex, "fetch_codex_usage", lambda auth, *, base_url: {"five_hour": {"pct": 25}})
+    first = instance.accounts_snapshot()
+    assert first.accounts[0].usage.last_good == {"five_hour": {"pct": 25}}
+
+    def busy(*a, **k):
+        raise codex.LockError("busy")
+
+    monkeypatch.setattr(codex, "sessions_absent", lambda *_: False, raising=False)
+    import claude_swap.codex_session as cs
+
+    monkeypatch.setattr(cs, "sessions_absent", lambda *_: False)
+    monkeypatch.setattr(codex.FileLock, "__enter__", busy)
+    later = instance.accounts_snapshot(fetch=set())
+    assert later.accounts[0].usage.last_good == {"five_hour": {"pct": 25}}
+    assert later.accounts[0].usage.last_error == "Codex account store is busy"

@@ -63,14 +63,17 @@ class UsageCache:
         )
 
     def drop(self, tool: str, account: str) -> None:
-        self._update(lambda entries: entries.pop(self._key(tool, account), None))
+        if self.file.exists():
+            self._update(lambda entries: entries.pop(self._key(tool, account), None) is not None)
 
     def _update(self, change) -> None:
+        """``change(entries)`` mutates in place; returning False skips the write."""
         try:
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
             with FileLock(self.root / ".usage.lock", timeout=5.0):
                 entries = self._read()
-                change(entries)
+                if change(entries) is False:
+                    return
                 atomic_write_text(
                     self.file,
                     json.dumps(

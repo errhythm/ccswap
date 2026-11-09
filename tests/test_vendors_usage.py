@@ -601,7 +601,7 @@ def test_login_change_during_the_probe_discards_the_reading(tmp_path):
     answers = iter([ok(json.dumps(IDC)), ok(json.dumps(OTHER))])  # before, after the probe
     r.on(KIRO, "whoami", result=lambda c: next(answers, ok(json.dumps(OTHER))))
     result = svc.usage("kiro", "a")
-    assert result.state is UsageState.ERROR and "changed during" in result.reason
+    assert result.state is UsageState.UNAVAILABLE and "changed during" in result.reason
     assert svc.usage_store.get("kiro", "a") is None
 
 
@@ -704,3 +704,42 @@ def test_unregistered_current_login_gets_the_reading_only_for_its_own_identity(t
     svc2.store.add(AccountRecord("kiro", "b", "login", identity=OTHER))
     rows = {v.alias: u for v, u in Overview(svc2, legacy=[]).collect_one("kiro").accounts}
     assert rows["b"].windows == ()  # a registered, inactive login never gets it
+
+
+def test_login_change_mid_probe_never_shows_the_previous_logins_numbers(tmp_path):
+    svc, r = kiro_world(tmp_path)
+    assert svc.usage("kiro").windows  # an earlier reading of login A
+    answers = iter([ok(json.dumps(IDC)), ok(json.dumps(OTHER))])
+    r.on(KIRO, "whoami", result=lambda c: next(answers, ok(json.dumps(OTHER))))
+    now = svc.usage("kiro", refresh=True)
+    assert now.state is UsageState.UNAVAILABLE and now.windows == ()
+
+
+def test_lock_wait_timeout_shows_the_accounts_own_last_reading_as_stale(tmp_path, monkeypatch):
+    monkeypatch.setattr("claude_swap.vendors.service.LOCK_WAIT_S", 0.05)
+    svc, _ = muse_world(tmp_path, ok(json.dumps({"allowance": MUSE_14})))
+    svc.usage("muse")
+    lock = svc._key_lock(("muse", "@active"))
+    lock.acquire()
+    try:
+        result = svc.usage("muse", refresh=True)
+    finally:
+        lock.release()
+    assert result.state is UsageState.STALE and "still running" in result.error and result.windows
+
+
+def test_a_late_reading_never_resurrects_a_removed_account(tmp_path):
+    svc, _ = kiro_world(tmp_path)
+    rec = AccountRecord("kiro", "ci", "api-key")
+    svc.store.add(rec, "ksk_abcdef123456")
+    svc.remove("kiro", "ci")
+    fresh = parse_usage_report(KIRO_31)
+    svc._settle(svc.adapter("kiro"), "kiro", "ci", fresh)
+    assert svc.usage_store.get("kiro", "ci") is None
+
+
+def test_claude_namespace_keeps_every_established_verb():
+    from claude_swap.vendors.cli import claude_argv
+
+    for verb in ("tui", "watch", "config", "menubar", "upgrade", "update", "status", "export"):
+        assert claude_argv([verb]) == [verb]
