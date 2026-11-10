@@ -137,6 +137,20 @@ GO_PROVIDER = "opencode-go"
 GO_RULE = "Go limits each model separately: 5-hour ≤ 20%, weekly ≤ 50% of its monthly limit"
 
 
+def _per_account_unavailable() -> UsageResult:
+    return UsageResult(
+        UsageState.UNAVAILABLE,
+        "OpenCode records usage per provider and model, not per account",
+        hint="The OpenCode tool view shows the per-provider statistics",
+    )
+
+
+def _record_matches(record: AccountRecord, row: Mapping[str, Any]) -> bool:
+    """Does this vendor-listed (provider, account) row identify this record?"""
+    claimed = {record.identity.get("account"), record.identity.get("id")} - {None, ""}
+    return bool(claimed & {row.get("account"), row.get("id")})
+
+
 def go_usage(providers: list[dict]) -> dict | None:
     """Per-model OpenCode Go usage in Go's own windows (dollar-equivalent, not credits)."""
     bucket = next((p for p in providers if p["provider"] == GO_PROVIDER), None)
@@ -213,6 +227,42 @@ def summarize(rows: list) -> list[dict]:
         out.append(bucket)
     out.sort(key=lambda b: (-b["totals"]["30d"]["messages"], -b["totals"]["all"]["messages"]))
     return out
+
+
+def _filtered_provider_stats(
+    tool_result: UsageResult, provider: str, alias: str
+) -> UsageResult:
+    """The tool-level local statistics with every other provider removed."""
+    for obs in tool_result.observations:
+        data = obs.data if isinstance(obs.data, dict) else {}
+        providers = data.get("providers")
+        if not isinstance(providers, list):
+            continue
+        kept = [p for p in providers if isinstance(p, dict) and p.get("provider") == provider]
+        if not kept:
+            return UsageResult(
+                UsageState.UNAVAILABLE,
+                f"OpenCode has no recorded usage for provider '{provider}' yet",
+                source=tool_result.source,
+                attributed_to=alias,
+            )
+        filtered = dict(data)
+        filtered["providers"] = kept
+        if isinstance(data.get("lastErrors"), dict):
+            filtered["lastErrors"] = {
+                k: v for k, v in data["lastErrors"].items() if k == provider
+            }
+        go = go_usage(kept)
+        if go is not None:
+            filtered["go"] = go
+        else:
+            filtered.pop("go", None)
+        return dataclasses.replace(
+            tool_result,
+            observations=(dataclasses.replace(obs, data=filtered),),
+            attributed_to=alias,
+        )
+    return _per_account_unavailable()
 
 
 class OpenCodeAdapter(ToolAdapter):
@@ -454,11 +504,28 @@ class OpenCodeAdapter(ToolAdapter):
     # ---- registration ------------------------------------------------
 
     def register(
-        self, alias: str, *, provider: str | None = None, account: str | None = None, **_: Any
+        self,
+        alias: str,
+        *,
+        provider: str | None = None,
+        account: str | None = None,
+        context: Sequence[AccountRecord] = (),
+        **_: Any,
     ):
         if not provider:
             raise VendorError("A provider is required (see `ccswap opencode accounts`)")
         valid_selector(provider)
+        # Local records are keyed by provider and model only, so two accounts of one
+        # provider would show each other's usage. Fail fast: one account per provider.
+        # (Pass the already-registered records as ``context``, like ``switch`` does;
+        # ``service.add`` should wire ``context=self.store.records(tool)``.)
+        for other in context:
+            if other.provider == provider and other.alias != alias:
+                raise VendorError(
+                    f"Provider '{provider}' is already registered as '{other.alias}'; "
+                    "OpenCode reports usage per provider and model, not per account, "
+                    "so keep one account per provider"
+                )
         rows = [r for r in self.discover() if r["provider"] == provider]
         if account is None:
             if len(rows) != 1:
@@ -586,20 +653,28 @@ class OpenCodeAdapter(ToolAdapter):
 
     # ---- usage -------------------------------------------------------
 
-    def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
+    def usage(
+        self,
+        record: AccountRecord | None,
+        secret: str | None,
+        *,
+        context: Sequence[AccountRecord] = (),
+    ) -> UsageResult:
         """Local token and cost statistics per provider and model.
 
         OpenCode exposes no provider quota (subscription windows, credits, rate limits),
         so nothing here is authoritative.  Its message records carry provider and model
-        but no account, so a provider *account* gets no numbers: two accounts of one
+        but no account, so one provider's statistics are attributed to a
+        provider *account* only when that account is the provider's sole account:
+        the single vendor-listed account matching this record, with no sibling
+        ccswap registration for the provider (``context``, like ``switch``).
+        Otherwise the account keeps today's UNAVAILABLE: two accounts of one
         provider would otherwise show each other's usage.
         """
+        if record is not None and record.provider:
+            return self._account_usage(record, context)
         if record is not None:
-            return UsageResult(
-                UsageState.UNAVAILABLE,
-                "OpenCode records usage per provider and model, not per account",
-                hint="The OpenCode tool view shows the per-provider statistics",
-            )
+            return _per_account_unavailable()
         info = self.require_installed()
         if not self._db_supported(info.exe):
             stats = self.local_stats()
@@ -649,6 +724,24 @@ class OpenCodeAdapter(ToolAdapter):
             hint="Local records. OpenCode Go counts dollar-equivalent usage per model (not "
             "credits); its limits and plan are only shown in the OpenCode console",
         )
+
+    def _account_usage(
+        self, record: AccountRecord, context: Sequence[AccountRecord]
+    ) -> UsageResult:
+        """This account's share of the tool-level statistics, when it owns the provider."""
+        provider = record.provider or ""
+        if any(r.provider == provider and r.alias != record.alias for r in context):
+            return _per_account_unavailable()
+        try:
+            rows = [r for r in self.discover() if r["provider"] == provider]
+        except VendorError as exc:
+            return UsageResult(UsageState.ERROR, str(exc))
+        if len(rows) != 1 or not _record_matches(record, rows[0]):
+            return _per_account_unavailable()
+        tool_result = self.usage(None, None)
+        if tool_result.state is not UsageState.AVAILABLE:
+            return dataclasses.replace(tool_result, attributed_to=record.alias)
+        return _filtered_provider_stats(tool_result, provider, record.alias)
 
     def _last_errors(self, exe: str) -> dict[str, dict]:
         """{provider: {message, status, at}} when a provider's newest request failed."""
