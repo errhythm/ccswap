@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +13,7 @@ from claude_swap.vendors.core import (
     UsageState,
     VendorError,
 )
-from claude_swap.vendors.muse import ENV_KEY, MuseAdapter
+from claude_swap.vendors.muse import CREDENTIAL_BACKEND, ENV_KEY, MuseAdapter
 from tests.vendor_helpers import FakeRunner, fail, ok
 
 KEY = "mk_live_0123456789abcdef"
@@ -33,6 +35,13 @@ def runner():
 @pytest.fixture
 def adapter(runner):
     return MuseAdapter(runner)
+
+
+@pytest.fixture(autouse=True)
+def _every_muse_child_pins_the_file_backend(runner):
+    yield
+    for call in runner.calls:
+        assert call.env.get(CREDENTIAL_BACKEND) == "file", call.argv
 
 
 def api_record(alias="work"):
@@ -124,8 +133,17 @@ def test_usage_null_allowance_is_unavailable_not_zero(adapter, runner):
 
 def test_usage_api_key_reason_is_explained(adapter, runner):
     runner.on(MUSE, "usage", "--json", result=ok('{"allowance": null, "reason": "api_key"}'))
-    result = adapter.usage(api_record(), KEY)
+    result = adapter.usage(None, None)
     assert result.state is UsageState.UNAVAILABLE and "does not report usage for an API-key sign-in" in result.reason
+
+
+def test_unlinked_api_key_is_not_sent_to_muse(adapter, runner):
+    runner.on(MUSE, "usage", "--json", result=ok('{"allowance": null, "reason": "api_key"}'))
+    result = adapter.usage(api_record(), KEY)
+    assert result.state is UsageState.UNAVAILABLE
+    assert "not the subscription key of any registered Muse login" in result.reason
+    assert not any(c.argv[1:2] == ("usage",) for c in runner.calls)
+    assert all(KEY not in c.env.values() and KEY not in c.argv for c in runner.calls)
 
 
 def test_usage_not_logged_in_is_unauthenticated(adapter, runner):
@@ -170,11 +188,10 @@ def test_usage_timeout_and_failure_isolated(adapter, runner):
     assert KEY not in adapter.usage(api_record(), KEY).reason
 
 
-def test_usage_for_api_key_account_injects_env_not_argv(adapter, runner):
+def test_usage_for_api_key_account_does_not_inject_the_key(adapter, runner):
     runner.on(MUSE, "usage", "--json", result=ok('{"allowance": null}'))
     adapter.usage(api_record(), KEY)
-    call = runner.calls[-1]
-    assert call.env == {ENV_KEY: KEY} and KEY not in " ".join(call.argv)
+    assert all(KEY not in " ".join(c.argv) and c.env.get(ENV_KEY) is None for c in runner.calls)
 
 
 def test_launch_spec_isolates_via_env(adapter):
@@ -461,3 +478,223 @@ def test_symlinked_login_file_is_refused(tmp_path, monkeypatch, runner):
     with pytest.raises(VendorError):
         svc.switch("muse", "jay")
     assert json.loads(target.read_text())["providers"]["meta"]["user_email"] == "m@x.com"
+
+
+def test_write_login_refuses_a_pointer(adapter, tmp_path, monkeypatch):
+    write_login(tmp_path, monkeypatch, "j@x.com")
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    before = path.read_bytes()
+    with pytest.raises(VendorError, match="keychain pointer"):
+        adapter._write_login(_pointer("j@x.com"))
+    assert path.read_bytes() == before
+
+
+def _allowance() -> str:
+    return json.dumps(
+        {
+            "schemaVersion": 1,
+            "allowance": {
+                "tier": "Muse Code Power Usage",
+                "window": {"usedPercent": 2, "resetsAtMs": 4102444800000},
+                "weekly": {"usedPercent": 66, "resetsAtMs": 4103049600000},
+                "asOfMs": 4102400000000,
+                "source": "mint",
+            },
+            "reason": None,
+            "hint": None,
+        }
+    )
+
+
+def test_inactive_browser_login_is_measured_without_touching_the_live_file(
+    tmp_path, monkeypatch, runner
+):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    live = tmp_path / "cfg" / "muse" / "auth.json"
+    before = live.read_bytes()
+    seen: dict[str, Path] = {}
+
+    def answer(call):
+        home = Path(call.env["XDG_CONFIG_HOME"])
+        seen["home"] = home
+        auth = home / "muse" / "auth.json"
+        doc = json.loads(auth.read_text())
+        assert doc["providers"]["meta"]["user_email"] == "j@x.com"
+        doc["providers"]["meta"]["access_token"] = "REFRESHED-TOKEN-VALUE-0123"
+        auth.write_text(json.dumps(doc))
+        return ok(_allowance())
+
+    runner.on(MUSE, "usage", "--json", result=answer)
+    result = svc.usage("muse", "jay")
+    assert result.state is UsageState.AVAILABLE and result.attributed_to == "jay"
+    assert any(window.used_percent == 2 for window in result.windows)
+    assert any(window.used_percent == 66 for window in result.windows)
+    call = runner.calls[-1]
+    assert call.env[CREDENTIAL_BACKEND] == "file"
+    assert call.env["XDG_CONFIG_HOME"] == str(seen["home"])
+    assert call.unset_env == (ENV_KEY,)
+    assert live.read_bytes() == before
+    assert not seen["home"].exists()
+    stored = svc.store.read_secret(svc.resolve("muse", "jay"))
+    assert "REFRESHED-TOKEN-VALUE-0123" in stored and "access_token" in stored
+
+
+def test_a_refreshed_pointer_is_not_written_back(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    original = svc.store.read_secret(svc.resolve("muse", "jay"))
+
+    def answer(call):
+        auth = Path(call.env["XDG_CONFIG_HOME"]) / "muse" / "auth.json"
+        auth.write_text(_pointer("j@x.com"))
+        return ok(_allowance())
+
+    runner.on(MUSE, "usage", "--json", result=answer)
+    result = svc.usage("muse", "jay")
+    assert result.state is UsageState.AVAILABLE
+    assert svc.store.read_secret(svc.resolve("muse", "jay")) == original
+
+
+def test_pointer_copy_is_unavailable_until_readded(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    svc.store.replace_secret(svc.resolve("muse", "jay"), _pointer("j@x.com"))
+    live = tmp_path / "cfg" / "muse" / "auth.json"
+    before = live.read_bytes()
+    marked = len(runner.calls)
+    result = svc.usage("muse", "jay")
+    assert result.state is UsageState.UNAVAILABLE and result.windows == ()
+    assert "keychain pointer" in result.reason and "muse add jay --browser" in result.reason
+    assert not any(c.argv[1:2] == ("usage",) for c in runner.calls[marked:])
+    assert live.read_bytes() == before
+
+
+def _login_with_key(tmp_path, monkeypatch, email, api_key):
+    cfg = tmp_path / "cfg" / "muse"
+    cfg.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(
+        {
+            "providers": {
+                "meta": {
+                    "access_token": "dca:SECRET-TOKEN-VALUE-0123456789",
+                    "api_key": api_key,
+                    "user_email": email,
+                }
+            }
+        }
+    )
+    (cfg / "auth.json").write_text(text)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    return text
+
+
+def _service(tmp_path, runner):
+    from claude_swap.vendors.registry import ToolRegistry
+    from claude_swap.vendors.service import VendorService
+    from claude_swap.vendors.store import VendorStore
+
+    return VendorService(ToolRegistry.default(runner), VendorStore(tmp_path / "v"))
+
+
+def test_api_key_add_links_the_matching_login_and_usage_uses_it(tmp_path, monkeypatch, runner):
+    _login_with_key(tmp_path, monkeypatch, "j@x.com", KEY)
+    runner.on(MUSE, "usage", "--json", result=ok(_allowance()))
+    svc = _service(tmp_path, runner)
+    svc.add("muse", "jay", kind="browser")
+    linked = svc.add("muse", "sub", kind="api-key", api_key=f"  {KEY}\n")
+    assert linked.identity == {"login": "jay"}
+    assert KEY not in json.dumps(linked.to_json())
+    assert KEY not in (tmp_path / "v" / "vendors.json").read_text()
+    live = tmp_path / "cfg" / "muse" / "auth.json"
+    before = live.read_bytes()
+    seen: dict[str, Path] = {}
+
+    def answer(call):
+        home = Path(call.env["XDG_CONFIG_HOME"])
+        seen["home"] = home
+        doc = json.loads((home / "muse" / "auth.json").read_text())
+        assert doc["providers"]["meta"]["user_email"] == "j@x.com"
+        assert call.env.get(ENV_KEY) is None
+        return ok(_allowance())
+
+    runner.on(MUSE, "usage", "--json", result=answer)
+    result = svc.usage("muse", "sub")
+    assert result.state is UsageState.AVAILABLE and result.attributed_to == "sub"
+    assert "jay" in result.hint
+    assert any(window.used_percent == 66 for window in result.windows)
+    call = runner.calls[-1]
+    assert call.env[CREDENTIAL_BACKEND] == "file" and ENV_KEY in call.unset_env
+    assert KEY not in call.argv and call.env.get(ENV_KEY) is None
+    assert live.read_bytes() == before
+    assert not seen["home"].exists()
+
+
+def test_api_key_add_rejects_a_key_with_no_login(tmp_path, monkeypatch, runner):
+    _login_with_key(tmp_path, monkeypatch, "j@x.com", KEY)
+    svc = _service(tmp_path, runner)
+    svc.add("muse", "jay", kind="browser")
+    with pytest.raises(VendorError, match="not the subscription key of any registered Muse login"):
+        svc.add("muse", "sub", kind="api-key", api_key="other-key-0123456789")
+    assert [r.alias for r in svc.store.records("muse")] == ["jay"]
+
+
+def test_api_key_without_a_link_links_lazily_at_usage(tmp_path, monkeypatch, runner):
+    _login_with_key(tmp_path, monkeypatch, "j@x.com", KEY)
+    runner.on(MUSE, "usage", "--json", result=ok(_allowance()))
+    svc = _service(tmp_path, runner)
+    svc.add("muse", "jay", kind="browser")
+    svc.store.add(AccountRecord("muse", "sub", "api-key"), KEY)
+    assert svc.resolve("muse", "sub").identity == {}
+    result = svc.usage("muse", "sub")
+    assert result.attributed_to == "sub" and "jay" in result.hint
+    assert svc.resolve("muse", "sub").identity == {"login": "jay"}
+    assert KEY not in json.dumps(svc.resolve("muse", "sub").to_json())
+
+
+def test_pointer_login_is_healed_from_the_stored_token(tmp_path, monkeypatch, runner, caplog):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    path.write_text(_pointer("j@x.com"))
+    original = path.read_bytes()
+    seen = {"n": 0}
+
+    def answer(_call):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return fail("muse usage: not logged in")
+        return ok(_allowance())
+
+    runner.on(MUSE, "usage", "--json", result=answer)
+    with caplog.at_level(logging.INFO, logger="claude-swap"):
+        result = svc.usage("muse")
+    assert result.state is UsageState.AVAILABLE
+    assert any(window.used_percent == 2 for window in result.windows)
+    assert "healed" in caplog.text
+    live = path.read_text()
+    assert "j@x.com" in live and "access_token" in live and "keychain" not in live
+    backup = path.with_name("auth.json.ccswap-bak").read_bytes()
+    assert backup == original
+
+
+def test_failed_heal_restores_the_pointer_byte_for_byte(tmp_path, monkeypatch, runner, caplog):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    path.write_text(_pointer("j@x.com"))
+    original = path.read_bytes()
+    runner.on(MUSE, "usage", "--json", result=fail("muse usage: not logged in"))
+    with caplog.at_level(logging.INFO, logger="claude-swap"):
+        result = svc.usage("muse")
+    assert result.state is UsageState.UNAUTHENTICATED
+    assert path.read_bytes() == original
+    assert "healed" not in caplog.text
+
+
+def test_pointer_without_a_stored_token_is_not_healed(tmp_path, monkeypatch, runner, caplog):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    path.write_text(_pointer("stranger@x.com"))
+    original = path.read_bytes()
+    runner.on(MUSE, "usage", "--json", result=fail("muse usage: not logged in"))
+    with caplog.at_level(logging.INFO, logger="claude-swap"):
+        result = svc.usage("muse")
+    assert result.state is UsageState.UNAUTHENTICATED
+    assert path.read_bytes() == original
+    assert "healed" not in caplog.text
