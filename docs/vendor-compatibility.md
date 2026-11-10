@@ -29,9 +29,9 @@ code, so the table and the behaviour cannot drift apart.
 | Auth precedence | supported | `META_API_KEY` > stored key > stored browser session (vendor docs) |
 | Auth state | conditional | `META_API_KEY` presence and the provider list in `~/.config/muse/auth.json` (`$XDG_CONFIG_HOME/muse`). The credential **type and the account identity are not exposed** by muse |
 | Account enumeration / identification | unsupported | no `whoami`/`accounts` command; ccswap only knows accounts you register |
-| Registration | supported | API key from stdin/no-echo prompt into ccswap's 0600 store; browser sessions are an alias only, no token is copied |
-| Native activation | conditional | API-key accounts: `muse auth set --provider meta --api-key-stdin` (key on stdin). **Replaces** whatever Muse has stored, including a browser session, so `--yes` is required. Browser accounts: not switchable, only `muse login` |
-| Post-switch verification | unsupported | muse offers no way to read back the stored identity; the result says `verified: false`, and `active` stays `null` (unknown) in listings |
+| Registration | supported | API key from stdin/no-echo prompt into ccswap's 0600 store. A browser login is kept only when the file holds a token; a keychain pointer is refused |
+| Native activation | conditional | Browser accounts: ccswap writes the stored login over `auth.json` when that copy holds a token, then requires `muse usage` not to say "not logged in". API-key accounts are not menu switches. `ccswap muse switch <alias> --yes` still runs `muse auth set --api-key-stdin` and replaces the stored credential |
+| Post-switch verification | conditional | A browser switch is verified when `muse usage` accepts the login (`verified: true`). Muse still has no whoami, so the email in the file alone is not proof. An API-key `muse auth set` stays `verified: false` |
 | Credential ownership | n/a | Muse owns its stored credential; ccswap owns only the API keys you registered with it |
 | Global vs project settings | unverified | ccswap never reads or writes `settings.json`/`trust.json`; Muse sandbox and approval modes are untouched |
 | Model selection | unsupported | left to `muse --model` / settings; not managed |

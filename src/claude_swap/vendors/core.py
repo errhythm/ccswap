@@ -309,6 +309,9 @@ class UsageResult:
     # Non-secret identity the tool reported *for this reading* (e.g. Kiro's whoami).  Used
     # only to file the reading under the matching registered account; never serialized.
     identity: Mapping[str, str] = field(default_factory=dict, compare=False, repr=False)
+    # False when this answer is the account's real state, so a last-good reading must not
+    # stand in for it.  A Muse login that is simply not the signed-in one is such an answer.
+    retain_last: bool = field(default=True, compare=False, repr=False)
 
     @property
     def has_data(self) -> bool:

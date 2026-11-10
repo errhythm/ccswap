@@ -2,10 +2,10 @@
 
 ``menubar.py`` renders these sections verbatim, so what the menu shows is decided
 here, from the same :class:`~claude_swap.vendors.overview.ToolSummary` the CLI and
-TUI use.  Only operations that are safe without a terminal get a callback: an
-OpenCode account switch (non-interactive, verified by re-listing), a refresh, and
-opening docs.  Muse and Kiro switches need confirmation or an interactive login,
-so their rows say how instead of pretending to be clickable.
+TUI use.  A Muse browser login and a Kiro profile are clickable.  A Muse API key
+is omitted: Muse reports no allowance for a key, and storing the key replaces the
+browser login.  Use ``ccswap muse run``.  A Kiro API key stays listed and is not
+clickable, for the same reason it is process-scoped.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from claude_swap.vendors.core import UsageResult, UsageState
+from claude_swap.vendors.core import AccountView, UsageResult, UsageState
 from claude_swap.vendors.overview import (
     LABELS,
     Overview,
@@ -50,22 +50,47 @@ class MenuSection:
     accounts: list[MenuRow] = field(default_factory=list)
 
 
+def _session_dead(usage: UsageResult) -> bool:
+    return usage.state is UsageState.UNAUTHENTICATED
+
+
+def _row_switchable(tool: str, view: AccountView, usage: UsageResult) -> bool:
+    if switchable(tool, view.active, view.provider, view.kind, view.registered):
+        return True
+    # The file still names this login after Muse drops the session. A click rewrites
+    # the stored token, which a plain "already active" row would refuse to do.
+    return (
+        _session_dead(usage)
+        and tool == "muse"
+        and view.kind == "browser"
+        and view.registered
+        and view.active is True
+    )
+
+
+def _hidden_menu_account(tool: str, view: AccountView) -> bool:
+    """A Muse API key is a lane credential.  The menu has no honest usage line for it."""
+    return tool == "muse" and view.kind == "api-key"
+
+
 def switchable(
     tool: str, active: bool | None, provider: str | None, kind: str = "", registered: bool = True
 ) -> bool:
     """Can a click switch to this account without a terminal?
 
-    OpenCode: native ``auth switch``.  Muse: ccswap swaps the login it keeps (browser) or
-    stores the key (API key).  Kiro: another profile of the signed-in login, via Kiro's own
-    picker.  A different Kiro *login* still needs an interactive sign-in, and a Kiro API
-    key is process-scoped (``ccswap kiro run``).
+    OpenCode: native ``auth switch``.  Muse: a browser login ccswap keeps a token for.
+    A Muse API key is omitted from the menu.  Kiro: another profile of the signed-in login,
+    via Kiro's own picker.  A different Kiro *login* still needs an interactive sign-in, and
+    a Kiro API key is process-scoped (``ccswap kiro run``).
     """
     if active is True:
         return False
     if tool == "opencode":
         return active is False and bool(provider)
     if tool == "muse":
-        return registered and kind in ("browser", "api-key")
+        # An API key is `ccswap muse run`, not a login.  A click used to store the key
+        # and replace the browser session, and the row could only say "usage unavailable".
+        return registered and kind == "browser"
     if tool == "kiro":
         return registered and kind == "login"
     return False
@@ -159,10 +184,19 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
         rows.extend(usage_rows(tool, summary.tool_usage, now))
     rows.append(None)
     rows.append(MenuRow("Accounts", tool))
+    shown = [
+        (view, usage)
+        for view, usage in summary.accounts
+        if not _hidden_menu_account(tool, view)
+    ]
     if not summary.accounts:
         rows.append(MenuRow(f"  No {label} accounts registered", tool))
-    for number, (view, usage) in enumerate(summary.accounts, 1):
-        can = switchable(tool, view.active, view.provider, view.kind, view.registered)
+    elif not shown:
+        rows.append(
+            MenuRow("  API keys are used with `ccswap muse run` and are not listed here", tool)
+        )
+    for number, (view, usage) in enumerate(shown, 1):
+        can = _row_switchable(tool, view, usage)
         selector = (
             (view.identity.get("id") or view.identity.get("account"))
             if tool == "opencode"
@@ -182,19 +216,20 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
                 action="switch" if can else None,
                 selector=selector if can else None,
                 provider=view.provider,
-                checked=bool(view.active),
+                checked=bool(view.active) and not _session_dead(usage),
                 raw=tool == "opencode" and not view.registered,
             )
         )
-    for view, usage in summary.accounts:
+    for view, usage in shown:
         mark = {True: "●", False: "○", None: "?"}[view.active]
         where = (
             f"{view.provider}/"
             if view.provider and not view.alias.startswith(f"{view.provider}/")
             else ""
         )
-        ok = switchable(tool, view.active, view.provider, view.kind, view.registered)
+        ok = _row_switchable(tool, view, usage)
         hint = "" if ok or view.active else ("  — switch in terminal" if tool != "opencode" else "")
+        mark = "○" if _session_dead(usage) else mark
         text = f"  {mark} {where}{view.alias} · {usage_headline(usage)}{hint}"
         if not ok:
             selector = None
@@ -210,7 +245,7 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
                 selector=selector,
                 raw=tool == "opencode" and not view.registered,
                 provider=view.provider,
-                checked=bool(view.active),
+                checked=bool(view.active) and not _session_dead(usage),
             )
         )
     rows.append(None)

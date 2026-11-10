@@ -378,8 +378,9 @@ class VendorService:
                     self.usage_store.put(tool, owner, fresh)
             return fresh, owner
         transient = fresh.state is UsageState.ERROR
-        if account_key != ACTIVE_KEY:
-            # An account's own last reading: still that account's, whatever happened now.
+        if account_key != ACTIVE_KEY and fresh.retain_last:
+            # An account's own last reading, when this answer is a transient gap.
+            # A definitive "not this login" leaves retain_last false and drops the old numbers.
             transient = transient or fresh.state is UsageState.UNAVAILABLE
         if not transient:
             return fresh, None

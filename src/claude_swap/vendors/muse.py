@@ -10,9 +10,9 @@ Facts this adapter relies on:
 * ``muse auth set --api-key-stdin`` stores a key (stdin only, never argv);
   ``muse login`` is the browser/device flow; ``muse logout`` clears the stored
   credential and does not touch ``META_API_KEY``.
-* There is **no** ``whoami``/``status`` command and no account selection for
-  browser sessions, so browser accounts cannot be identified or switched
-  programmatically -- CCSwap registers them as local aliases only.
+* There is **no** ``whoami``.  A browser login is the email plus a token in the
+  login file.  A file that only says ``storage: keychain`` is a pointer: writing
+  it changes the email label and does not move the keychain item.
 * ``muse usage [--json]`` prints the subscription allowance without a model
   turn.  Its non-null payload schema is not documented, so it is passed
   through (scalars only) and never interpreted into percentages.
@@ -78,14 +78,36 @@ def _scalars(value: Any, depth: int = 0, secrets: Sequence[str] = ()) -> Any:
 _WINDOWS = (("window", "five-hour", "5-hour window"), ("weekly", "weekly", "Weekly"))
 
 
-def _login_email(text: str) -> str | None:
-    """``providers.meta.user_email`` of a Muse login file's contents (nothing else is read)."""
+def _meta(text: str) -> dict | None:
     try:
         meta = (json.loads(text).get("providers") or {}).get("meta")
     except (ValueError, AttributeError):
         return None
-    email = meta.get("user_email") if isinstance(meta, dict) else None
+    return meta if isinstance(meta, dict) else None
+
+
+def _login_email(text: str) -> str | None:
+    """``providers.meta.user_email`` of a Muse login file's contents (nothing else is read)."""
+    meta = _meta(text)
+    email = meta.get("user_email") if meta else None
     return email if isinstance(email, str) and "@" in email and len(email) < 255 else None
+
+
+def _login_restorable(text: str) -> bool:
+    """True when writing this file back can restore the session.
+
+    Muse's normal login file names the account and sets ``storage`` to ``keychain``.
+    The token then lives in the macOS Keychain, which ccswap cannot copy.  Writing that
+    pointer changes ``user_email`` and leaves the keychain item where it was.
+    """
+    meta = _meta(text)
+    if meta is None:
+        return False
+    for field in ("access_token", "refresh_token"):
+        value = meta.get(field)
+        if isinstance(value, str) and value.strip() and not any(c.isspace() for c in value):
+            return True
+    return False
 
 
 def parse_allowance(
@@ -189,10 +211,10 @@ class MuseAdapter(ToolAdapter):
             ),
             Capability.SWITCH: cap(
                 S.SUPPORTED,
-                "Browser logins: ccswap keeps each login (0600) and swaps Muse's auth.json, "
-                "saving the live login back first; verified by its recorded email and a "
-                "`muse usage` check, rolled back on failure. API-key accounts: `muse auth set "
-                "--api-key-stdin`",
+                "Browser logins: ccswap keeps a login only when the file holds a token, swaps "
+                "Muse's auth.json, and accepts the switch when `muse usage` does not say "
+                "not logged in. A keychain pointer is refused. API-key accounts are for "
+                "`ccswap muse run` and are not menu switches",
             ),
             Capability.USAGE: cap(
                 S.SUPPORTED,
@@ -317,6 +339,12 @@ class MuseAdapter(ToolAdapter):
             email = _login_email(text)
             if email is None:
                 raise VendorError("That is not a Muse login file (no providers.meta.user_email)")
+            if not _login_restorable(text):
+                raise VendorError(
+                    "That Muse login is only a keychain pointer, so ccswap cannot switch "
+                    "back to it. Sign in with `muse login` and add it while the login file "
+                    "still holds the token."
+                )
             return AccountRecord(
                 self.key, alias, "browser", identity={"email": email}, created_at=time.time()
             ), text
@@ -349,7 +377,19 @@ class MuseAdapter(ToolAdapter):
         except VendorError:
             return None
         email = _login_email(text)
-        return ({"email": email}, text) if email else None
+        if not email or not _login_restorable(text):
+            return None
+        return ({"email": email}, text)
+
+    def _live_text(self) -> str | None:
+        try:
+            return self._read_login(self._auth_path())
+        except VendorError:
+            return None
+
+    def _usage_rejects_login(self, exe: str) -> bool:
+        check = self.runner.run([exe, "usage", "--json"], timeout=20, unset_env=(ENV_KEY,))
+        return "not logged in" in f"{check.stdout}\n{check.stderr}".lower()
 
     def _write_login(self, text: str) -> None:
         path = self._auth_path()
@@ -372,31 +412,39 @@ class MuseAdapter(ToolAdapter):
                 f"ccswap holds no login for '{record.alias}'. Sign in to it once with `muse login`, "
                 f"then run `ccswap muse remove {record.alias}` and `ccswap muse add {record.alias} --browser`"
             )
-        live = self.capture_live()
-        if live and live[0]["email"].lower() == target_email.lower():
-            return SwitchOutcome(
-                True,
-                False,
-                f"'{record.alias}' is already the signed-in Muse login",
-                tuple(warnings),
+        if not _login_restorable(secret):
+            raise VendorError(
+                f"ccswap's copy of '{record.alias}' is only a keychain pointer. Switching would "
+                "change the email label and leave the keychain session where it is. Sign in with "
+                f"`muse login`, then `ccswap muse remove {record.alias}` and "
+                f"`ccswap muse add {record.alias} --browser` while the login file still holds the token."
             )
-        if live and not any(
-            r.kind == "browser" and r.identity.get("email", "").lower() == live[0]["email"].lower()
+        live_text = self._live_text()
+        live_email = (_login_email(live_text) or "") if live_text else ""
+        if live_email.lower() == target_email.lower() and live_text:
+            session_dead = not _login_restorable(live_text) and self._usage_rejects_login(exe)
+            if not session_dead:
+                return SwitchOutcome(
+                    True,
+                    False,
+                    f"'{record.alias}' is already the signed-in Muse login",
+                    tuple(warnings),
+                )
+        elif live_email and not any(
+            r.kind == "browser" and r.identity.get("email", "").lower() == live_email.lower()
             for r in context
         ):
             raise VendorError(
                 "The signed-in Muse login is not registered with ccswap, so replacing it would lose "
                 "it. Register it first: ccswap muse add <alias> --browser"
             )
-        previous = live[1] if live else None
+        previous = live_text
         self._write_login(secret)
         problem = None
         if (self.live_email() or "").lower() != target_email.lower():
             problem = "Muse's login file did not take the new login"
-        else:
-            check = self.runner.run([exe, "usage", "--json"], timeout=20, unset_env=(ENV_KEY,))
-            if "not logged in" in f"{check.stdout}\n{check.stderr}".lower():
-                problem = "Muse does not accept the stored login (it may have expired)"
+        elif self._usage_rejects_login(exe):
+            problem = "Muse does not accept the stored login (it may have expired)"
         if problem:
             if previous is not None:
                 self._write_login(previous)  # put the previous login back exactly
@@ -407,7 +455,7 @@ class MuseAdapter(ToolAdapter):
         return SwitchOutcome(
             True,
             True,
-            f"Muse login is now '{record.alias}' (verified by its recorded email). Running Muse "
+            f"Muse login is now '{record.alias}' (muse usage accepted this login). Running Muse "
             "sessions keep the previous login until restarted",
             tuple(warnings),
         )
@@ -475,6 +523,7 @@ class MuseAdapter(ToolAdapter):
                     UsageState.UNAVAILABLE,
                     f"'{record.alias}' is not the signed-in Muse login; Muse only reports the "
                     "signed-in login's allowance",
+                    retain_last=False,
                 )
         # An API-key account's key overrides any exported META_API_KEY for this child.  The
         # tool-level reading deliberately keeps an exported key: that *is* the credential

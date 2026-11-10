@@ -7,9 +7,9 @@ import json
 import pytest
 from textual.widgets import ListView, Static
 
-from claude_swap.tui.modals import ConfirmModal
+from claude_swap.tui.modals import ConfirmModal, OutputModal
 from claude_swap.tui.tools import AccountRow, OverviewRow, OverviewScreen, ToolScreen, strip_text
-from claude_swap.vendors.core import AccountRecord
+from claude_swap.vendors.core import AccountRecord, UsageState
 from claude_swap.vendors.registry import ToolRegistry
 from claude_swap.vendors.service import VendorService
 from claude_swap.vendors.store import VendorStore
@@ -251,20 +251,11 @@ async def test_muse_switch_needs_confirmation_and_never_shows_the_key(tmp_path):
     async with app.run_test(size=(110, 40)) as pilot:
         await goto(pilot, "3")
         await pilot.press("s")
-        await pilot.pause()
-        assert isinstance(app.screen, ConfirmModal)
-        assert not any(c.argv[1:3] == ("auth", "set") for c in runner.calls)
-        await pilot.press("n")
         await drain(pilot)
+        assert isinstance(app.screen, OutputModal)
+        assert "ccswap muse run work" in app.screen._output
         assert not any(c.argv[1:3] == ("auth", "set") for c in runner.calls)
-        await pilot.press("s")
-        await pilot.pause()
-        await pilot.press("y")
-        await drain(pilot)
-        call = next(c for c in runner.calls if c.argv[1:3] == ("auth", "set"))
-        assert call.input_text == KEY + "\n" and KEY not in " ".join(call.argv)
-        for sel in ("#tool-head", "#tool-usage", "#tool-detail"):
-            assert KEY not in text_of(app.screen, sel)
+        assert KEY not in app.screen._output
 
 
 @pytest.mark.asyncio
@@ -280,6 +271,45 @@ async def test_kiro_switch_to_another_login_reports_what_it_needs_without_runnin
         await goto(pilot, "s")
         assert not any(c.interactive for c in runner.calls)  # never logout/login from the TUI
         assert "--login" in text_of(app.screen, "#tool-detail")
+
+
+@pytest.mark.asyncio
+async def test_dead_muse_login_is_restored_from_the_tui(tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg" / "muse"
+    cfg.mkdir(parents=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    svc, runner = world(tmp_path)
+    login = cfg / "auth.json"
+    login.write_text(
+        json.dumps({"providers": {"meta": {"access_token": "t-m", "user_email": "m@x.com"}}})
+    )
+    svc.add("muse", "mis", kind="browser")
+    login.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "providers": {"meta": {"storage": "keychain", "user_email": "m@x.com"}},
+            }
+        )
+    )
+
+    def answer(_call):
+        if "access_token" not in login.read_text():
+            return fail("muse usage: not logged in")
+        return ok('{"allowance": null, "reason": "server_sent_no_usage"}')
+
+    runner.on(MUSE, "usage", "--json", result=answer)
+    app = app_with(tmp_path, svc)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await goto(pilot, "3")
+        row = next(r for r in app.screen.query(AccountRow) if r.view.alias == "mis")
+        assert row.view.active is True
+        assert row.usage.state is UsageState.UNAUTHENTICATED
+        label = str(row.query_one(Static).render())
+        assert label.startswith("○") and "sign-in required" in label
+        await goto(pilot, "s")
+        meta = json.loads(login.read_text())["providers"]["meta"]
+        assert meta["user_email"] == "m@x.com" and meta["access_token"] == "t-m"
 
 
 @pytest.mark.asyncio

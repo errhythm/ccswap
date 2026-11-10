@@ -366,7 +366,8 @@ class ToolScreen(_ToolPage):
 
     @staticmethod
     def _row_label(n: int, view: AccountView, result: UsageResult) -> str:
-        mark = {True: "●", False: "○", None: "?"}[view.active]
+        shown = False if result.state is UsageState.UNAUTHENTICATED else view.active
+        mark = {True: "●", False: "○", None: "?"}[shown]
         bits = [view.kind]
         if view.provider:
             bits.insert(0, view.provider)
@@ -476,7 +477,15 @@ class ToolScreen(_ToolPage):
         if row is None or self._busy:
             return
         tool, view = self.tool, row.view
-        if view.active:
+        # A dead Muse login still has active=True because the file names it. The click
+        # rewrites the stored token. Every other active row stays a no-op.
+        restore = (
+            tool == "muse"
+            and view.kind == "browser"
+            and view.registered
+            and row.usage.state is UsageState.UNAUTHENTICATED
+        )
+        if view.active and not restore:
             self._message = f"'{view.alias}' is already active"
             self._render_detail()
             return
@@ -484,13 +493,12 @@ class ToolScreen(_ToolPage):
             self._start_switch(view, assume_yes=False)
         elif tool == "muse" and view.kind == "api-key":
             self.app.push_screen(
-                ConfirmModal(
-                    "This stores the key as Muse's credential (replacing a browser login, which "
-                    "ccswap keeps if it is registered). Running sessions keep the old one until "
-                    f"restarted. Tip: `ccswap muse run {view.alias}` changes nothing global.",
-                    title=f"Switch Muse to '{view.alias}'?",
-                ),
-                lambda ok: self._start_switch(view, assume_yes=True) if ok else None,
+                OutputModal(
+                    "Switch",
+                    "A Muse API key has no allowance to show and is not a login. "
+                    f"Start a session with `ccswap muse run {view.alias}`. "
+                    "That sets META_API_KEY for that process only.",
+                )
             )
         elif (tool, view.kind) in (("muse", "browser"), ("kiro", "login")):
             # ccswap swaps the Muse login it keeps; a Kiro profile goes through Kiro's own

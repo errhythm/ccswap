@@ -283,7 +283,9 @@ def test_browser_usage_is_attributed_by_email_and_never_to_the_other_login(
     write_login(tmp_path, monkeypatch, "j@x.com")
     svc2 = VendorService(svc.registry, svc.store)
     assert svc2.usage("muse").attributed_to == "jay"
-    assert svc2.usage("muse", "mis").state.value == "stale"
+    mis = svc2.usage("muse", "mis")
+    assert mis.state is UsageState.UNAVAILABLE and mis.windows == ()
+    assert "not the signed-in" in mis.reason
 
 
 def test_login_change_during_the_muse_probe_is_not_recorded(tmp_path, monkeypatch, runner, adapter):
@@ -381,6 +383,72 @@ def test_rejected_login_is_rolled_back(tmp_path, monkeypatch, runner):
     with pytest.raises(VendorError, match="previous login was restored"):
         svc.switch("muse", "jay")
     assert live_doc(tmp_path)["user_email"] == "m@x.com"
+
+
+def _pointer(email):
+    return json.dumps(
+        {
+            "schema_version": 2,
+            "providers": {
+                "meta": {
+                    "mechanism": "oauth",
+                    "obtained_via": "device_code",
+                    "storage": "keychain",
+                    "user_email": email,
+                }
+            },
+        }
+    )
+
+
+def test_keychain_pointer_is_not_a_switch(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    kept = path.read_text()
+    pointer = _pointer("j@x.com")
+    svc.store.replace_secret(svc.resolve("muse", "jay"), pointer)
+    with pytest.raises(VendorError, match="keychain pointer"):
+        svc.switch("muse", "jay")
+    assert path.read_text() == kept
+
+
+def test_pointer_does_not_replace_a_stored_token(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    path.write_text(_pointer("m@x.com"))
+    svc.switch("muse", "jay")
+    assert live_doc(tmp_path)["user_email"] == "j@x.com"
+    assert "access_token" in live_doc(tmp_path)
+    svc.switch("muse", "mis")
+    assert live_doc(tmp_path)["user_email"] == "m@x.com"
+    assert "access_token" in live_doc(tmp_path)
+
+
+def test_dead_pointer_session_is_restored_from_the_stored_token(tmp_path, monkeypatch, runner):
+    svc, _ = muse_switch_world(tmp_path, monkeypatch, runner)
+    path = tmp_path / "cfg" / "muse" / "auth.json"
+    path.write_text(_pointer("j@x.com"))
+    seen = {"n": 0}
+
+    def answer(_call):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return fail("muse usage: not logged in")
+        return ok('{"allowance": null, "reason": "server_sent_no_usage"}')
+
+    runner.on(MUSE, "usage", "--json", result=answer)
+    outcome, _ = svc.switch("muse", "jay")
+    assert outcome.verified and live_doc(tmp_path)["user_email"] == "j@x.com"
+    assert "access_token" in live_doc(tmp_path)
+
+
+def test_register_rejects_a_keychain_pointer(adapter, tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg" / "muse"
+    cfg.mkdir(parents=True)
+    (cfg / "auth.json").write_text(_pointer("j@x.com"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    with pytest.raises(VendorError, match="keychain pointer"):
+        adapter.register("jay", kind="browser")
 
 
 def test_symlinked_login_file_is_refused(tmp_path, monkeypatch, runner):

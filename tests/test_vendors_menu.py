@@ -56,7 +56,7 @@ def test_which_accounts_a_click_can_switch():
     assert not switchable("opencode", True, "anthropic")
     assert not switchable("opencode", None, "anthropic")
     assert switchable("muse", False, None, "browser")
-    assert switchable("muse", None, None, "api-key")
+    assert not switchable("muse", None, None, "api-key")  # `ccswap muse run`, not a login
     assert switchable("kiro", False, None, "login")
     assert not switchable("kiro", False, None, "api-key")  # process-scoped: `kiro run`
     assert not switchable("muse", True, None, "browser")  # already active
@@ -147,6 +147,58 @@ def test_account_rows_keep_each_accounts_own_usage_and_switchability():
         (True, None, None),
         (False, "switch", "c2"),
     ]
+
+
+def test_muse_api_key_accounts_are_not_menu_rows():
+    accounts = [
+        (
+            AccountView(
+                "muse",
+                "mis",
+                "browser",
+                identity={"email": "m@x.com"},
+                active=True,
+            ),
+            UsageResult(
+                UsageState.AVAILABLE,
+                windows=(
+                    UsageWindow("five-hour", "5-hour window", "percent", used_percent=0),
+                ),
+            ),
+        ),
+        (
+            AccountView("muse", "lane-key", "api-key", active=None),
+            UsageResult(UsageState.UNAVAILABLE, "Muse does not report usage for an API-key sign-in"),
+        ),
+    ]
+    section = section_for(
+        ToolSummary("muse", "Muse Code", installed=True, accounts=accounts), None, NOW
+    )
+    labels = [r.label for r in section.accounts]
+    assert len(labels) == 1 and "lane-key" not in labels[0]
+    assert "usage unavailable" not in "\n".join(labels)
+    detail = "\n".join(r.label for r in section.rows if r)
+    assert "lane-key" not in detail
+
+
+def test_a_dead_muse_login_is_not_checked_and_can_be_restored():
+    accounts = [
+        (
+            AccountView(
+                "muse", "mis", "browser", identity={"email": "m@x.com"}, active=True
+            ),
+            UsageResult(UsageState.UNAUTHENTICATED, "Muse has no login"),
+        )
+    ]
+    section = section_for(
+        ToolSummary("muse", "Muse Code", installed=True, accounts=accounts), None, NOW
+    )
+    row = section.accounts[0]
+    assert row.checked is False and row.action == "switch" and row.selector == "mis"
+    assert "sign-in required" in row.label
+    detail = next(r for r in section.rows if r and r.selector == "mis")
+    assert detail.checked is False and detail.action == "switch"
+    assert detail.label.startswith("  ○")
 
 
 def test_loading_section_is_explicit():

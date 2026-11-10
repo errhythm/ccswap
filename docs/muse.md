@@ -34,11 +34,14 @@ Muse's `auth.json`:
    in place.
 2. ccswap refuses if the live login isn't registered, so it is never lost.
 3. The file is written atomically with mode 0600.
-4. The switch is verified by the login's recorded email and by `muse usage` accepting it.
-   If either check fails, the previous login is restored.
+4. ccswap accepts the switch when `muse usage` does not say "not logged in".
+   A stored login that is only a keychain pointer is refused, and a pointer is never
+   saved over a copy that still holds a token. If the check fails, the previous login
+   is restored.
 
-Running Muse sessions keep the old login until restarted. The menu bar, the TUI
-(`3`, then `s`) and `ccswap muse switch <alias>` all use this path.
+Running Muse sessions keep the old login until restarted. The menu bar and the TUI
+switch browser logins on this path. An API key is not a menu row and is not a switch.
+`ccswap muse run <alias>` sets `META_API_KEY` for that child only.
 
 ## Commands
 
@@ -48,8 +51,8 @@ ccswap muse add work --api-key-stdin     # key from stdin (or a hidden prompt on
 ccswap muse add me --browser             # register the current browser login as an alias
 ccswap muse list [--json]
 ccswap muse run work -- exec "run tests" # isolated: META_API_KEY is set for this child only
-ccswap muse switch work --yes            # `muse auth set --api-key-stdin`; replaces Muse's stored credential
-ccswap muse switch me --login            # interactive `muse login` (browser accounts cannot be switched)
+ccswap muse switch work --yes            # stores the key; replaces Muse's credential, including a browser login
+ccswap muse switch me                    # browser login ccswap has a token for
 ccswap muse usage [work] [--refresh] [--json]
 ccswap muse remove work                  # forget the registration + ccswap's copy of the key; Muse untouched
 ```
