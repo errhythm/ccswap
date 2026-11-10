@@ -852,3 +852,16 @@ class TestUsageFromJson:
 
         with pytest.raises(ValueError):
             usage_from_json(usage)
+
+
+def test_scoped_five_hour_window_carries_window_and_no_pace():
+    from claude_swap.json_output import usage_to_json
+
+    usage = {"scoped": [
+        {"name": "Gemini · 5h", "window": "5h", "pct": 90.0, "resets_at": "2027-01-15T13:00:00Z"},
+        {"name": "Gemini · weekly", "window": "weekly", "pct": 90.0,
+         "resets_at": "2027-01-18T08:00:00Z"},
+    ]}
+    out = usage_to_json(usage, fetched_at=1_800_000_000.0)["scoped"]
+    assert out[0]["window"] == "5h" and "expectedPct" not in out[0]
+    assert out[1]["window"] == "weekly" and "expectedPct" in out[1]

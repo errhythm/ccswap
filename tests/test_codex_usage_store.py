@@ -915,3 +915,53 @@ def test_snapshot_at_size_limit_is_accepted(tmp_path):
     content = b'{"schemaVersion":1}'
     path.write_bytes(content.ljust(codex_usage_store._MAX_SNAPSHOT_BYTES, b" "))
     assert codex_usage_store._read_snapshot(path) == {"schemaVersion": 1}
+
+
+def test_list_json_reads_published_usage_without_fetching(saved, monkeypatch):
+    instance, _, _ = saved
+    monkeypatch.setattr(codex, "fetch_codex_usage", lambda *_a, **_kw: _usage())
+    instance.accounts_snapshot()
+    monkeypatch.setattr(codex, "fetch_codex_usage", lambda *_a, **_kw: pytest.fail("fetch"))
+    restarted = codex.CodexAccountSwitcher()
+    payload = restarted.list_payload()
+    assert payload["schemaVersion"] == 1
+    row = payload["accounts"][0]
+    assert row["usageStatus"] == "ok"
+    assert row["usage"]["fiveHour"]["pct"] == 12.5
+    assert row["usage"]["fiveHour"]["resetsAt"] == "2027-01-15T13:00:00Z"
+    assert row["usage"]["weekly"]["pct"] == 42.0
+    assert row["usage"]["credits"] == {"hasCredits": True, "unlimited": False, "balance": 123.5}
+    assert row["usage"]["creditAllowance"]["remaining"] == 450.0
+    assert row["usage"]["resetCredits"] == {"available": 2, "earliestExpiresAt": "2027-01-20T00:00:00Z"}
+    assert row["usageFetchedAt"] == "2027-01-15T08:00:00Z"
+
+
+def test_list_json_moves_old_usage_to_last_good(saved, monkeypatch):
+    instance, _, _ = saved
+    monkeypatch.setattr(codex, "fetch_codex_usage", lambda *_a, **_kw: _usage())
+    instance.accounts_snapshot()
+    monkeypatch.setattr(codex.time, "time", lambda: 1_800_000_000.0 + 3600)
+    row = instance.list_payload()["accounts"][0]
+    assert row["usageStatus"] == "unavailable" and row["usage"] is None
+    assert row["lastGoodUsage"]["fiveHour"]["pct"] == 12.5
+    assert row["lastGoodAgeSeconds"] == 3600
+
+
+def test_list_json_reports_failure_and_ignores_replaced_slot(saved, monkeypatch):
+    instance, _, _ = saved
+
+    def fail(*_args, **_kwargs):
+        raise CodexUsageError("synthetic-secret", status_code=429)
+
+    monkeypatch.setattr(codex, "fetch_codex_usage", fail)
+    instance.accounts_snapshot()
+    row = instance.list_payload()["accounts"][0]
+    assert row["usageStatus"] == "unavailable"
+    assert row["usageError"] == "CodexUsageError"
+    assert "synthetic-secret" not in json.dumps(row)
+
+    data = instance._read_sequence()
+    data["accounts"]["1"]["usageGeneration"] = "another-generation"
+    instance._write_sequence(data)
+    row = instance.list_payload()["accounts"][0]
+    assert row["usageStatus"] == "unavailable" and "usageError" not in row

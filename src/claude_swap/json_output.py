@@ -95,9 +95,15 @@ def _weekly_window_to_json(entry: dict, fetched_at: float | None) -> dict:
 
 
 def _scoped_window_to_json(entry: dict, fetched_at: float | None) -> dict:
-    """Project a per-model scoped weekly window, carrying its model name."""
-    out = _weekly_window_to_json(entry, fetched_at)
+    """Project a scoped window, carrying its name and, for Antigravity, its
+    ``window`` ("5h" or "weekly"). A 5h bucket gets no weekly pace fields."""
+    if entry.get("window") == "5h":
+        out = _window_to_json(entry)
+    else:
+        out = _weekly_window_to_json(entry, fetched_at)
     out["name"] = entry["name"]
+    if "window" in entry:
+        out["window"] = entry["window"]
     return out
 
 
@@ -361,7 +367,11 @@ def account_row(
 ) -> dict:
     """A full account row for ``--list``. ``backoff_until`` is the live
     backoff only; a lapsed one is the caller's to withhold."""
-    status, usage = usage_fields(usage_entry, usage_fetched_at)
+    usage_extra = usage_row_fields(
+        usage_entry, usage_fetched_at=usage_fetched_at, usage_age_s=usage_age_s,
+        last_good_usage=last_good_usage, last_error=last_error,
+        backoff_until=backoff_until,
+    )
     row = {
         "number": number,
         "email": email,
@@ -369,8 +379,8 @@ def account_row(
         "organizationUuid": org_uuid,
         "isOrganization": bool(org_uuid),
         "active": active,
-        "usageStatus": status,
-        "usage": usage,
+        "usageStatus": usage_extra.pop("usageStatus"),
+        "usage": usage_extra.pop("usage"),
     }
     if alias:
         row["alias"] = alias
@@ -383,6 +393,25 @@ def account_row(
     # ``relogin_required`` that follows; absent when the login carries none.
     if login_expires_at:
         row["loginExpiresAt"] = login_expires_at
+    row.update(usage_extra)
+    return row
+
+
+def usage_row_fields(
+    usage_entry: dict | str | None,
+    *,
+    usage_fetched_at: float | None = None,
+    usage_age_s: float | None = None,
+    last_good_usage: dict | None = None,
+    last_error: str | None = None,
+    backoff_until: float | None = None,
+) -> dict:
+    """The usage part of a ``list --json`` row, shared by every provider:
+    ``usageStatus``/``usage`` plus the freshness, last-good and failure
+    fields. ``usage_entry`` is the decision-grade value
+    (``UsageEntry.decision_value()``)."""
+    status, usage = usage_fields(usage_entry, usage_fetched_at)
+    row: dict = {"usageStatus": status, "usage": usage}
     if usage is not None:
         row.update(usage_freshness_fields(usage_fetched_at, usage_age_s))
     else:

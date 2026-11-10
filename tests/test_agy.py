@@ -404,7 +404,12 @@ def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, 
     monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
     cli._agy_command(["list", "--json"])
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["accounts"][0]["usage"]["scoped"]) == 5
+    assert payload["schemaVersion"] == 1
+    row = payload["accounts"][0]
+    assert row["usageStatus"] == "ok" and "usageFetchedAt" in row
+    assert len(row["usage"]["scoped"]) == 5
+    assert row["usage"]["scoped"][1]["window"] == "5h"
+    assert "resets_at" not in row["usage"]["scoped"][1]
     with pytest.raises(SystemExit) as raised:
         cli._agy_command(["switch", "missing", "--json"])
     assert raised.value.code == 1

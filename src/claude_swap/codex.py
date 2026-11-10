@@ -36,12 +36,12 @@ from claude_swap.codex_usage import (
     list_reset_credits,
     refresh_codex_auth,
 )
-from claude_swap.codex_usage_store import remove_usage_locked, write_usage
+from claude_swap.codex_usage_store import read_usage, remove_usage_locked, write_usage
 from claude_swap.exceptions import (
     AccountNotFoundError, ClaudeSwitchError, ConfigError, LockError, SessionError,
     SwitchError, ValidationError,
 )
-from claude_swap.json_output import USAGE_API_KEY
+from claude_swap.json_output import SCHEMA_VERSION, USAGE_API_KEY, usage_row_fields
 from claude_swap.locking import FileLock
 from claude_swap.models import AccountSnapshot, AccountsSnapshot
 from claude_swap.oauth import account_headroom, format_reset
@@ -1174,9 +1174,12 @@ class CodexAccountSwitcher:
         """
         data = self._read_sequence()
         active = self.current_account_number()
+        now = time.time()
         accounts = []
         for number, account in sorted(data["accounts"].items(), key=lambda item: int(item[0])):
             plan = self._account_plan(number, account, active)
+            entry = (UsageEntry(sentinel=USAGE_API_KEY) if account.get("authMode") == "api_key"
+                     else read_usage(self.provider_dir, number, account, now))
             accounts.append(
                 {
                     "number": int(number),
@@ -1187,9 +1190,15 @@ class CodexAccountSwitcher:
                     "active": number == active,
                     "disabled": bool(account.get("disabled")),
                     "session": self._session_status(number),
+                    **usage_row_fields(
+                        entry.decision_value(), usage_fetched_at=entry.fetched_at,
+                        usage_age_s=entry.age_s, last_good_usage=entry.last_good,
+                        last_error=entry.last_error,
+                    ),
                 }
             )
         return {
+            "schemaVersion": SCHEMA_VERSION,
             "provider": "codex",
             "activeAccountNumber": int(active) if active else None,
             "accounts": accounts,
