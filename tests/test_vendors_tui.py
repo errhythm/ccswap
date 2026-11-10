@@ -192,18 +192,59 @@ async def test_muse_page_shows_real_windows_and_reset(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_muse_accounts_each_show_their_own_usage(tmp_path):
+async def test_muse_accounts_each_show_their_own_usage(tmp_path, monkeypatch):
     svc, runner = world(tmp_path)
-    svc.store.add(AccountRecord("muse", "payg", "api-key"), KEY)
+    cfg = tmp_path / "cfg" / "muse"
+    cfg.mkdir(parents=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    (cfg / "auth.json").write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "meta": {
+                        "access_token": "dca:SECRET-TOKEN-VALUE-0123456789",
+                        "api_key": KEY,
+                        "user_email": "j@x.com",
+                    }
+                }
+            }
+        )
+    )
+    svc.add("muse", "jay", kind="browser")
+    svc.add("muse", "payg", kind="api-key", api_key=KEY)
     svc.store.add(AccountRecord("muse", "me", "browser"))
+    own = {
+        "tier": "Muse Code High Usage",
+        "window": {"usedPercent": 2, "resetsAtMs": 4102444800000},
+        "weekly": {"usedPercent": 66, "resetsAtMs": 4103049600000},
+        "asOfMs": 4102400000000,
+    }
+
+    def answer(call):
+        # The linked key is measured from its login file, not by injecting the key.
+        if "XDG_CONFIG_HOME" in call.env:
+            return ok(json.dumps({"allowance": own}))
+        if "META_API_KEY" in call.env:
+            return ok(json.dumps({"allowance": None, "reason": "api_key"}))
+        return ok(json.dumps({"allowance": ALLOWANCE}))
+
+    runner.on(MUSE, "usage", "--json", result=answer)
     app = app_with(tmp_path, svc)
     async with app.run_test(size=(110, 40)) as pilot:
         await goto(pilot, "3")
         rows = {r.view.alias: r for r in app.screen.query(AccountRow)}
-        assert "API-key sign-in" in rows["payg"].usage.reason  # its own key, measured in isolation
+        percents = [window.used_percent for window in rows["payg"].usage.windows]
+        assert percents == [2, 66] and rows["payg"].usage.attributed_to == "payg"
+        assert "jay" in rows["payg"].usage.hint
         assert rows["me"].usage.windows == ()  # never the active credential's numbers
-        payg_call = next(c for c in runner.calls if c.argv[1:2] == ("usage",) and c.env)
-        assert payg_call.env == {"META_API_KEY": KEY}
+        assert [window.used_percent for window in rows["jay"].usage.windows] == [34, 7]
+        payg_call = next(
+            c for c in runner.calls if c.argv[1:2] == ("usage",) and "XDG_CONFIG_HOME" in c.env
+        )
+        assert set(payg_call.env) == {"TBH_CREDENTIAL_BACKEND", "XDG_CONFIG_HOME"}
+        assert payg_call.env["TBH_CREDENTIAL_BACKEND"] == "file"
+        assert payg_call.env.get("META_API_KEY") is None
+        assert KEY not in payg_call.argv
 
 
 @pytest.mark.asyncio
@@ -304,9 +345,13 @@ async def test_dead_muse_login_is_restored_from_the_tui(tmp_path, monkeypatch):
         await goto(pilot, "3")
         row = next(r for r in app.screen.query(AccountRow) if r.view.alias == "mis")
         assert row.view.active is True
-        assert row.usage.state is UsageState.UNAUTHENTICATED
+        # The page's usage read heals the dead pointer from the stored token before drawing.
+        assert row.usage.state is UsageState.UNAVAILABLE
+        assert "no allowance" in row.usage.reason
         label = str(row.query_one(Static).render())
-        assert label.startswith("○") and "sign-in required" in label
+        assert label.startswith("●") and "usage unavailable" in label
+        meta = json.loads(login.read_text())["providers"]["meta"]
+        assert meta["user_email"] == "m@x.com" and meta["access_token"] == "t-m"
         await goto(pilot, "s")
         meta = json.loads(login.read_text())["providers"]["meta"]
         assert meta["user_email"] == "m@x.com" and meta["access_token"] == "t-m"

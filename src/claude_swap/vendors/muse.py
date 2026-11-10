@@ -942,7 +942,9 @@ class MuseAdapter(ToolAdapter):
                 "Only API-key accounts can run in isolation; Muse has a single stored "
                 "browser session. Use `muse` directly or `ccswap muse switch --login`"
             )
-        return LaunchSpec((info.exe, *args), env_overlay={ENV_KEY: secret})
+        return LaunchSpec(
+            (info.exe, *args), env_overlay={ENV_KEY: secret, CREDENTIAL_BACKEND: _FILE_BACKEND}
+        )
 
     def logout(self) -> None:
         info = self.require_installed()

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from pathlib import Path
 
 import pytest
 
@@ -38,6 +39,7 @@ def world(tmp_path):
         f"""
         import json, os, sys
         rec = {{"argv": sys.argv[1:], "key": os.environ.get("META_API_KEY"),
+                "backend": os.environ.get("TBH_CREDENTIAL_BACKEND"),
                 "stdin": None if sys.stdin.isatty() else sys.stdin.read()}}
         open({str(log)!r}, "a").write(json.dumps(rec) + "\\n")
         if sys.argv[1:2] == ["--version"]:
@@ -77,6 +79,23 @@ def calls(log):
 
 def test_end_to_end_add_switch_run_through_real_processes(world):
     env, log = world
+    cfg = Path(env["XDG_CONFIG_HOME"]) / "muse"
+    cfg.mkdir(parents=True)
+    (cfg / "auth.json").write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "meta": {
+                        "access_token": "dca:SECRET-TOKEN-VALUE-0123456789",
+                        "api_key": KEY,
+                        "user_email": "j@x.com",
+                    }
+                }
+            }
+        )
+    )
+    done = ccswap(env, "muse", "add", "jay", "--browser")
+    assert done.returncode == 0, done.stderr
     done = ccswap(env, "muse", "add", "work", "--api-key-stdin", stdin=KEY + "\n")
     assert done.returncode == 0, done.stderr
     assert KEY not in done.stdout + done.stderr
@@ -92,6 +111,7 @@ def test_end_to_end_add_switch_run_through_real_processes(world):
     assert done.returncode == 7  # exit status propagated from the child
     run_call = calls(log)[-1]
     assert run_call["argv"] == ["exec", "hello"] and run_call["key"] == KEY
+    assert run_call["backend"] == "file"
 
     secrets = [
         p for p in (env["HOME"] and __import__("pathlib").Path(env["HOME"]).rglob("*.secret"))

@@ -57,6 +57,49 @@ def run(tool, argv, service, capsys, stdin=None, monkeypatch=None):
     return code, out.out, out.err
 
 
+def _login_file(api_key, email):
+    return json.dumps(
+        {
+            "providers": {
+                "meta": {
+                    "access_token": "dca:SECRET-TOKEN-VALUE-0123456789",
+                    "api_key": api_key,
+                    "user_email": email,
+                }
+            }
+        }
+    )
+
+
+def register_browser_login(service, capsys, monkeypatch, tmp_path, api_key, alias, email):
+    """Register a browser login whose stored copy carries ``api_key``.
+
+    ``muse add --api-key-stdin`` refuses a key that matches no registered login.
+    """
+    cfg = tmp_path / "cfg" / "muse"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "auth.json").write_text(_login_file(api_key, email))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    code, _out, err = run("muse", ["add", alias, "--browser"], service, capsys)
+    assert code == 0, err
+
+
+def add_linked_api_key(service, capsys, monkeypatch, tmp_path, alias, api_key, email, login):
+    """Add an API key after the matching login, then forget the login.
+
+    List order and numeric selectors count every account. The login only has to
+    exist while the key is added, so these tests still see just the key account.
+    """
+    register_browser_login(service, capsys, monkeypatch, tmp_path, api_key, login, email)
+    code, out, err = run(
+        "muse", ["add", alias, "--api-key-stdin"], service, capsys, api_key + "\n", monkeypatch
+    )
+    assert code == 0, err
+    removed, _, remove_err = run("muse", ["remove", login], service, capsys)
+    assert removed == 0, remove_err
+    return code, out, err
+
+
 def test_vendors_json_contract(service, capsys):
     assert vendors_command(["--json"], service) == 0
     doc = json.loads(capsys.readouterr().out)
@@ -93,9 +136,11 @@ def test_capabilities_command(service, capsys):
     assert caps["usage"]["support"] == "unsupported"
 
 
-def test_muse_add_reads_key_from_stdin_and_never_prints_it(service, capsys, monkeypatch, runner):
-    code, out, err = run(
-        "muse", ["add", "work", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch
+def test_muse_add_reads_key_from_stdin_and_never_prints_it(
+    service, capsys, monkeypatch, runner, tmp_path
+):
+    code, out, err = add_linked_api_key(
+        service, capsys, monkeypatch, tmp_path, "work", KEY, "j@x.com", "jay"
     )
     assert code == 0 and KEY not in out + err
     code, out, _ = run("muse", ["list", "--json"], service, capsys)
@@ -103,9 +148,21 @@ def test_muse_add_reads_key_from_stdin_and_never_prints_it(service, capsys, monk
     assert all(KEY not in " ".join(c.argv) for c in runner.calls)
 
 
-def test_muse_switch_end_to_end(service, capsys, monkeypatch, runner):
+def test_muse_add_refuses_an_unlinked_key(service, capsys, monkeypatch, tmp_path):
+    register_browser_login(service, capsys, monkeypatch, tmp_path, KEY, "jay", "j@x.com")
+    other = "mk_other_0123456789abcdef"
+    code, out, err = run(
+        "muse", ["add", "work", "--api-key-stdin"], service, capsys, other + "\n", monkeypatch
+    )
+    assert code == 1
+    assert "not the subscription key of any registered Muse login" in err
+    assert other not in out + err and KEY not in out + err
+    assert [record.alias for record in service.store.records("muse")] == ["jay"]
+
+
+def test_muse_switch_end_to_end(service, capsys, monkeypatch, runner, tmp_path):
     runner.on(MUSE, "auth", "set", result=ok())
-    run("muse", ["add", "work", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch)
+    add_linked_api_key(service, capsys, monkeypatch, tmp_path, "work", KEY, "j@x.com", "jay")
     code, _, err = run("muse", ["switch", "work"], service, capsys)
     assert code == 1 and "--yes" in err
     code, out, _ = run("muse", ["switch", "work", "--yes", "--json"], service, capsys)
@@ -115,17 +172,20 @@ def test_muse_switch_end_to_end(service, capsys, monkeypatch, runner):
     assert runner.calls[-1].input_text == KEY + "\n"
 
 
-def test_muse_run_isolated_env_and_exit_code(service, capsys, monkeypatch, runner):
+def test_muse_run_isolated_env_and_exit_code(service, capsys, monkeypatch, runner, tmp_path):
     runner.on_interactive(MUSE, code=7)
-    run("muse", ["add", "w", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch)
+    add_linked_api_key(service, capsys, monkeypatch, tmp_path, "w", KEY, "j@x.com", "jay")
     code, _, _ = run("muse", ["run", "w", "--", "exec", "hi"], service, capsys)
     assert code == 7
     call = runner.calls[-1]
-    assert call.argv == (MUSE, "exec", "hi") and call.env == {"META_API_KEY": KEY}
+    assert call.argv == (MUSE, "exec", "hi") and call.env == {
+        "META_API_KEY": KEY,
+        "TBH_CREDENTIAL_BACKEND": "file",
+    }
 
 
-def test_remove_leaves_vendor_untouched(service, capsys, monkeypatch, runner):
-    run("muse", ["add", "w", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch)
+def test_remove_leaves_vendor_untouched(service, capsys, monkeypatch, runner, tmp_path):
+    add_linked_api_key(service, capsys, monkeypatch, tmp_path, "w", KEY, "j@x.com", "jay")
     n = len(runner.calls)
     code, out, _ = run("muse", ["remove", "w"], service, capsys)
     assert code == 0 and "not touched" in out
@@ -215,9 +275,9 @@ def test_missing_binary_is_actionable(tmp_path, capsys):
     assert code == 1 and "not installed" in err and "Traceback" not in err
 
 
-def test_ambiguous_and_numeric_selectors(service, capsys, monkeypatch):
-    run("muse", ["add", "Work", "--api-key-stdin"], service, capsys, KEY + "\n", monkeypatch)
-    run("muse", ["add", "play", "--api-key-stdin"], service, capsys, KEY + "x\n", monkeypatch)
+def test_ambiguous_and_numeric_selectors(service, capsys, monkeypatch, tmp_path):
+    add_linked_api_key(service, capsys, monkeypatch, tmp_path, "Work", KEY, "a@x.com", "jay")
+    add_linked_api_key(service, capsys, monkeypatch, tmp_path, "play", KEY + "x", "b@x.com", "lee")
     assert service.resolve("muse", "2").alias == "play"
     assert service.resolve("muse", "work").alias == "Work"
     assert service.resolve("muse", "1").alias == "Work"
@@ -297,3 +357,51 @@ def test_api_key_prompt_is_hidden_on_a_terminal(monkeypatch):
     monkeypatch.setattr(sys, "stdin", Tty(""))
     monkeypatch.setattr(vcli.getpass, "getpass", lambda prompt: "  secret-from-prompt \n")
     assert vcli.read_secret("key: ", from_stdin=True) == "secret-from-prompt"
+
+
+def _check_summary(tool, states, installed=True):
+    from claude_swap.vendors.core import AccountView, UsageResult
+    from claude_swap.vendors.overview import ToolSummary
+
+    summary = ToolSummary(tool, tool, installed=installed)
+    summary.accounts = [
+        (AccountView(tool=tool, alias=f"a{i}", kind="browser", registered=True), UsageResult(state, "why"))
+        for i, state in enumerate(states)
+    ]
+    return summary
+
+
+def test_usage_check_passes_only_when_every_account_has_numbers():
+    from claude_swap.vendors.cli import usage_problems
+    from claude_swap.vendors.core import UsageState
+
+    ok = [_check_summary("kiro", [UsageState.AVAILABLE, UsageState.AVAILABLE])]
+    assert usage_problems(ok, {}) == []
+
+    stale = [_check_summary("kiro", [UsageState.AVAILABLE, UsageState.STALE])]
+    assert usage_problems(stale, {}) == ["kiro: a1: stale: why"]
+
+
+def test_usage_check_requires_one_muse_credential_backend():
+    from claude_swap.vendors.cli import usage_problems
+    from claude_swap.vendors.core import UsageState
+
+    muse = [_check_summary("muse", [UsageState.AVAILABLE])]
+    assert usage_problems(muse, {"TBH_CREDENTIAL_BACKEND": "file"}) == []
+    assert "TBH_CREDENTIAL_BACKEND" in usage_problems(muse, {})[0]
+
+
+def test_usage_check_ignores_tools_that_are_not_installed():
+    from claude_swap.vendors.cli import usage_problems
+    from claude_swap.vendors.core import UsageState
+
+    gone = [_check_summary("muse", [UsageState.ERROR], installed=False)]
+    assert usage_problems(gone, {}) == []
+
+
+def test_run_at_key_without_an_api_key_account_refuses(service, capsys, runner):
+    n = len(runner.calls)
+    code, _, err = run("muse", ["run", "@key", "--", "--version"], service, capsys)
+    assert code != 0
+    assert "refusing to run on the global login" in err
+    assert len(runner.calls) == n

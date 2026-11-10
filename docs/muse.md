@@ -18,10 +18,18 @@ details and evidence: [vendor-compatibility.md](vendor-compatibility.md#muse-cod
   mints, and a new window can be empty (`server_sent_no_usage`); both are shown as
   *unavailable* with the reason, never as 0%. Whether a key is the subscription key or a
   pay-as-you-go key is shown only on dev.meta.ai/api-keys.
-- API-key accounts are measured **one by one** (`META_API_KEY` set for that child only).
-  Browser logins cannot be: Muse stores one login in the macOS Keychain (so even a
-  different `HOME` sees it) and never says whose it is. The tool-level reading is therefore
-  labelled "active credential", and browser aliases show no numbers of their own.
+- Every account is measured **one by one** without touching the live login. A browser
+  login runs `muse usage --json` with its stored copy in a throwaway
+  `XDG_CONFIG_HOME` and `TBH_CREDENTIAL_BACKEND=file`. An API-key account shows the
+  usage of the browser login whose subscription key it is; `ccswap muse add` refuses a
+  key that is not one.
+- Muse picks its credential store from `TBH_CREDENTIAL_BACKEND`. `file` keeps the token
+  in `auth.json`. Unset, Muse uses the macOS Keychain and rewrites `auth.json` into a
+  token-less pointer, which a file-backend Muse then reads as "not logged in". Mixing the
+  two on one Mac is what made the login look dead (2026-11-10: 424 Keychain sessions,
+  all started by tools that never loaded `~/.zshenv`). ccswap pins `file` for every Muse
+  it starts, heals a dead pointer from the matching stored login, and
+  `ccswap usage --check` fails when this environment does not use `file`.
 
 ## Switching browser logins
 

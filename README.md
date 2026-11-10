@@ -48,7 +48,7 @@ Features follow what each product really offers, not a uniform fake:
 | List / status | registered aliases (Muse has no whoami) | provider-aware, from the vendor | active login via `whoami` |
 | Switch | API-key accounts (`muse auth set`); browser sessions: login only | native `auth switch` where the installed version has it (not 1.18.x), verified | interactive logout/login, guarded and verified; API keys are *run*, not switched |
 | Usage | plan, 5-hour and weekly used % with resets (`muse usage --json`) | local tokens and USD estimate per provider/model; provider quotas not reported | plan credits used/limit and reset date (`/usage` via the V2 harness, no credits used) |
-| Per-account usage | API-key accounts; browser login = "active credential" | none (records have no account) | signed-in login; others keep their own last reading, marked stale |
+| Per-account usage | every account, measured in isolation | a provider's sole account | every profile of the signed-in login, measured in isolation |
 | Isolated run | API-key accounts | not possible | API-key accounts |
 | Auto-switch | no | no | no |
 

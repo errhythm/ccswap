@@ -196,7 +196,10 @@ def test_usage_for_api_key_account_does_not_inject_the_key(adapter, runner):
 
 def test_launch_spec_isolates_via_env(adapter):
     spec = adapter.launch_spec(api_record(), KEY, ["exec", "hi"])
-    assert spec.argv == (MUSE, "exec", "hi") and spec.env_overlay == {ENV_KEY: KEY}
+    assert spec.argv == (MUSE, "exec", "hi") and spec.env_overlay == {
+        ENV_KEY: KEY,
+        CREDENTIAL_BACKEND: "file",
+    }
 
 
 def test_launch_spec_rejects_browser(adapter):

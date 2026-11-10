@@ -196,6 +196,8 @@ class VendorService:
         register_options = options
         if getattr(adapter, "uses_account_peers", False):
             register_options = {**options, "peers": self._account_secrets(tool)}
+        if getattr(adapter, "uses_account_context", False):
+            register_options = {**register_options, "context": self.store.records(tool)}
         record, secret = adapter.register(alias, **register_options)  # type: ignore[attr-defined]
         if record.identity:
             for other in self.store.records(tool):
@@ -318,6 +320,10 @@ class VendorService:
                 if getattr(adapter, "uses_account_peers", False):
                     fresh = adapter.usage(  # type: ignore[attr-defined]
                         record, secret, self._account_secrets(tool)
+                    )
+                elif getattr(adapter, "uses_account_context", False):
+                    fresh = adapter.usage(  # type: ignore[attr-defined]
+                        record, secret, context=self.store.records(tool)
                     )
                 else:
                     fresh = adapter.usage(record, secret)  # type: ignore[attr-defined]

@@ -54,10 +54,14 @@ the plan is managed by an organization. Kiro reports a reset *date*, not a time,
 invented. Each probe leaves an empty V2 session behind; ccswap runs it from its own
 `vendors/kiro-probe` directory, so those sessions never show up in your projects.
 
-Only the signed-in login can be measured. ccswap checks `whoami` before and after the probe
-and drops the reading if the login changed in between. kiro-cli 3.1 reports a signed-out
-state as `{"account": null}`, which is shown as "sign-in required". A registered login that isn't active keeps
-showing **its own** last reading, marked stale with its age, and never another account's.
+The signed-in profile is measured directly. ccswap checks `whoami` before and after the
+probe and drops the reading if the login changed in between. Another profile of the same
+login is measured in a throwaway `HOME`: ccswap opens `data.sqlite3` read-only, copies only
+the login rows (`migrations`, `auth_kv` and four `state` keys) into a small new database,
+sets that profile's ARN there and runs the same `/usage`. The live database and the
+selected profile are never changed, and a token that expires within five minutes is
+refreshed by the live probe first. A different login (another email) cannot be measured
+and is refused at `ccswap kiro add`.
 API-key accounts are measured with `KIRO_API_KEY` set for that child only.
 
 ## Why switching is guarded
@@ -81,5 +85,5 @@ same identity (for example a Google and a GitHub login with one email) instead o
 Running `kiro-cli chat` sessions keep their old login until restarted. `KIRO_API_KEY` in the
 environment overrides any login, and ccswap warns when it is set.
 
-Unlike the older `kiro-swap` prototype, ccswap does not copy Kiro's keychain items or edit
-`data.sqlite3`; those are opaque and unsupported.
+Unlike the older `kiro-swap` prototype, ccswap never writes `data.sqlite3` or Kiro's
+keychain items; it only reads the login rows to measure another profile.

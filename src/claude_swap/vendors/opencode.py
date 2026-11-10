@@ -271,6 +271,8 @@ class OpenCodeAdapter(ToolAdapter):
     binary = "opencode"
     docs = "https://opencode.ai/docs/cli/providers"
     kinds = ("provider-account",)
+    # Service passes the stored accounts: a provider's sole account owns its statistics.
+    uses_account_context = True
     # The official install script (opencode.ai/install) uses ~/.opencode/bin.
     install_dirs = ("~/.opencode/bin", "~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin")
 

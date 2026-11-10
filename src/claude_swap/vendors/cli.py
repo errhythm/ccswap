@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -190,7 +191,11 @@ def _parser(tool: str) -> argparse.ArgumentParser:
         run = sub.add_parser(
             "run", help="Run the tool as one account, without changing global login state"
         )
-        run.add_argument("account", metavar="ALIAS|NUM")
+        run.add_argument(
+            "account",
+            metavar="ALIAS|NUM|@key",
+            help="@key: the first registered API-key account (what crew lanes run as)",
+        )
         run.add_argument(
             "args", nargs=argparse.REMAINDER, help="Arguments after `--` go to the tool"
         )
@@ -343,7 +348,15 @@ def _dispatch(tool: str, args, service: VendorService, as_json: bool) -> int:
         return _emit(payload, as_json, human)
     if action == "run":
         extra = args.args[1:] if args.args[:1] == ["--"] else args.args
-        return service.run(tool, args.account, extra)
+        account = args.account
+        if account == "@key":
+            keys = [r.alias for r in service.store.records(tool) if r.kind == "api-key"]
+            if not keys:
+                raise VendorError(
+                    f"No {tool} API-key account is registered; refusing to run on the global login"
+                )
+            account = keys[0]
+        return service.run(tool, account, extra)
     if action == "login":
         return adapter.login(args.provider)  # type: ignore[attr-defined]
     if action == "logout":
@@ -412,6 +425,30 @@ def vendors_command(argv: list[str], service: VendorService | None = None) -> in
 # ---- ccswap usage (all tools) / ccswap claude --------------------------------
 
 
+def usage_problems(summaries, env) -> list[str]:
+    """Why the menu bar could not show every registered account's numbers, if anything.
+
+    An empty list is the install gate's pass.  Muse needs one credential backend for
+    every process: without ``TBH_CREDENTIAL_BACKEND=file`` a Muse started from here
+    rewrites the login into a Keychain pointer that file-backend Muse cannot read.
+    """
+    problems = []
+    for summary in summaries:
+        if not summary.installed:
+            continue
+        backend = env.get("TBH_CREDENTIAL_BACKEND")
+        if summary.tool == "muse" and summary.accounts and backend != "file":
+            problems.append(
+                "muse: TBH_CREDENTIAL_BACKEND is not 'file' in this environment "
+                "(launchctl getenv TBH_CREDENTIAL_BACKEND)"
+            )
+        for view, usage in summary.accounts:
+            if view.registered and usage.state is not UsageState.AVAILABLE:
+                detail = usage.reason or usage.error or usage.state.value
+                problems.append(f"{summary.tool}: {view.alias}: {usage.state.value}: {detail}")
+    return problems
+
+
 def usage_command(argv: list[str], overview=None) -> int:
     """``ccswap usage [TOOL ...] [--json] [--refresh]``: every tool, every account."""
     from claude_swap.vendors.overview import Overview, overview_json, render_summary
@@ -427,15 +464,27 @@ def usage_command(argv: list[str], overview=None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="Machine-readable output")
     parser.add_argument("--refresh", action="store_true", help="Bypass short-lived caches")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Measure every account now and exit 1 if any cannot be shown (install gate)",
+    )
     args = parser.parse_args(argv)
     unknown = [t for t in args.tools if t not in overview.tools()]
     if unknown:
         return _fail(VendorError(f"Unknown tool: {', '.join(unknown)}"), args.json)
     try:
-        summaries = overview.collect(args.tools or None, refresh=args.refresh)
+        summaries = overview.collect(args.tools or None, refresh=args.refresh or args.check)
     except KeyboardInterrupt:
         printer.error("Interrupted.")
         return 130
+    if args.check:
+        problems = usage_problems(summaries, os.environ)
+        for problem in problems:
+            printer.error(problem)
+        if not problems:
+            print(f"ok: every account of {len(summaries)} tools has a usage reading")
+        return 1 if problems else 0
     if args.json:
         print(json.dumps(overview_json(summaries), indent=2))
         return 0
