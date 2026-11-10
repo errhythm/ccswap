@@ -18,8 +18,13 @@ Facts this adapter relies on:
   registered (so the user can get back), never implicitly.
 * ``KIRO_API_KEY`` skips the login flow for that process (headless).  It is
   process-scoped, so API-key accounts are *run* as an account, not switched.
-* There is no verified machine-readable usage interface (``/usage`` is an
-  interactive slash command) and ccswap does not scrape terminals.
+* ``kiro-cli chat --no-interactive --v2 /usage`` answers locally (no model
+  turn) for the profile selected in ``$HOME``'s ``data.sqlite3``.  Another
+  profile of the same login (same email and start URL, different profile ARN)
+  is measured by copying the schema and the login rows into a throwaway
+  ``HOME`` and rewriting only that ARN.  The live file is attached read-only
+  and is never copied whole: it also holds chat history.  A different email
+  has no such path.
 * Agents, steering, MCP servers, skills and sessions are never touched.
 """
 
@@ -30,9 +35,12 @@ import datetime
 import json
 import os
 import re
+import sqlite3
 import time
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from claude_swap.vendors.core import (
     AccountRecord,
@@ -54,8 +62,20 @@ from claude_swap.vendors.core import (
     percent,
     short_detail,
 )
+from claude_swap.vendors.isolation import IsolatedHome
 
 ENV_KEY = "KIRO_API_KEY"
+_TOKEN_KEY = "kirocli:odic:token"
+_PROFILE_STATE_KEY = "api.codewhisperer.profile"
+# Rows an isolated profile needs.  Verified on kiro-cli 3.1.0: /usage then
+# reports that profile, and the live token and live profile stay unchanged.
+_STATE_KEYS = (
+    "auth.idc.region",
+    _PROFILE_STATE_KEY,
+    "profile.Migrated",
+    "migration.kiro.completed",
+)
+_TOKEN_REFRESH_WINDOW = datetime.timedelta(minutes=5)
 _REGION = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-\d$")
 _URL = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?(?:/[A-Za-z0-9._~/%-]*)?$")
 SOCIALS = ("google", "github")
@@ -360,6 +380,98 @@ def pick_profile_in_pty(exe: str, arn: str, timeout: float = 60.0) -> bool | str
     return True if acted else "Kiro's profile picker closed before a profile could be chosen"
 
 
+def _default_live_db() -> Path:
+    """Kiro CLI's own database.  Chat history makes it large; callers attach it read-only."""
+    return Path.home() / "Library/Application Support/kiro-cli/data.sqlite3"
+
+
+def _sqlite_uri(path: Path, mode: str) -> str:
+    return "file:" + quote(str(path), safe="/:") + f"?mode={mode}"
+
+
+def _parse_expires_at(value: object) -> datetime.datetime | None:
+    """``auth_kv`` ``kirocli:odic:token`` stores ``expires_at`` as an ISO-8601 string."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
+
+
+def _token_expires_soon(live: Path, now: datetime.datetime | None = None) -> bool:
+    """True when the live login token expires within five minutes.
+
+    Opening the database read-only does not refresh it.  A near expiry is the
+    signal to run the active profile's ``/usage`` first, which rewrites the
+    token in the live file before the copy.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    con = sqlite3.connect(_sqlite_uri(live, "ro"), uri=True)
+    try:
+        row = con.execute("SELECT value FROM auth_kv WHERE key = ?", (_TOKEN_KEY,)).fetchone()
+    finally:
+        con.close()
+    if not row or row[0] in (None, ""):
+        return False
+    raw = row[0].decode() if isinstance(row[0], bytes) else row[0]
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(doc, dict):
+        return False
+    expiry = _parse_expires_at(doc.get("expires_at"))
+    return expiry is not None and expiry <= now + _TOKEN_REFRESH_WINDOW
+
+
+def _seed_isolated_db(live: Path, dest: Path, arn: str) -> None:
+    """Copy the login rows into ``dest`` and point the profile ARN at ``arn``.
+
+    The live database also holds chat history, so it is attached read-only and
+    only the login tables are copied.  ``state.value`` is a JSON blob;
+    ``json_set`` is the rewrite kiro-cli 3.1.0 honored.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    con = sqlite3.connect(_sqlite_uri(dest, "rwc"), uri=True)
+    try:
+        con.execute("ATTACH DATABASE ? AS src", (_sqlite_uri(live, "ro"),))
+        for (sql,) in con.execute(
+            "SELECT sql FROM src.sqlite_master "
+            "WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
+        ):
+            con.execute(sql)
+        con.execute("INSERT INTO migrations SELECT * FROM src.migrations")
+        con.execute("INSERT INTO auth_kv SELECT * FROM src.auth_kv")
+        placeholders = ",".join("?" * len(_STATE_KEYS))
+        con.execute(
+            f"INSERT INTO state SELECT * FROM src.state WHERE key IN ({placeholders})",
+            _STATE_KEYS,
+        )
+        updated = con.execute(
+            "UPDATE state SET value = json_set(value, '$.arn', ?) WHERE key = ?",
+            (arn, _PROFILE_STATE_KEY),
+        )
+        if updated.rowcount != 1:
+            raise sqlite3.DatabaseError("profile row missing")
+        got = con.execute(
+            "SELECT json_extract(value, '$.arn') FROM state WHERE key = ?",
+            (_PROFILE_STATE_KEY,),
+        ).fetchone()
+        if not got or got[0] != arn:
+            raise sqlite3.DatabaseError("profile ARN was not retargeted")
+        con.commit()
+    finally:
+        con.close()
+    os.chmod(dest, 0o600)
+
+
 class KiroAdapter(ToolAdapter):
     key = "kiro"
     label = "Kiro CLI"
@@ -367,10 +479,14 @@ class KiroAdapter(ToolAdapter):
     docs = "https://kiro.dev/docs/cli/"
     kinds = ("login", "api-key")
 
-    def __init__(self, runner=None, probe_dir=None, profile_picker=None) -> None:
+    def __init__(
+        self, runner=None, probe_dir=None, profile_picker=None, live_db=None, isolated_runner=None
+    ) -> None:
         super().__init__(runner)
         self.probe_dir = probe_dir
         self.profile_picker = profile_picker or pick_profile_in_pty
+        self.live_db = live_db
+        self.isolated_runner = isolated_runner
         self._v2: bool | None = None
 
     def capabilities(self, info: ToolInfo) -> dict[Capability, CapabilityStatus]:
@@ -520,6 +636,7 @@ class KiroAdapter(ToolAdapter):
         device_flow: bool = False,
         profile_arn: str | None = None,
         profile_name: str | None = None,
+        email: str | None = None,
         **_: Any,
     ):
         if kind == "api-key":
@@ -533,6 +650,14 @@ class KiroAdapter(ToolAdapter):
         if not who or not who.get("email"):
             raise VendorError(
                 "Not logged in to Kiro CLI; run `kiro-cli login` first, then `ccswap kiro add`"
+            )
+        supplied = (email or "").strip()
+        if supplied and supplied.lower() != who["email"].lower():
+            raise VendorError(
+                f"Kiro is signed in as {who['email']}, so {supplied} cannot be registered. "
+                "Sign in as that account with `kiro-cli login`, then `ccswap kiro add <alias>`. "
+                "For another profile of the signed-in login, run "
+                "`ccswap kiro add <alias> --profile-arn <arn>`."
             )
         hint: dict[str, str] = {}
         if social:
@@ -667,15 +792,22 @@ class KiroAdapter(ToolAdapter):
             self._v2 = result.ok and "--v2" in help_text(result)
         return self._v2
 
+    def _live_db(self) -> Path:
+        return Path(self.live_db) if self.live_db is not None else _default_live_db()
+
     def usage(self, record: AccountRecord | None, secret: str | None) -> UsageResult:
         """``kiro-cli chat --no-interactive --v2 /usage``: plan credits, bonus credits, reset.
 
         Verified on kiro-cli 3.1.0: the V2 harness answers ``/usage`` locally (no model
         turn; repeated runs leave the credit count unchanged) and exits 0.  Without
         ``--v2`` a V3 engine may forward the text to the model, so a CLI without the
-        flag is never probed.  Kiro measures only the signed-in login (or the
-        ``KIRO_API_KEY`` given to the child), so a registered login that is not active
-        is reported unavailable; the service then shows its last observation as stale.
+        flag is never probed.  The active profile is measured in the live home, and
+        ``whoami`` afterwards must still be that profile.  Another profile of the same
+        login is measured in a throwaway ``HOME`` whose database is the live login rows
+        with that profile's ARN.  When the live token expires within five minutes, the
+        active profile is measured first so the refresh happens in the live database,
+        and the copy follows.  A different email stays unavailable: measuring it would
+        mean logging the live user out.
         """
         info = self.require_installed()
         if not self._supports_v2(info.exe):
@@ -685,35 +817,49 @@ class KiroAdapter(ToolAdapter):
                 "prompt, so ccswap does not run it",
                 hint="Run `kiro-cli chat` and type /usage",
             )
-        env: dict[str, str] | None = None
-        unset: tuple[str, ...] = (ENV_KEY,)
-        current: dict[str, str] | None = None
         if record is not None and record.kind == "api-key":
             if secret is None:
                 return UsageResult(
                     UsageState.ERROR, f"Account '{record.alias}' has no stored API key"
                 )
-            env, unset, who = {ENV_KEY: secret}, (), record.alias
-        else:
-            state, current = self.whoami_state()
-            if state == "out":
-                return UsageResult(UsageState.UNAUTHENTICATED, "Kiro CLI is not logged in")
-            if state == "error" or not current:
-                return UsageResult(UsageState.ERROR, "`kiro-cli whoami` failed; usage not read")
-            if record is not None and not _same_login(record.identity, current):
-                if _same_person(record.identity, current):
-                    reason = (
-                        f"'{record.alias}' is not the active Kiro profile; Kiro reports only the "
-                        f"active profile's credits. `ccswap kiro switch {record.alias} --login` "
-                        "selects it, after which its usage is recorded"
-                    )
-                else:
-                    reason = (
-                        f"'{record.alias}' is not the signed-in Kiro login; Kiro only reports the "
-                        "active login's usage"
-                    )
-                return UsageResult(UsageState.UNAVAILABLE, reason)
-            who = record.alias if record is not None else current.get("email", "active login")
+            return self._read_usage(
+                info, env={ENV_KEY: secret}, unset=(), current=None, who=record.alias, secret=secret
+            )
+        state, current = self.whoami_state()
+        if state == "out":
+            return UsageResult(UsageState.UNAUTHENTICATED, "Kiro CLI is not logged in")
+        if state == "error" or not current:
+            return UsageResult(UsageState.ERROR, "`kiro-cli whoami` failed; usage not read")
+        if record is not None and not _same_login(record.identity, current):
+            if not _same_person(record.identity, current):
+                return UsageResult(
+                    UsageState.UNAVAILABLE,
+                    f"'{record.alias}' is not the signed-in Kiro login; Kiro only reports the "
+                    "active login's usage",
+                )
+            arn = record.identity.get("profileArn", "")
+            if not _PROFILE_ARN.match(arn):
+                return UsageResult(
+                    UsageState.UNAVAILABLE,
+                    f"'{record.alias}' is another profile of this Kiro login, but it has no "
+                    "profile ARN. Re-add it with `ccswap kiro add <alias> --profile-arn <arn>`",
+                )
+            return self._usage_other_profile(info, record, current, arn)
+        who = record.alias if record is not None else current.get("email", "active login")
+        return self._read_usage(
+            info, env=None, unset=(ENV_KEY,), current=current, who=who, secret=secret
+        )
+
+    def _read_usage(
+        self,
+        info,
+        *,
+        env: dict[str, str] | None,
+        unset: tuple[str, ...],
+        current: dict[str, str] | None,
+        who: str,
+        secret: str | None,
+    ) -> UsageResult:
         result = self.runner.run(
             [info.exe, "chat", "--no-interactive", "--v2", "/usage"],
             timeout=40,
@@ -721,31 +867,91 @@ class KiroAdapter(ToolAdapter):
             unset_env=unset,
             cwd=self._probe_dir(),
         )
+        parsed, recognised = self._from_process(result, secret, who)
+        if not recognised or env is not None:
+            return parsed
+        # The probe takes seconds; a login switch in between would make these another
+        # account's numbers.  Only keep them if the same login is still signed in.
+        state_after, after = self.whoami_state()
+        if state_after != "in" or not after or not current or not _same_login(current, after):
+            # Definitive, not transient: the credential changed, so the previous
+            # login's numbers must not stand in for the new one.
+            return UsageResult(
+                UsageState.UNAVAILABLE,
+                "The Kiro login changed during the usage check; not recorded",
+            )
+        identity = {k: v for k, v in after.items() if k in IDENTITY_KEYS}
+        return dataclasses.replace(parsed, identity=identity)
+
+    def _usage_other_profile(
+        self, info, record: AccountRecord, current: dict[str, str], arn: str
+    ) -> UsageResult:
+        live = self._live_db()
+        if not live.is_file():
+            return UsageResult(
+                UsageState.ERROR,
+                "Kiro's login database is missing; run `kiro-cli login` first",
+            )
+        try:
+            refresh = _token_expires_soon(live)
+        except sqlite3.Error:
+            return UsageResult(
+                UsageState.ERROR,
+                "Could not read Kiro's login database; it was left unchanged",
+            )
+        if refresh:
+            # /usage on the active profile rewrites the token in the live database.
+            refreshed = self._read_usage(
+                info,
+                env=None,
+                unset=(ENV_KEY,),
+                current=current,
+                who=current.get("email", "active login"),
+                secret=None,
+            )
+            if refreshed.state in (UsageState.UNAVAILABLE, UsageState.UNAUTHENTICATED):
+                return refreshed
+        runner = self.isolated_runner or self.runner
+        with IsolatedHome("kiro") as home:
+            dest = home / "Library" / "Application Support" / "kiro-cli" / "data.sqlite3"
+            try:
+                _seed_isolated_db(live, dest, arn)
+            except sqlite3.Error:
+                return UsageResult(
+                    UsageState.ERROR,
+                    "Could not prepare an isolated Kiro profile; the live login was left unchanged",
+                )
+            result = runner.run(
+                [info.exe, "chat", "--no-interactive", "--v2", "/usage"],
+                timeout=40,
+                env={"HOME": str(home)},
+                unset_env=(ENV_KEY,),
+                cwd=self._probe_dir(),
+            )
+        parsed, recognised = self._from_process(result, None, record.alias)
+        if not recognised:
+            return parsed
+        return dataclasses.replace(parsed, identity=dict(record.identity))
+
+    def _from_process(self, result, secret: str | None, who: str) -> tuple[UsageResult, bool]:
         secrets = [secret] if secret else []
         text = _ANSI.sub("", f"{result.stdout}\n{result.stderr}")
         if not result.ok:
             if re.search(r"not logged in|log ?in required|please log ?in", text, re.IGNORECASE):
-                return UsageResult(UsageState.UNAUTHENTICATED, "Kiro CLI is not logged in")
-            return UsageResult(
-                UsageState.ERROR, f"Kiro /usage failed: {short_detail(result, secrets)}"
+                return UsageResult(UsageState.UNAUTHENTICATED, "Kiro CLI is not logged in"), False
+            return (
+                UsageResult(
+                    UsageState.ERROR, f"Kiro /usage failed: {short_detail(result, secrets)}"
+                ),
+                False,
             )
         parsed = parse_usage_report(text)
         if parsed is None:
-            return UsageResult(UsageState.ERROR, "Kiro /usage printed an unrecognised report")
-        identity: dict[str, str] = {}
-        if env is None:
-            # The probe takes seconds; a login switch in between would make these another
-            # account's numbers.  Only keep them if the same login is still signed in.
-            state_after, after = self.whoami_state()
-            if state_after != "in" or not after or not current or not _same_login(current, after):
-                # Definitive, not transient: the credential changed, so the previous
-                # login's numbers must not stand in for the new one.
-                return UsageResult(
-                    UsageState.UNAVAILABLE,
-                    "The Kiro login changed during the usage check; not recorded",
-                )
-            identity = {k: v for k, v in after.items() if k in IDENTITY_KEYS}
-        return dataclasses.replace(parsed, attributed_to=who, identity=identity)
+            return (
+                UsageResult(UsageState.ERROR, "Kiro /usage printed an unrecognised report"),
+                False,
+            )
+        return dataclasses.replace(parsed, attributed_to=who), True
 
     def _switch_profile(
         self, exe: str, record: AccountRecord, interactive: bool, warnings: tuple[str, ...]

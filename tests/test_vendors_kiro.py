@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -394,25 +397,80 @@ def test_profile_switch_to_the_wrong_profile_is_reported():
         adapter.switch(b, None, assume_yes=False, interactive=True, context=[b])
 
 
-def test_profile_usage_is_filed_under_the_active_profile_only(tmp_path):
+def _iso_in(minutes: float) -> str:
+    moment = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def seed_kiro_db(path: Path, arn: str, expires_at: str, token: str = "fake-token") -> None:
+    """A small stand-in for Kiro's login tables.  No live database and no real token."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE migrations (
+            id INTEGER PRIMARY KEY,
+            version INTEGER NOT NULL,
+            migration_time INTEGER NOT NULL
+        );
+        CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE state (key TEXT PRIMARY KEY, value BLOB);
+        CREATE TABLE history (id INTEGER PRIMARY KEY, command TEXT);
+        """
+    )
+    con.execute("INSERT INTO migrations VALUES (1, 1, 0)")
+    con.execute(
+        "INSERT INTO auth_kv VALUES ('kirocli:odic:token', ?)",
+        (json.dumps({"expires_at": expires_at, "access_token": token}),),
+    )
+    con.execute(
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', ?)",
+        (
+            json.dumps(
+                {"arn": arn, "profile_name": "P", "device_code_disabled": False}
+            ).encode(),
+        ),
+    )
+    for key, value in (
+        ("auth.idc.region", b'"us-east-1"'),
+        ("profile.Migrated", b"1"),
+        ("migration.kiro.completed", b"1"),
+    ):
+        con.execute("INSERT INTO state VALUES (?, ?)", (key, value))
+    con.execute("INSERT INTO history VALUES (1, 'do-not-copy')")
+    con.commit()
+    con.close()
+
+
+ACTIVE_REPORT = (
+    "Estimated Usage | resets on 2099-12-01 | KIRO PRO+\n"
+    "Credits (100.00 of 2000 covered in plan), 5%\n"
+)
+OTHER_REPORT = (
+    "Estimated Usage | resets on 2099-12-01 | KIRO PRO+\n"
+    "Credits (0.00 of 2000 covered in plan), 0%\n"
+)
+
+
+def test_profile_usage_is_measured_for_each_profile(tmp_path):
     from claude_swap.vendors.registry import ToolRegistry
     from claude_swap.vendors.service import VendorService
     from claude_swap.vendors.store import VendorStore
 
     r, _ = profile_world(ARN_A)
     r.on(KIRO, "chat", "--help", result=ok("--no-interactive --v2"))
-    r.on(
-        KIRO,
-        "chat",
-        "--no-interactive",
-        "--v2",
-        "/usage",
-        result=ok(
-            "Estimated Usage | resets on 2099-12-01 | KIRO PRO+\nCredits (100.00 of 2000 covered in plan), 5%\n"
-        ),
-    )
+
+    def report(call):
+        text = OTHER_REPORT if call.env.get("HOME") else ACTIVE_REPORT
+        return ok(text)
+
+    r.on(KIRO, "chat", "--no-interactive", "--v2", "/usage", result=report)
+    live = tmp_path / "live.sqlite3"
+    seed_kiro_db(live, ARN_A, "2099-01-01T00:00:00.000000Z")
+    before = live.read_bytes()
     reg = ToolRegistry.default(r)
     reg.get("kiro").probe_dir = tmp_path / "probe"
+    reg.get("kiro").live_db = live
     svc = VendorService(reg, VendorStore(tmp_path / "v"))
     a, _ = reg.get("kiro").register("acct-a")
     b, _ = reg.get("kiro").register("acct-b", profile_arn=ARN_B)
@@ -420,7 +478,9 @@ def test_profile_usage_is_filed_under_the_active_profile_only(tmp_path):
     svc.store.add(b)
     assert svc.usage("kiro").attributed_to == "acct-a"
     assert svc.usage("kiro", "acct-a").windows[0].used == 100.0
-    assert svc.usage("kiro", "acct-b").windows == ()  # not the active profile
+    other = svc.usage("kiro", "acct-b")
+    assert other.attributed_to == "acct-b" and other.windows[0].used == 0.0
+    assert live.read_bytes() == before
 
 
 def test_profile_switch_without_a_terminal_uses_kiros_picker_and_verifies():
@@ -445,6 +505,115 @@ def test_picker_refusal_is_reported():
     b, _ = adapter.register("acct-b", profile_arn=ARN_B)
     with pytest.raises(VendorError, match="not offered"):
         adapter.switch(b, None, assume_yes=False, interactive=False, context=[b])
+
+
+def test_inactive_profile_is_measured_in_an_isolated_home(tmp_path):
+    runner, _ = profile_world(ARN_A)
+    runner.on(KIRO, "chat", "--help", result=ok("--no-interactive --v2"))
+    seen = {}
+
+    def probe(call):
+        home = Path(call.env["HOME"])
+        seen["home"] = home
+        seen["unset"] = call.unset_env
+        db = home / "Library/Application Support/kiro-cli/data.sqlite3"
+        con = sqlite3.connect(db)
+        raw = con.execute(
+            "SELECT value FROM state WHERE key = 'api.codewhisperer.profile'"
+        ).fetchone()[0]
+        profile = json.loads(raw)
+        seen["arn"] = profile["arn"]
+        seen["name"] = profile["profile_name"]
+        seen["auth"] = con.execute(
+            "SELECT value FROM auth_kv WHERE key = 'kirocli:odic:token'"
+        ).fetchone()[0]
+        seen["history"] = con.execute("SELECT COUNT(*) FROM history").fetchone()[0]
+        con.close()
+        return ok(OTHER_REPORT)
+
+    isolated = FakeRunner()
+    isolated.on(KIRO, "chat", "--no-interactive", "--v2", "/usage", result=probe)
+    live = tmp_path / "live.sqlite3"
+    seed_kiro_db(live, ARN_A, "2099-01-01T00:00:00.000000Z", token="fake-token")
+    before = live.read_bytes()
+    adapter = KiroAdapter(
+        runner, probe_dir=tmp_path / "probe", live_db=live, isolated_runner=isolated
+    )
+    record = login_rec("acct-b", {**IDC, "profileArn": ARN_B})
+    result = adapter.usage(record, None)
+    assert result.state is UsageState.AVAILABLE
+    assert result.attributed_to == "acct-b"
+    assert result.identity["profileArn"] == ARN_B
+    assert result.identity["email"] == IDC["email"]
+    assert result.windows[0].used == 0.0
+    assert seen["arn"] == ARN_B and seen["name"] == "P"
+    assert json.loads(seen["auth"])["access_token"] == "fake-token"
+    assert seen["history"] == 0
+    assert seen["unset"] == (ENV_KEY,)
+    assert not seen["home"].exists()
+    assert live.read_bytes() == before
+    assert not any("/usage" in call.argv for call in runner.calls)
+
+
+def test_near_expiry_refreshes_the_active_profile_before_copying(tmp_path):
+    runner, _ = profile_world(ARN_A)
+    runner.on(KIRO, "chat", "--help", result=ok("--v2"))
+    seen = {}
+
+    def probe(call):
+        seen.setdefault("order", []).append("home" if call.env.get("HOME") else "live")
+        if call.env.get("HOME"):
+            seen["home"] = Path(call.env["HOME"])
+            db = seen["home"] / "Library/Application Support/kiro-cli/data.sqlite3"
+            con = sqlite3.connect(db)
+            raw = con.execute(
+                "SELECT value FROM state WHERE key = 'api.codewhisperer.profile'"
+            ).fetchone()[0]
+            seen["arn"] = json.loads(raw)["arn"]
+            con.close()
+            return ok(OTHER_REPORT)
+        return ok(ACTIVE_REPORT)
+
+    runner.on(KIRO, "chat", "--no-interactive", "--v2", "/usage", result=probe)
+    live = tmp_path / "live.sqlite3"
+    seed_kiro_db(live, ARN_A, _iso_in(4))
+    before = live.read_bytes()
+    adapter = KiroAdapter(runner, probe_dir=tmp_path / "probe", live_db=live)
+    result = adapter.usage(login_rec("acct-b", {**IDC, "profileArn": ARN_B}), None)
+    assert result.attributed_to == "acct-b" and result.windows[0].used == 0.0
+    assert seen["order"] == ["live", "home"] and seen["arn"] == ARN_B
+    assert not seen["home"].exists()
+    assert live.read_bytes() == before
+
+
+def test_a_different_login_is_not_read_from_the_database(tmp_path):
+    runner, _ = make(IDC)
+    runner.on(KIRO, "chat", "--help", result=ok("--v2"))
+    isolated = FakeRunner()
+    isolated.on(KIRO, "chat", "--no-interactive", "--v2", "/usage", result=ok(OTHER_REPORT))
+    live = tmp_path / "missing.sqlite3"
+    adapter = KiroAdapter(
+        runner, probe_dir=tmp_path / "probe", live_db=live, isolated_runner=isolated
+    )
+    result = adapter.usage(login_rec("b", OTHER), None)
+    assert result.state is UsageState.UNAVAILABLE
+    assert "not the signed-in" in result.reason
+    assert isolated.calls == []
+    assert not live.exists()
+
+
+def test_register_rejects_a_different_email_and_keeps_same_login_profiles():
+    runner, _ = profile_world(ARN_A)
+    adapter = KiroAdapter(runner)
+    with pytest.raises(VendorError, match="kiro-cli login"):
+        adapter.register("other", email="b@corp.com")
+    with pytest.raises(VendorError, match="--profile-arn"):
+        adapter.register("other", email="b@corp.com", profile_arn=ARN_B)
+    same, _ = adapter.register("same", email="A@Corp.com")
+    assert same.identity["email"] == IDC["email"]
+    profile, _ = adapter.register("acct-b", profile_arn=ARN_B)
+    assert profile.identity["email"] == IDC["email"]
+    assert profile.identity["profileArn"] == ARN_B
 
 
 def test_picker_that_lands_elsewhere_is_not_success():
