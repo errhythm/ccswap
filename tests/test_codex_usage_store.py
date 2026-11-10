@@ -737,7 +737,7 @@ def test_new_unknown_error_class_uses_generic_label(saved, label):
 ])
 @pytest.mark.parametrize("field", ["fetchedAt", "attemptedAt"])
 @pytest.mark.parametrize("failure", [False, True])
-def test_invalid_saved_attempt_timestamp_is_missing(saved, timestamp, field, failure):
+def test_invalid_saved_attempt_timestamp_is_missing(saved, monkeypatch, timestamp, field, failure):
     instance, _, _ = saved
     account = instance._read_sequence()["accounts"]["1"]
     codex_usage_store.write_usage(instance, "1", account,
@@ -751,6 +751,7 @@ def test_invalid_saved_attempt_timestamp_is_missing(saved, timestamp, field, fai
     _path(instance).write_text(json.dumps(previous), encoding="utf-8")
 
     attempted_at = 1_800_000_100
+    monkeypatch.setattr(codex_usage_store, "time", SimpleNamespace(time=lambda: attempted_at))
     codex_usage_store.write_usage(
         instance, "1", account,
         UsageEntry() if failure else UsageEntry(last_good={"weekly": {"pct": 10}},
@@ -792,6 +793,82 @@ def test_saved_attempts_within_clock_skew_keep_independent_ordering(saved, offse
                                  UsageEntry(last_good={"weekly": {"pct": 10}},
                                             fetched_at=attempted_at), attempted_at)
     assert _record(instance) == previous
+
+
+@pytest.mark.parametrize("newer_first", [False, True])
+@pytest.mark.parametrize("older_fails", [False, True])
+@pytest.mark.parametrize("newer_fails", [False, True])
+def test_suspended_attempts_keep_ordering_at_publication_time(
+    saved, monkeypatch, newer_first, older_fails, newer_fails,
+):
+    instance, _, _ = saved
+    account = instance._read_sequence()["accounts"]["1"]
+    older_at = 1_800_000_000
+    newer_at = older_at + 86401
+    clock_calls = []
+
+    def publication_clock():
+        contender = FileLock(instance.provider_dir / ".usage.lock", timeout=0)
+        assert not contender.acquire()
+        # Both attempts finish after B starts, one second apart. In the
+        # B-first order its snapshot/error was published just one second ago.
+        now = newer_at + len(clock_calls) + 1
+        clock_calls.append(now)
+        return now
+
+    monkeypatch.setattr(codex_usage_store, "time", SimpleNamespace(time=publication_clock))
+    attempts = [
+        (older_at, 10, TimeoutError("older failure") if older_fails else None),
+        (newer_at, 20, CodexUsageError("newer failure") if newer_fails else None),
+    ]
+    for attempted_at, percent, error in (reversed(attempts) if newer_first else attempts):
+        entry = (UsageEntry() if error else
+                 UsageEntry(last_good={"weekly": {"pct": percent}}, fetched_at=attempted_at))
+        codex_usage_store.write_usage(instance, "1", account, entry, attempted_at, error)
+
+    assert clock_calls == [newer_at + 1, newer_at + 2]
+    record = _record(instance)
+    expected_at = newer_at if not newer_fails else (None if older_fails else older_at)
+    assert record["fetchedAt"] == expected_at
+    assert record["windows"] == ({} if expected_at is None else {
+        "weekly": {"usedPercent": 20 if not newer_fails else 10, "windowMinutes": 10080},
+    })
+    assert record["lastError"] == ({
+        "class": "CodexUsageError", "attemptedAt": newer_at,
+    } if newer_fails else None)
+
+
+@pytest.mark.parametrize("timestamp", [1e300, 1_800_000_000 + 86401])
+@pytest.mark.parametrize("field", ["fetchedAt", "attemptedAt", "entry"])
+def test_future_timestamps_are_filtered_against_publication_clock(
+    saved, monkeypatch, timestamp, field,
+):
+    instance, _, _ = saved
+    account = instance._read_sequence()["accounts"]["1"]
+    published_at = 1_800_000_000
+    monkeypatch.setattr(codex_usage_store, "time", SimpleNamespace(time=lambda: published_at))
+    codex_usage_store.write_usage(instance, "1", account,
+                                 UsageEntry(last_good=_usage(), fetched_at=published_at),
+                                 published_at)
+    previous = _record(instance)
+    if field == "fetchedAt":
+        previous["fetchedAt"] = timestamp
+    elif field == "attemptedAt":
+        previous["lastError"] = {"class": "TimeoutError", "attemptedAt": timestamp}
+    _path(instance).write_text(json.dumps(previous), encoding="utf-8")
+
+    # An attempt timestamp ahead of the publication clock must not widen
+    # the plausibility cutoff for either saved data or the incoming entry.
+    codex_usage_store.write_usage(
+        instance, "1", account,
+        UsageEntry(last_good={"weekly": {"pct": 99}},
+                   fetched_at=timestamp if field == "entry" else None),
+        published_at + 1,
+    )
+    record = _record(instance)
+    assert record["fetchedAt"] == (None if field == "fetchedAt" else published_at)
+    assert record["windows"] == ({} if field == "fetchedAt" else previous["windows"])
+    assert record["lastError"] is None
 
 
 @pytest.mark.parametrize("timestamp, expected", [
