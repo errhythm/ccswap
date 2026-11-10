@@ -29,6 +29,48 @@ Banked resets show a countdown and the earliest expiry in this machine's local t
 
 Codex must use its documented file credential store. If your `~/.codex/config.toml` says `cli_auth_credentials_store = "keyring"`, change it to `"file"`, run `codex login`, then add the account. This deliberate restriction avoids writing a guessed OS-keyring entry.
 
+## Usage snapshots on disk
+
+After a Codex quota fetch, ccswap saves a sanitized snapshot to `<backup>/codex/usage-N.json`, where `N` is the saved account number. This follows Antigravity's per-slot `usage-N.json` convention and keeps the file beside Codex's `sequence.json`. A dashboard that only reads files can read these snapshots without opening credentials or calling an API. See [storage locations](how-it-works.md#where-ccswap-stores-data) for `<backup>` on each platform.
+
+Each file has `schemaVersion: 1`, `number`, `email` and `planType` (the labels already saved in `codex/sequence.json`), and these measurement fields:
+
+| Field | Contents |
+|-------|----------|
+| `fetchedAt` | Unix seconds at the start of the last successful fetch, or `null` before any success. |
+| `windows` | Available `weekly` and `fiveHour` objects with `usedPercent`, `windowMinutes` and optional `resetsAt` (UTC ISO 8601). Durations are 10080 and 300 minutes, following the client's existing window classification and legacy fallback when the API omits durations. |
+| `credits` | Available `hasCredits`, `unlimited` and numeric `balance` fields, or `null`. |
+| `allowance` | Available `remaining`, `limit` and `resetsAt` fields, or `null`. |
+| `bankedResets` | Available `count` and `earliestExpiry` (UTC ISO 8601) fields, or `null`. |
+| `lastError` | The newest failed attempt newer than the retained successful attempt, otherwise `null`. Success wins at equal timestamps. For example, `{ "class": "CodexUsageError", "attemptedAt": 1800000061.0 }`, with Unix seconds for the failed attempt. Class labels use an explicit allowlist with `Exception` as the fallback; no exception message is saved. |
+
+Example with fake values:
+
+```json
+{
+  "schemaVersion": 1,
+  "number": 1,
+  "slotGeneration": "ab0499b9574c455bb9584160a8419386",
+  "email": "one@example.com",
+  "planType": "plus",
+  "fetchedAt": 1800000000.0,
+  "windows": {
+    "weekly": { "usedPercent": 42.0, "windowMinutes": 10080, "resetsAt": "2027-01-22T08:00:00Z" },
+    "fiveHour": { "usedPercent": 12.5, "windowMinutes": 300, "resetsAt": "2027-01-15T13:00:00Z" }
+  },
+  "credits": { "hasCredits": true, "unlimited": false, "balance": 123.5 },
+  "allowance": { "remaining": 450.0, "limit": 500.0, "resetsAt": "2027-02-01T00:00:00Z" },
+  "bankedResets": { "count": 2, "earliestExpiry": "2027-01-20T00:00:00Z" },
+  "lastError": null
+}
+```
+
+Failed attempts retain the last good generation-matched disk measurement and its `fetchedAt`, including across process restarts. A first failure has empty `windows` and null measurement fields. Skipped polls and in-memory cache hits do not rewrite the file. Readers must check `fetchedAt` and `lastError`; an old snapshot is not proof that quota is still available. API-key accounts do not produce quota snapshots.
+
+Publication uses atomic replacement, the existing private cache-file permissions (`0600` on POSIX), and a separate `codex/.usage.lock`. A busy lock or disk error leaves quota collection usable and may leave the file unchanged. Replacing or removing an account invalidates its snapshot under that lock before changing the saved login. If the cache lock or cleanup fails, the account remains intact for retry. Each saved slot has a random, non-secret `slotGeneration`; replacement changes it even for the same email and workspace. Existing slots receive a generation before their first quota fetch. Successful measurements and attempt errors are ordered independently, so a later failure retains any earlier successful measurement that finishes afterward. Snapshots include roster email and plan labels, but no tokens, raw JWT claim objects or additional claim fields, account IDs, cookies or raw API responses.
+
+The TUI, list, usage and auto-switch paths still serve from the in-memory cache with the existing `SERVE_TTL_S` rules; startup does not load these files into that cache. Usage checks before and after explicit reset redemption also publish snapshots. The command's `--json` output is unchanged.
+
 ## Session mode (`codex run`)
 
 Run a saved ChatGPT account in this terminal with a persistent, private `CODEX_HOME` per account. Your shell environment and default `auth.json` stay unchanged. Different accounts can run at the same time. Selecting the actual default login runs plain Codex with an isolation notice; `--require-session` refuses that shortcut. With no identifier, the current default must be a managed account. Disabled accounts cannot launch.

@@ -53,6 +53,8 @@ Weekly windows (`sevenDay` and per-model `scoped` entries — never `fiveHour`) 
 
 `ccswap auto --json` emits an event *stream* instead — one JSON object per line (`{"schemaVersion":1,"event":"switch","ts":…, …}` with kinds like `poll`, `switch`, `no-switch`, `account-quarantined`, `all-exhausted`, `error`). The contract is additive: new kinds and fields may appear, so scripts should ignore unknown ones.
 
+File-only quota consumers can read [`<backup>/codex/usage-N.json`](codex.md#usage-snapshots-on-disk), a separate, sanitized snapshot with its own `schemaVersion: 1`. It records last-good measurements and safe failure metadata without credentials. This does not change Codex command `--json` payloads or their in-memory cache behavior.
+
 ## Codex session fields
 
 Codex list account rows carry an additive `session` object. This is preserved both in the bare `ccswap codex list --json` / `ccswap list --provider codex --json` payload and under `codex.accounts` in the merged list. `ccswap codex status --json` adds a `sessions` array of `{ "number": N, "session": ... }` for every saved slot, including slots without a session home. Existing active-account fields keep describing the default login.

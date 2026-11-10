@@ -36,6 +36,7 @@ from claude_swap.codex_usage import (
     list_reset_credits,
     refresh_codex_auth,
 )
+from claude_swap.codex_usage_store import remove_usage_locked, write_usage
 from claude_swap.exceptions import (
     AccountNotFoundError, ClaudeSwitchError, ConfigError, LockError, SessionError,
     SwitchError, ValidationError,
@@ -198,6 +199,28 @@ class CodexAccountSwitcher:
     def _write_sequence(self, data: dict[str, Any]) -> None:
         data["lastUpdated"] = _timestamp()
         self._write_json(self.sequence_file, data)
+
+    def _usage_sequence(self) -> dict[str, Any]:
+        """Assign legacy slots a non-secret generation before capturing usage."""
+        data = self._read_sequence()
+        if all(account.get("usageGeneration") for account in data["accounts"].values()):
+            return data
+        try:
+            with FileLock(self.lock_file):
+                with FileLock(self.provider_dir / ".usage.lock"):
+                    data = self._read_sequence()
+                    changed = False
+                    for number, account in data["accounts"].items():
+                        if not account.get("usageGeneration"):
+                            remove_usage_locked(self.provider_dir, number)
+                            account["usageGeneration"] = uuid.uuid4().hex
+                            changed = True
+                    if changed:
+                        self._write_sequence(data)
+                    return data
+        except (OSError, LockError, ConfigError):
+            # Usage remains available when cache initialization cannot commit.
+            return self._read_sequence()
 
     def _config(self) -> dict[str, Any]:
         config_path = self.codex_home / "config.toml"
@@ -493,7 +516,7 @@ class CodexAccountSwitcher:
         live_auth = self._read_live_auth()
         email, account_id, mode = self._identity_from_auth(live_auth)
         plan_type = _plan_type_from_auth(live_auth)
-        with FileLock(self.lock_file):
+        with FileLock(self.lock_file), FileLock(self.provider_dir / ".usage.lock"):
             self._setup_directories()
             if self._read_live_auth() != live_auth:
                 raise SwitchError("Codex login changed; retry")
@@ -549,6 +572,7 @@ class CodexAccountSwitcher:
                     return
                 if self._read_live_auth() != live_auth:
                     raise SwitchError("Codex login changed; retry")
+                remove_usage_locked(self.provider_dir, number)
                 replace_session_credentials(self, number, live_auth, "replacement")
             else:
                 if occupant and number != existing and not assume_yes:
@@ -558,6 +582,7 @@ class CodexAccountSwitcher:
                         return
                 if self._read_live_auth() != live_auth:
                     raise SwitchError("Codex login changed; retry")
+                remove_usage_locked(self.provider_dir, number)
                 self._write_json(self._credential_path(number), live_auth)
             data["accounts"][number] = {
                 "email": email,
@@ -565,13 +590,15 @@ class CodexAccountSwitcher:
                 "authMode": mode,
                 "planType": plan_type,
                 "added": _timestamp(),
+                "usageGeneration": uuid.uuid4().hex,
             }
             data["activeAccountNumber"] = int(number)
             self._write_sequence(data)
+            self._usage_cache.pop(number, None)
         print(f"Added Codex Account {number}: {email}")
 
     def remove_account(self, identifier: str, assume_yes: bool = False) -> None:
-        with FileLock(self.lock_file):
+        with FileLock(self.lock_file), FileLock(self.provider_dir / ".usage.lock"):
             data = self._read_sequence()
             number = self._resolve(identifier, data)
             account = data["accounts"][number]
@@ -593,11 +620,13 @@ class CodexAccountSwitcher:
                 raise SwitchError("Codex session state changed during removal; retry")
             self._guard_session_slot(number)
             home = slot_home(self, number) if before[0] is not None else None
+            remove_usage_locked(self.provider_dir, number)
             del data["accounts"][number]
             if data.get("activeAccountNumber") == int(number):
                 data["activeAccountNumber"] = None
             self._write_sequence(data)
             self._credential_path(number).unlink(missing_ok=True)
+            self._usage_cache.pop(number, None)
         print(f"Removed Codex Account {number} ({account['email']})")
         if home is not None:
             print(f"Session home kept at {home}")
@@ -1279,7 +1308,7 @@ class CodexAccountSwitcher:
             raise SwitchError("--json requires --yes")
         if not assume_yes and not sys.stdin.isatty():
             raise SwitchError("Non-interactive reset redemption requires --yes")
-        data = self._read_sequence()
+        data = self._usage_sequence()
         number = self._resolve(identifier, data)
         record = data["accounts"][number]
         try:
@@ -1349,16 +1378,24 @@ class CodexAccountSwitcher:
 
     def _fetch_redeem_usage(self, number: str) -> dict[str, Any]:
         """Fetch fresh usage with one inactive-account 401 recovery."""
+        account = self._usage_sequence()["accounts"].get(number)
         auth, active = self._redeem_auth(number)
+        now = time.time()
         try:
-            return fetch_codex_usage(auth, base_url=self._chatgpt_base_url())
-        except CodexUsageError as exc:
-            if exc.status_code != 401 or active:
-                raise
-            refreshed = self._refresh_inactive_auth(number, auth)
-            if refreshed is None:
-                raise
-            return fetch_codex_usage(refreshed, base_url=self._chatgpt_base_url())
+            try:
+                usage = fetch_codex_usage(auth, base_url=self._chatgpt_base_url())
+            except CodexUsageError as exc:
+                if exc.status_code != 401 or active:
+                    raise
+                refreshed = self._refresh_inactive_auth(number, auth)
+                if refreshed is None:
+                    raise
+                usage = fetch_codex_usage(refreshed, base_url=self._chatgpt_base_url())
+        except (CodexUsageError, ClaudeSwitchError, OSError, http.client.HTTPException) as exc:
+            write_usage(self, number, account, UsageEntry(), now, exc)
+            raise
+        write_usage(self, number, account, UsageEntry(last_good=usage, fetched_at=now), now)
+        return usage
 
     @staticmethod
     def _print_redeem_usage(usage: dict[str, Any]) -> None:
@@ -1461,7 +1498,7 @@ class CodexAccountSwitcher:
             )
 
     def accounts_snapshot(self, fetch: set[str] | None = None) -> AccountsSnapshot:
-        data = self._read_sequence()
+        data = self._usage_sequence()
         active = self.current_account_number()
         now = time.time()
         eligible = set(data["accounts"]) if fetch is None else fetch
@@ -1487,7 +1524,7 @@ class CodexAccountSwitcher:
             auth = effective[number]["auth"]
             entry = self._usage_entry(
                 number, auth, number in eligible, now, is_active=number == active,
-                effective=effective[number]
+                effective=effective[number], account=account,
             )
             entries[number] = entry
             # Prefer the live token's plan; fall back to what was stored at add
@@ -1522,14 +1559,16 @@ class CodexAccountSwitcher:
         *,
         is_active: bool,
         effective: dict[str, Any] | None = None,
+        account: dict[str, Any] | None = None,
     ) -> UsageEntry:
         """Return a cached or freshly fetched Codex rate-limit measurement.
 
         SnapshotSource controls ``eligible`` so the TUI never polls every
-        account on each redraw.  The cache intentionally stays in memory: it
-        contains only read-only quota measurements and is discarded when the
-        process exits instead of creating another credential-adjacent file.
+        account on each redraw. Serving stays in memory; each actual attempt
+        also publishes a sanitized snapshot for consumers that only read files.
         """
+        if account is None:
+            account = self._usage_sequence()["accounts"].get(number)
         if effective is None:
             with FileLock(self.lock_file):
                 effective = self._effective_account_auth(number, allow_refresh=True)
@@ -1545,34 +1584,43 @@ class CodexAccountSwitcher:
         elif not eligible or (previous is not None and previous.fresh(now, SERVE_TTL_S)):
             entry = previous or UsageEntry()
         else:
+            error = None
             try:
-                usage = fetch_codex_usage(auth, base_url=effective["base_url"])
-            except CodexUsageError as exc:
-                # A saved inactive account has no running Codex process to
-                # rotate it. Mirror Codex's own 401-recovery flow: rotate the
-                # refresh token, save the whole auth document, then retry the
-                # usage request. Never do this for the active account — Codex
-                # owns that file and may be refreshing it concurrently.
-                if exc.status_code == 401 and effective["refresh"]:
-                    try:
-                        refreshed_auth = self._refresh_inactive_auth(number, auth)
-                        if refreshed_auth is not None:
-                            usage = fetch_codex_usage(
-                                refreshed_auth, base_url=effective["base_url"]
-                            )
+                try:
+                    usage = fetch_codex_usage(auth, base_url=effective["base_url"])
+                except CodexUsageError as exc:
+                    # A saved inactive account has no running Codex process to
+                    # rotate it. Mirror Codex's own 401-recovery flow: rotate the
+                    # refresh token, save the whole auth document, then retry the
+                    # usage request. Never do this for the active account — Codex
+                    # owns that file and may be refreshing it concurrently.
+                    if exc.status_code == 401 and effective["refresh"]:
+                        try:
+                            refreshed_auth = self._refresh_inactive_auth(number, auth)
+                            if refreshed_auth is not None:
+                                usage = fetch_codex_usage(
+                                    refreshed_auth, base_url=effective["base_url"]
+                                )
+                            else:
+                                raise exc
+                        except (CodexUsageError, ConfigError, SwitchError, SessionError,
+                                OSError) as refresh_exc:
+                            error = refresh_exc
+                            entry = self._usage_failure_entry(previous, refresh_exc)
                         else:
-                            raise exc
-                    except (CodexUsageError, ConfigError, SwitchError, SessionError,
-                            OSError) as refresh_exc:
-                        entry = self._usage_failure_entry(previous, refresh_exc)
+                            entry = UsageEntry(last_good=usage, fetched_at=now)
                     else:
-                        entry = UsageEntry(last_good=usage, fetched_at=now)
-                else:
+                        error = exc
+                        entry = self._usage_failure_entry(previous, exc)
+                except ConfigError as exc:
+                    error = exc
                     entry = self._usage_failure_entry(previous, exc)
-            except ConfigError as exc:
-                entry = self._usage_failure_entry(previous, exc)
-            else:
-                entry = UsageEntry(last_good=usage, fetched_at=now)
+                else:
+                    entry = UsageEntry(last_good=usage, fetched_at=now)
+            except http.client.HTTPException as exc:
+                write_usage(self, number, account, UsageEntry(), now, exc)
+                raise
+            write_usage(self, number, account, entry, now, error)
         if entry.fetched_at is not None:
             entry = replace(entry, age_s=max(0.0, now - entry.fetched_at))
         self._usage_cache[number] = entry
