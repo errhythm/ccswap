@@ -1353,6 +1353,16 @@ def _menubar_service(args) -> int:
         from claude_swap.menubar import framework_build_warning
 
         unsupported = framework_build_warning()
+        from claude_swap.vendors.cli import usage_problems
+        from claude_swap.vendors.overview import Overview
+
+        # Fail here, not on the menu bar: every account must have a reading first.
+        problems = usage_problems(Overview().collect(None, refresh=True), os.environ)
+        if problems:
+            for problem in problems:
+                printer.error(problem)
+            printer.error("Menu bar service not installed: fix the accounts above first.")
+            sys.exit(1)
         result = launch_agent.install()
         print(f"Menu bar service installed ({result['label']}).")
         print(f"  plist: {result['plist']}")

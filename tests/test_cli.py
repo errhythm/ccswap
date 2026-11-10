@@ -506,6 +506,10 @@ class TestCLI:
         monkeypatch.setattr(sys, "argv", argv)
         monkeypatch.setattr(sys, "platform", "darwin")
         monkeypatch.setattr("claude_swap.menubar.run", _fake_menubar, raising=False)
+        monkeypatch.setattr("claude_swap.vendors.overview.Overview.collect", lambda *a, **k: [])
+        monkeypatch.setattr(
+            "claude_swap.vendors.cli.usage_problems", lambda *a: seen.get("problems", [])
+        )
         monkeypatch.setattr(cli.os, "geteuid", lambda: 1000, raising=False)
         monkeypatch.setattr(
             "claude_swap.launch_agent.install",
@@ -551,6 +555,17 @@ class TestCLI:
         # The service flags must not also start a foreground menu bar.
         assert seen["menubar_ran"] is False
         assert "installed" in capsys.readouterr().out
+
+    def test_install_service_refuses_while_an_account_has_no_reading(self, monkeypatch, capsys):
+        seen = self._service_harness(monkeypatch, ["cswap", "menubar", "--install-service"])
+        seen["problems"] = ["muse: jay: unavailable: no stored token"]
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 1
+        assert "called" not in seen
+        assert "muse: jay: unavailable" in capsys.readouterr().err
 
     def test_install_service_warns_when_the_interpreter_draws_nothing(
         self, monkeypatch, capsys
