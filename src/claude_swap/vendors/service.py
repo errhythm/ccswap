@@ -193,7 +193,10 @@ class VendorService:
         self._need(adapter, RegistrationCapability, Capability.REGISTRATION, "account registration")
         validate_alias(alias)
         adapter.require_installed()
-        record, secret = adapter.register(alias, **options)  # type: ignore[attr-defined]
+        register_options = options
+        if getattr(adapter, "uses_account_peers", False):
+            register_options = {**options, "peers": self._account_secrets(tool)}
+        record, secret = adapter.register(alias, **register_options)  # type: ignore[attr-defined]
         if record.identity:
             for other in self.store.records(tool):
                 if (other.kind, other.provider, dict(other.identity)) == (
@@ -311,7 +314,14 @@ class VendorService:
                         ),
                     )
             try:
-                fresh = adapter.usage(record, self._secret(record) if record else None)  # type: ignore[attr-defined]
+                secret = self._secret(record) if record else None
+                if getattr(adapter, "uses_account_peers", False):
+                    fresh = adapter.usage(  # type: ignore[attr-defined]
+                        record, secret, self._account_secrets(tool)
+                    )
+                else:
+                    fresh = adapter.usage(record, secret)  # type: ignore[attr-defined]
+                self._keep_vendor_updates(tool, fresh)
             except ClaudeSwitchError as exc:
                 fresh = UsageResult(UsageState.ERROR, str(exc))
             try:
@@ -326,6 +336,63 @@ class VendorService:
             return result
         finally:
             lock.release()
+
+    def _account_secrets(self, tool: str) -> list[tuple[AccountRecord, str | None]]:
+        """Each registered account with its stored secret, or None when that copy is missing.
+
+        A missing copy cannot link a key or heal a pointer. The account that owns it
+        still fails when it is the one being asked.
+        """
+        found: list[tuple[AccountRecord, str | None]] = []
+        for record in self.store.records(tool):
+            secret = None
+            if record.secret_ref:
+                try:
+                    secret = self.store.read_secret(record)
+                except VendorError:
+                    secret = None
+            found.append((record, secret))
+        return found
+
+    def _keep_vendor_updates(self, tool: str, fresh: UsageResult) -> None:
+        """Store a login Muse refreshed during an isolated probe, and a lazy API-key link."""
+        saved = getattr(fresh, "saved_login", None)
+        if (
+            isinstance(saved, tuple)
+            and len(saved) == 2
+            and isinstance(saved[0], str)
+            and isinstance(saved[1], str)
+            and saved[1]
+        ):
+            self._replace_named_secret(tool, saved[0], saved[1])
+        linked = getattr(fresh, "linked_login", None)
+        if (
+            isinstance(linked, tuple)
+            and len(linked) == 2
+            and isinstance(linked[0], str)
+            and isinstance(linked[1], str)
+            and linked[1]
+        ):
+            self._persist_identity(tool, linked[0], {"login": linked[1]})
+
+    def _replace_named_secret(self, tool: str, alias: str, secret: str) -> None:
+        owner = next(
+            (r for r in self.store.records(tool) if r.alias == alias and r.secret_ref), None
+        )
+        if owner is not None:
+            self.store.replace_secret(owner, secret)
+
+    def _persist_identity(self, tool: str, alias: str, identity: dict[str, str]) -> None:
+        """Write ``identity`` onto an existing account. The store has no identity updater."""
+        store = self.store
+        with store._lock():
+            doc = store._read()
+            entry = store._tool(doc, tool)
+            for raw in entry.get("accounts", []):
+                if isinstance(raw, dict) and raw.get("alias") == alias:
+                    raw["identity"] = {str(k): str(v) for k, v in identity.items()}
+                    store._write(doc)
+                    return
 
     def _save_back(self, adapter: ToolAdapter, tool: str, records: list[AccountRecord]) -> None:
         """Before a switch, store the live login under its registered account (tools that
