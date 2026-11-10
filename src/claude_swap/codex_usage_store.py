@@ -16,6 +16,14 @@ if TYPE_CHECKING:
     from claude_swap.usage_store import UsageEntry
 
 
+# Snapshots are normally about 0.5 KiB; bound I/O while holding .usage.lock.
+_MAX_SNAPSHOT_BYTES = 64 * 1024
+# Unix seconds from 1970 through year 9999 (exclusive upper bound).
+_UNIX_TIME_LIMIT = 253_402_300_800
+# Tolerate one day of clock skew when ordering saved fetch/error attempts.
+_CLOCK_SKEW_S = 24 * 60 * 60
+
+
 _ERROR_CLASSES = frozenset({
     "CodexUsageError", "ClaudeSwitchError", "ConfigError", "SwitchError", "SessionError",
     "LockError", "AccountNotFoundError", "CredentialError", "CredentialReadError",
@@ -35,10 +43,23 @@ def _error_class(value: object) -> str:
 def _read_snapshot(path: Path) -> dict[str, Any]:
     """Treat malformed optional cache files as missing, including parser limits."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb", buffering=0) as stream:
+            raw = stream.read(_MAX_SNAPSHOT_BYTES + 1)
+        if len(raw) > _MAX_SNAPSHOT_BYTES:
+            return {}
+        data = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _attempt_timestamp(value: object, attempted_at: float) -> float | None:
+    """Reject invalid or implausibly future timestamps before ordering attempts."""
+    number = _number(value)
+    if (number is not None and 0 <= number < _UNIX_TIME_LIMIT
+            and number <= attempted_at + _CLOCK_SKEW_S):
+        return number
+    return None
 
 
 def _boolean(value: object) -> bool | None:
@@ -62,11 +83,14 @@ def _fields(value: object, fields: dict[str, Any]) -> dict[str, Any] | None:
     return {key: value for key, value in result.items() if value is not None} or None
 
 
-def _measurement(record: dict[str, Any]) -> dict[str, Any]:
+def _measurement(record: dict[str, Any], attempted_at: float) -> dict[str, Any]:
+    fetched_at = _attempt_timestamp(record.get("fetchedAt"), attempted_at)
+    if fetched_at is None:
+        record = {}
     windows = record.get("windows")
     windows = windows if isinstance(windows, dict) else {}
     return {
-        "fetchedAt": _number(record.get("fetchedAt")),
+        "fetchedAt": fetched_at,
         "windows": {
             name: window for name in ("weekly", "fiveHour")
             if (window := _fields(windows.get(name), {
@@ -92,7 +116,7 @@ def _renamed(value: object, fields: dict[str, str]) -> dict[str, Any]:
     return {target: value.get(source) for source, target in fields.items()}
 
 
-def _snapshot(entry: UsageEntry) -> dict[str, Any]:
+def _snapshot(entry: UsageEntry, attempted_at: float) -> dict[str, Any]:
     usage = entry.last_good or {}
     windows = {}
     # Use the client's duration classification, including its legacy fallback
@@ -114,7 +138,7 @@ def _snapshot(entry: UsageEntry) -> dict[str, Any]:
         "bankedResets": _renamed(usage.get("reset_credits"), {
             "available": "count", "expires_at": "earliestExpiry",
         }),
-    })
+    }, attempted_at)
 
 
 def write_usage(
@@ -140,18 +164,17 @@ def write_usage(
                 previous = {}
             # A failed fetch's in-memory last_good is not generation-tagged.
             # Only the matching disk snapshot can supply retained measurements.
-            measurement = _measurement(previous)
-            previous_at = _number(previous.get("fetchedAt"))
+            measurement = _measurement(previous, attempted_at)
+            previous_at = measurement["fetchedAt"]
             previous_error = previous.get("lastError")
-            error_at = (_number(previous_error.get("attemptedAt"))
+            error_at = (_attempt_timestamp(previous_error.get("attemptedAt"), attempted_at)
                         if isinstance(previous_error, dict) else None)
-            last_error = (_fields(previous_error, {
-                "class": _error_class, "attemptedAt": _number,
-            }) if error_at is not None else None)
+            last_error = ({"class": _error_class(previous_error.get("class")),
+                           "attemptedAt": error_at} if error_at is not None else None)
             if error is None:
-                fetched_at = _number(entry.fetched_at)
+                fetched_at = _attempt_timestamp(entry.fetched_at, attempted_at)
                 if fetched_at is not None and (previous_at is None or fetched_at >= previous_at):
-                    measurement = _snapshot(entry)
+                    measurement = _snapshot(entry, attempted_at)
                 if error_at is None or attempted_at >= error_at:
                     last_error = None
             elif (previous_at is None or attempted_at > previous_at) and (

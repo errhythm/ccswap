@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import os
 import urllib.error
@@ -581,13 +582,16 @@ def test_success_clears_equally_recent_error_in_both_orders(saved, failure_first
 
 
 @pytest.mark.parametrize("failure", [False, True])
-@pytest.mark.parametrize("corruption", ["oversized-integer", "recursion-error"])
+@pytest.mark.parametrize("corruption", [
+    "oversized-integer", "recursion-error", "oversized-whitespace", "oversized-string",
+    "invalid-utf8",
+])
 def test_cache_parse_failure_does_not_break_fetch(saved, monkeypatch, corruption, failure):
     instance, _, _ = saved
     if corruption == "oversized-integer":
         previous = '{"x":' + "9" * 5000 + "}"
         parse_error = ValueError
-    else:
+    elif corruption == "recursion-error":
         previous = '{"x":' + "[" * 5000 + "0" + "]" * 5000 + "}"
         parse_error = RecursionError
         loads = json.loads
@@ -599,9 +603,16 @@ def test_cache_parse_failure_does_not_break_fetch(saved, monkeypatch, corruption
             return loads(text, *args, **kwargs)
 
         monkeypatch.setattr(codex_usage_store.json, "loads", parse)
-    with pytest.raises(parse_error):
-        json.loads(previous)
-    _path(instance).write_text(previous, encoding="utf-8")
+    elif corruption == "oversized-whitespace":
+        previous = " " * (codex_usage_store._MAX_SNAPSHOT_BYTES + 1)
+    elif corruption == "oversized-string":
+        previous = '"' + "x" * (codex_usage_store._MAX_SNAPSHOT_BYTES - 1) + '"'
+    else:
+        previous = None
+    if corruption in {"oversized-integer", "recursion-error"}:
+        with pytest.raises(parse_error):
+            json.loads(previous)
+    _path(instance).write_bytes(previous.encode("utf-8") if previous is not None else b"\xff")
 
     def fetch(*_args, **_kwargs):
         if failure:
@@ -718,3 +729,112 @@ def test_new_unknown_error_class_uses_generic_label(saved, label):
     codex_usage_store.write_usage(instance, "1", account, UsageEntry(), 100, error)
     assert _record(instance)["lastError"] == {"class": "Exception", "attemptedAt": 100}
     assert "synthetic" not in _path(instance).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("timestamp", [
+    1e300, 1_800_000_100 + 86401, 253_402_300_800, -1, float("nan"), float("inf"),
+    "NaN", "-Infinity", True, False, None,
+])
+@pytest.mark.parametrize("field", ["fetchedAt", "attemptedAt"])
+@pytest.mark.parametrize("failure", [False, True])
+def test_invalid_saved_attempt_timestamp_is_missing(saved, timestamp, field, failure):
+    instance, _, _ = saved
+    account = instance._read_sequence()["accounts"]["1"]
+    codex_usage_store.write_usage(instance, "1", account,
+                                 UsageEntry(last_good=_usage(), fetched_at=1_800_000_000),
+                                 1_800_000_000)
+    previous = _record(instance)
+    if field == "fetchedAt":
+        previous["fetchedAt"] = timestamp
+    else:
+        previous["lastError"] = {"class": "TimeoutError", "attemptedAt": timestamp}
+    _path(instance).write_text(json.dumps(previous), encoding="utf-8")
+
+    attempted_at = 1_800_000_100
+    codex_usage_store.write_usage(
+        instance, "1", account,
+        UsageEntry() if failure else UsageEntry(last_good={"weekly": {"pct": 10}},
+                                               fetched_at=attempted_at),
+        attempted_at, CodexUsageError("synthetic failure") if failure else None,
+    )
+    record = _record(instance)
+    if failure:
+        assert record["lastError"] == {
+            "class": "CodexUsageError", "attemptedAt": attempted_at,
+        }
+        if field == "fetchedAt":
+            assert record["fetchedAt"] is None
+            assert record["windows"] == {}
+            assert record["credits"] is None
+            assert record["allowance"] is None
+            assert record["bankedResets"] is None
+        else:
+            assert record["fetchedAt"] == previous["fetchedAt"]
+            assert record["windows"] == previous["windows"]
+    else:
+        assert record["fetchedAt"] == attempted_at
+        assert record["windows"]["weekly"]["usedPercent"] == 10
+        assert record["lastError"] is None
+
+
+@pytest.mark.parametrize("offset", [1, 86400])
+def test_saved_attempts_within_clock_skew_keep_independent_ordering(saved, offset):
+    instance, _, _ = saved
+    account = instance._read_sequence()["accounts"]["1"]
+    attempted_at = 1_800_000_000
+    codex_usage_store.write_usage(instance, "1", account,
+                                 UsageEntry(last_good=_usage(), fetched_at=attempted_at + offset),
+                                 attempted_at + offset)
+    previous = _record(instance)
+    previous["lastError"] = {"class": "TimeoutError", "attemptedAt": attempted_at + offset}
+    _path(instance).write_text(json.dumps(previous), encoding="utf-8")
+    codex_usage_store.write_usage(instance, "1", account,
+                                 UsageEntry(last_good={"weekly": {"pct": 10}},
+                                            fetched_at=attempted_at), attempted_at)
+    assert _record(instance) == previous
+
+
+@pytest.mark.parametrize("timestamp, expected", [
+    (0, 0), (253_402_300_799.5, 253_402_300_799.5), (253_402_300_800, None),
+])
+def test_attempt_timestamp_unix_range_boundaries(timestamp, expected):
+    assert codex_usage_store._attempt_timestamp(timestamp, 253_402_300_799) == expected
+
+
+@pytest.mark.parametrize("kind", ["whitespace", "string"])
+@pytest.mark.parametrize("extra_bytes", [1, 65536])
+def test_snapshot_read_is_bounded(tmp_path, monkeypatch, kind, extra_bytes):
+    cap = codex_usage_store._MAX_SNAPSHOT_BYTES
+    content = (b" " * (cap + extra_bytes) if kind == "whitespace"
+               else b'"' + b"x" * (cap + extra_bytes - 2) + b'"')
+    path = tmp_path / "usage-1.json"
+    path.write_bytes(content)
+    assert path.stat().st_size == cap + extra_bytes
+    reads = []
+
+    class BoundedReader(io.BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            assert size == cap + 1
+            return super().read(size)
+
+    stream = BoundedReader(content)
+
+    def open_snapshot(target, mode, **kwargs):
+        assert target == path
+        assert mode == "rb"
+        return stream
+
+    monkeypatch.setattr(Path, "open", open_snapshot)
+    monkeypatch.setattr(codex_usage_store.json, "loads",
+                        lambda *_a, **_kw: pytest.fail("oversized snapshot parsed"))
+    assert codex_usage_store._read_snapshot(path) == {}
+    assert reads == [cap + 1]
+    assert stream.closed
+
+
+def test_snapshot_at_size_limit_is_accepted(tmp_path):
+    path = tmp_path / "usage-1.json"
+    content = b'{"schemaVersion":1}'
+    path.write_bytes(content.ljust(codex_usage_store._MAX_SNAPSHOT_BYTES, b" "))
+    assert codex_usage_store._read_snapshot(path) == {"schemaVersion": 1}
