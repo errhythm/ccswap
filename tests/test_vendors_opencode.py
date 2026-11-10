@@ -4,7 +4,13 @@ import json
 
 import pytest
 
-from claude_swap.vendors.core import RunResult, UnsupportedCapability, UsageState, VendorError
+from claude_swap.vendors.core import (
+    AccountRecord,
+    RunResult,
+    UnsupportedCapability,
+    UsageState,
+    VendorError,
+)
 from claude_swap.vendors.opencode import OpenCodeAdapter, valid_selector
 from tests.vendor_helpers import FakeRunner, fail, ok
 
@@ -147,7 +153,6 @@ def test_register_requires_disambiguation():
 def test_observe_marks_registered_and_missing():
     adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
     reg, _ = adapter.register("w", provider="anthropic", account="work")
-    from claude_swap.vendors.core import AccountRecord
 
     ghost = AccountRecord("opencode", "g", "provider-account", "google", {"account": "x"})
     views = adapter.observe([reg, ghost])
@@ -380,3 +385,109 @@ def test_usage_queries_last_errors_and_reports_go(tmp_path):
     data = result.observations[0].data
     assert data["lastErrors"]["opencode-go"]["status"] == 403
     assert data["go"]["models"][0]["model"] == "muse-spark-1.3"
+
+
+# ---- Per-account attribution: one provider's stats belong to its sole account --
+
+
+def db_backed(listing_rows, stats_rows, errors=None):
+    """An adapter whose vendor lists ``listing_rows`` and whose db returns stats."""
+    from claude_swap.vendors.opencode import _LAST_ERROR_SQL
+
+    runner = make(new=True, listing=ok(json.dumps(listing_rows)))
+    runner.on(OC, "db", "--help", result=RunResult(0, stderr="query --format json"))
+
+    def db(call):
+        if call.argv[2] == _LAST_ERROR_SQL:
+            return ok(json.dumps(errors or []))
+        return ok(json.dumps(stats_rows))
+
+    runner.on(OC, "db", result=db)
+    return OpenCodeAdapter(runner)
+
+
+def test_sole_provider_account_gets_filtered_stats_attributed():
+    listing = [
+        {"provider": "anthropic", "id": "c1", "label": "work", "type": "oauth", "active": True},
+        {"provider": "openai", "id": "c3", "label": "main", "type": "api", "active": True},
+    ]
+    adapter = db_backed(listing, go_rows())
+    record, _ = adapter.register("work", provider="anthropic", account="work")
+    result = adapter.usage(record, None, context=[record])
+    assert result.state is UsageState.AVAILABLE and result.attributed_to == "work"
+    (obs,) = result.observations
+    assert [p["provider"] for p in obs.data["providers"]] == ["anthropic"]
+    assert "go" not in obs.data  # another provider's Go view never leaks across
+    assert "openai" not in json.dumps(obs.data)
+
+
+def test_go_provider_account_keeps_the_per_model_go_view():
+    listing = [
+        {"provider": "opencode-go", "id": "g1", "label": "go", "type": "api", "active": True},
+    ]
+    adapter = db_backed(listing, go_rows())
+    record, _ = adapter.register("go", provider="opencode-go", account="go")
+    result = adapter.usage(record, None)
+    assert result.state is UsageState.AVAILABLE and result.attributed_to == "go"
+    from claude_swap.vendors.overview import usage_headline
+
+    assert "Go · 5h $0.50 · wk $4.00" in usage_headline(result)
+
+
+def test_two_accounts_of_one_provider_keep_unavailable():
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
+    first, _ = adapter.register("w", provider="anthropic", account="work")
+    second, _ = adapter.register("p", provider="anthropic", account="personal")
+    for record in (first, second):
+        result = adapter.usage(record, None, context=[first, second])
+        assert result.state is UsageState.UNAVAILABLE and not result.observations
+        assert "not per account" in result.reason
+
+
+def test_two_vendor_accounts_keep_unavailable_without_context():
+    adapter = db_backed(ROWS, go_rows())
+    record, _ = adapter.register("w", provider="anthropic", account="work")
+    result = adapter.usage(record, None)
+    assert result.state is UsageState.UNAVAILABLE and not result.observations
+
+
+def test_account_missing_from_vendor_list_stays_unavailable():
+    adapter = db_backed(
+        [{"provider": "openai", "id": "c3", "label": "main", "type": "api", "active": True}],
+        go_rows(),
+    )
+    record = AccountRecord("opencode", "w", "provider-account", "anthropic", {"account": "w"})
+    result = adapter.usage(record, None)
+    assert result.state is UsageState.UNAVAILABLE and not result.observations
+
+
+def test_record_without_provider_stays_unavailable():
+    adapter = db_backed(ROWS, go_rows())
+    record = AccountRecord("opencode", "w", "provider-account", None, {"account": "w"})
+    result = adapter.usage(record, None)
+    assert result.state is UsageState.UNAVAILABLE and not result.observations
+
+
+def test_provider_without_recorded_usage_reports_it():
+    listing = [
+        {"provider": "anthropic", "id": "c1", "label": "work", "type": "oauth", "active": True},
+    ]
+    adapter = db_backed(listing, [])
+    record, _ = adapter.register("work", provider="anthropic", account="work")
+    result = adapter.usage(record, None)
+    assert result.state is UsageState.UNAVAILABLE and result.attributed_to == "work"
+    assert "no recorded" in result.reason
+
+
+def test_second_account_for_a_provider_is_rejected_at_register():
+    adapter = OpenCodeAdapter(make(new=True, listing=ok(json.dumps(ROWS))))
+    first, _ = adapter.register("w", provider="anthropic", account="work")
+    with pytest.raises(VendorError, match="already registered"):
+        adapter.register("p", provider="anthropic", account="personal", context=[first])
+    # Another provider is unaffected, and re-registering the same alias is fine.
+    record, _ = adapter.register(
+        "o", provider="openai", account="main", context=[first]
+    )
+    assert record.provider == "openai"
+    same, _ = adapter.register("w", provider="anthropic", account="work", context=[first])
+    assert same.alias == "w"

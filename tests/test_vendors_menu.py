@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from claude_swap.vendors.core import (
     AccountView,
+    UsageKind,
+    UsageObservation,
     UsageResult,
     UsageState,
     UsageWindow,
@@ -11,6 +13,7 @@ from claude_swap.vendors.core import (
 from claude_swap.vendors.menu import (
     collect_sections,
     loading_section,
+    menu_usage_text,
     section_for,
     switchable,
 )
@@ -91,12 +94,13 @@ def test_unavailable_usage_is_never_shown_as_zero():
         ),
     )
     section = section_for(summary, None, NOW)
-    assert section.title == "Muse Code · usage unavailable"
+    assert section.title == "Muse Code · —"
     assert not any("0%" in label for label in labels(section))
-    assert any("no allowance data" in label for label in labels(section))
+    assert "unavailable" not in "\n".join(labels(section)).lower()
+    assert "no allowance data" not in "\n".join(labels(section))
 
 
-def test_stale_data_is_labelled_with_the_failure():
+def test_stale_data_shows_last_numbers_with_no_label():
     summary = ToolSummary(
         "kiro",
         "Kiro CLI",
@@ -104,10 +108,10 @@ def test_stale_data_is_labelled_with_the_failure():
         tool_usage=credits(state=UsageState.STALE, error="Kiro /usage failed: timed out"),
     )
     section = section_for(summary, None, NOW)
-    assert section.title.startswith("Kiro CLI · stale · credits")
-    assert any(
-        "refresh failed: Kiro /usage failed: timed out" in label for label in labels(section)
-    )
+    assert section.title == "Kiro CLI · credits 1,136/2,000 (56.8%)"
+    text = "\n".join(labels(section))
+    assert "1,136 of 2,000 credits used (56.8%)" in text  # last numbers, kept
+    assert "stale" not in text.lower() and "failed" not in text.lower()
 
 
 def test_not_installed_offers_only_install_docs():
@@ -149,7 +153,7 @@ def test_account_rows_keep_each_accounts_own_usage_and_switchability():
     ]
 
 
-def test_muse_api_key_accounts_are_not_menu_rows():
+def test_muse_api_key_accounts_are_listed_but_never_clickable():
     accounts = [
         (
             AccountView(
@@ -174,11 +178,13 @@ def test_muse_api_key_accounts_are_not_menu_rows():
     section = section_for(
         ToolSummary("muse", "Muse Code", installed=True, accounts=accounts), None, NOW
     )
-    labels = [r.label for r in section.accounts]
-    assert len(labels) == 1 and "lane-key" not in labels[0]
-    assert "usage unavailable" not in "\n".join(labels)
+    top = [r.label for r in section.accounts]
+    assert len(top) == 2 and "lane-key" in top[1]  # every account is shown
+    key_row = section.accounts[1]
+    assert key_row.action is None and key_row.selector is None  # never clickable
+    assert key_row.label.endswith("—")  # no usage words, just the placeholder
     detail = "\n".join(r.label for r in section.rows if r)
-    assert "lane-key" not in detail
+    assert "lane-key" in detail and "switch in terminal" not in detail
 
 
 def test_a_dead_muse_login_is_not_checked_and_can_be_restored():
@@ -195,7 +201,7 @@ def test_a_dead_muse_login_is_not_checked_and_can_be_restored():
     )
     row = section.accounts[0]
     assert row.checked is False and row.action == "switch" and row.selector == "mis"
-    assert "sign-in required" in row.label
+    assert "sign-in" not in row.label.lower() and row.label.endswith("—")
     detail = next(r for r in section.rows if r and r.selector == "mis")
     assert detail.checked is False and detail.action == "switch"
     assert detail.label.startswith("  ○")
@@ -250,10 +256,116 @@ def test_top_level_account_rows_look_like_claude_codes():
     assert [r.label.split("  ")[0] for r in rows] == ["1", "2", "3"]
     assert rows[0].checked and rows[0].action is None  # active: the check mark, no action
     assert rows[1].action == "switch" and rows[1].selector == "kiro-b" and not rows[1].raw
-    assert (
-        "[AWS 151869951925]" in rows[1].label and "stale · credits 10,000/10,000" in rows[1].label
-    )
+    assert "[AWS 151869951925]" in rows[1].label
+    assert "credits 10,000/10,000" in rows[1].label and "stale" not in rows[1].label.lower()
     assert rows[2].action is None  # an API key is run, not switched
+
+
+def test_menu_usage_text_is_numbers_or_placeholder():
+    assert menu_usage_text(credits()) == "credits 1,136/2,000 (56.8%)"
+    assert menu_usage_text(credits(state=UsageState.STALE)) == "credits 1,136/2,000 (56.8%)"
+    assert menu_usage_text(UsageResult(UsageState.UNAVAILABLE, "nothing yet")) == "—"
+    assert menu_usage_text(None) == "—"
+
+
+def go_result(state=UsageState.AVAILABLE):
+    return UsageResult(
+        state,
+        "Workspace access denied",
+        observations=(
+            UsageObservation(
+                UsageKind.LOCAL_TOKENS,
+                "opencode db (local message records)",
+                False,
+                scope="local",
+                data={
+                    "providers": [
+                        {
+                            "provider": "opencode-go",
+                            "models": [],
+                            "totals": {"30d": {"messages": 7, "costUsd": 2.5}},
+                        }
+                    ],
+                    "go": {
+                        "models": [
+                            {
+                                "model": "muse-spark",
+                                "fiveHourUsd": 0.5,
+                                "weekUsd": 4.0,
+                                "thirtyDayUsd": 38.48,
+                            }
+                        ],
+                        "rule": "Go limits each model separately",
+                        "unit": "usd-equivalent",
+                    },
+                    "lastErrors": {
+                        "opencode-go": {
+                            "message": "Workspace access denied",
+                            "status": 403,
+                            "at": 1.0,
+                        }
+                    },
+                },
+            ),
+        ),
+        error="last request refused: 403",
+        observed_at=NOW - 60,
+    )
+
+
+BANNED_MENU_WORDS = ["stale", "unavailable", "sign-in", "refused", "error", "failed", "not logged"]
+
+
+def test_menu_rows_never_show_failure_text():
+    for state in UsageState:
+        variants = {
+            "bare": UsageResult(
+                state,
+                "usage unavailable: not logged in; sign-in required",
+                error="last request refused with error; refresh failed",
+            ),
+            "windows": credits(
+                state=state,
+                reason="usage unavailable: not logged in",
+                error="refresh failed with error",
+            ),
+            "go": go_result(state),
+        }
+        for name, usage in variants.items():
+            summary = ToolSummary(
+                "muse",
+                "Muse Code",
+                installed=True,
+                version="1.4.14",
+                accounts=[
+                    (
+                        AccountView(
+                            "muse",
+                            "me",
+                            "browser",
+                            identity={"email": "m@x.com"},
+                            active=True,
+                        ),
+                        usage,
+                    )
+                ],
+                tool_usage=usage,
+            )
+            section = section_for(summary, None, NOW)
+            text = "\n".join(
+                [section.title]
+                + [r.label for r in section.rows if r is not None]
+                + [r.label for r in section.accounts]
+            )
+            lowered = text.lower()
+            for word in BANNED_MENU_WORDS:
+                assert word not in lowered, (state, name, word, text)
+            if name == "bare":
+                assert "—" in text
+            elif name == "windows":
+                assert "1,136" in text  # last-good numbers, kept with no label
+            else:
+                assert "$0.50" in text and "$4.00" in text  # Go figures, kept
 
 
 def test_unregistered_opencode_rows_switch_by_vendor_id():

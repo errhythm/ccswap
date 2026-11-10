@@ -2,10 +2,12 @@
 
 ``menubar.py`` renders these sections verbatim, so what the menu shows is decided
 here, from the same :class:`~claude_swap.vendors.overview.ToolSummary` the CLI and
-TUI use.  A Muse browser login and a Kiro profile are clickable.  A Muse API key
-is omitted: Muse reports no allowance for a key, and storing the key replaces the
-browser login.  Use ``ccswap muse run``.  A Kiro API key stays listed and is not
-clickable, for the same reason it is process-scoped.
+TUI use.  The menu shows numbers only: a usage reading renders its figures, a
+bare failure renders the "—" placeholder, and no state or reason words ever
+appear here (the CLI and TUI keep the full details).  A Muse browser login and a
+Kiro profile are clickable.  A Muse API key is listed but never clickable: it is
+a lane credential run with ``ccswap muse run``.  A Kiro API key stays listed and
+is not clickable, for the same reason it is process-scoped.
 """
 
 from __future__ import annotations
@@ -18,11 +20,10 @@ from claude_swap.vendors.overview import (
     LABELS,
     Overview,
     ToolSummary,
+    go_headline,
     go_lines,
-    headline,
     local_cost_line,
     reset_text,
-    usage_headline,
     window_text,
 )
 
@@ -68,20 +69,16 @@ def _row_switchable(tool: str, view: AccountView, usage: UsageResult) -> bool:
     )
 
 
-def _hidden_menu_account(tool: str, view: AccountView) -> bool:
-    """A Muse API key is a lane credential.  The menu has no honest usage line for it."""
-    return tool == "muse" and view.kind == "api-key"
-
-
 def switchable(
     tool: str, active: bool | None, provider: str | None, kind: str = "", registered: bool = True
 ) -> bool:
     """Can a click switch to this account without a terminal?
 
     OpenCode: native ``auth switch``.  Muse: a browser login ccswap keeps a token for.
-    A Muse API key is omitted from the menu.  Kiro: another profile of the signed-in login,
-    via Kiro's own picker.  A different Kiro *login* still needs an interactive sign-in, and
-    a Kiro API key is process-scoped (``ccswap kiro run``).
+    A Muse API key is listed but never clickable (``ccswap muse run``).  Kiro:
+    another profile of the signed-in login, via Kiro's own picker.  A different Kiro
+    *login* still needs an interactive sign-in, and a Kiro API key is process-scoped
+    (``ccswap kiro run``).
     """
     if active is True:
         return False
@@ -106,6 +103,40 @@ def _ago(ts: float | None, now: float) -> str:
     return f"{datetime.fromtimestamp(ts).strftime('%H:%M')} ({span})"
 
 
+_REFUSED_SUFFIX = " · last request refused"
+
+
+def _menu_numbers(result: UsageResult) -> str | None:
+    """This reading's figures with no state words: windows, else the Go/local line."""
+    if result.windows:
+        return " · ".join(window_text(w, short=True) for w in result.windows[:2])
+    text = go_headline(result)
+    if text is not None:
+        return text.removesuffix(_REFUSED_SUFFIX)
+    return local_cost_line(result)
+
+
+def menu_usage_text(result: UsageResult | None) -> str:
+    """One account's menu text: its numbers, or "—" when there is nothing to show.
+
+    A past reading keeps its numbers with no state label; a bare failure becomes
+    the placeholder, so failure words structurally cannot reach the menu bar.
+    """
+    if result is not None and (numbers := _menu_numbers(result)):
+        return numbers
+    return "—"
+
+
+def menu_headline(summary: ToolSummary) -> str:
+    """A section title's figures: like overview.headline without the state words."""
+    if not summary.installed and not summary.accounts:
+        return "not installed"
+    primary = summary.primary_usage
+    if primary is None:
+        return "—"
+    return menu_usage_text(primary)
+
+
 def usage_rows(tool: str, result: UsageResult, now: float, indent: str = "") -> list[MenuRow]:
     rows: list[MenuRow] = []
     if result.plan:
@@ -116,6 +147,8 @@ def usage_rows(tool: str, result: UsageResult, now: float, indent: str = "") -> 
         if reset:
             rows.append(MenuRow(f"{indent}    {reset}", tool))
     for line in go_lines(result):
+        if "refused" in line.lower():
+            continue  # the menu never names a refused request; the CLI/TUI detail keeps it
         rows.append(
             MenuRow(
                 f"{indent}{line.strip() if not line.startswith('  ') else '    ' + line.strip()}"[
@@ -136,14 +169,8 @@ def usage_rows(tool: str, result: UsageResult, now: float, indent: str = "") -> 
                         tool,
                     )
                 )
-    if result.state is UsageState.STALE:
-        rows.append(
-            MenuRow(f"{indent}Stale — refresh failed: {result.error or 'unknown reason'}", tool)
-        )
-    elif result.state is not UsageState.AVAILABLE:
-        rows.append(
-            MenuRow(f"{indent}{usage_headline(result).capitalize()}: {result.reason}"[:110], tool)
-        )
+    # No state or reason row: a past reading shows its numbers above with no label,
+    # and a bare failure shows no usage rows at all (callers render "—").
     if result.observed_at:
         rows.append(MenuRow(f"{indent}Updated {_ago(result.observed_at, now)}", tool))
     return rows
@@ -152,7 +179,7 @@ def usage_rows(tool: str, result: UsageResult, now: float, indent: str = "") -> 
 def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSection:
     tool = summary.tool
     label = LABELS.get(tool, summary.label)
-    section = MenuSection(tool, f"{label} · {headline(summary)}")
+    section = MenuSection(tool, f"{label} · {menu_headline(summary)}")
     rows = section.rows
     if not summary.installed:
         rows.append(MenuRow(f"{label} is not installed", tool))
@@ -178,24 +205,15 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
     if auth.get("envKeyPresent"):
         rows.append(MenuRow("An API key in the environment overrides the stored login", tool))
     if summary.error:
-        rows.append(MenuRow(f"Error: {summary.error}"[:110], tool))
+        rows.append(MenuRow(summary.error[:110], tool))
     if summary.tool_usage is not None:
         rows.append(None)
         rows.extend(usage_rows(tool, summary.tool_usage, now))
     rows.append(None)
     rows.append(MenuRow("Accounts", tool))
-    shown = [
-        (view, usage)
-        for view, usage in summary.accounts
-        if not _hidden_menu_account(tool, view)
-    ]
     if not summary.accounts:
         rows.append(MenuRow(f"  No {label} accounts registered", tool))
-    elif not shown:
-        rows.append(
-            MenuRow("  API keys are used with `ccswap muse run` and are not listed here", tool)
-        )
-    for number, (view, usage) in enumerate(shown, 1):
+    for number, (view, usage) in enumerate(summary.accounts, 1):
         can = _row_switchable(tool, view, usage)
         selector = (
             (view.identity.get("id") or view.identity.get("account"))
@@ -208,7 +226,7 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
             label += f"  {email}"
         if view.identity.get("profileArn"):
             label += f"  [AWS {view.identity['profileArn'].split(':')[4]}]"
-        label += f"  {usage_headline(usage)}"
+        label += f"  {menu_usage_text(usage)}"
         section.accounts.append(
             MenuRow(
                 label[:140],
@@ -220,7 +238,7 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
                 raw=tool == "opencode" and not view.registered,
             )
         )
-    for view, usage in shown:
+    for view, usage in summary.accounts:
         mark = {True: "●", False: "○", None: "?"}[view.active]
         where = (
             f"{view.provider}/"
@@ -228,9 +246,16 @@ def section_for(summary: ToolSummary, docs: str | None, now: float) -> MenuSecti
             else ""
         )
         ok = _row_switchable(tool, view, usage)
-        hint = "" if ok or view.active else ("  — switch in terminal" if tool != "opencode" else "")
+        # A Muse API key is listed for the captain's "every account" view but stays
+        # inert: no click and no "switch in terminal" hint (it runs, not switches).
+        inert_key = tool == "muse" and view.kind == "api-key"
+        hint = (
+            ""
+            if ok or view.active or inert_key
+            else ("  — switch in terminal" if tool != "opencode" else "")
+        )
         mark = "○" if _session_dead(usage) else mark
-        text = f"  {mark} {where}{view.alias} · {usage_headline(usage)}{hint}"
+        text = f"  {mark} {where}{view.alias} · {menu_usage_text(usage)}{hint}"
         if not ok:
             selector = None
         elif tool == "opencode":
