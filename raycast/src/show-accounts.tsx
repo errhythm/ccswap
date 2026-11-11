@@ -23,6 +23,8 @@ const AFTER_SWITCH: Record<Provider, string> = {
 
 function windowTag(name: string, window: UsageWindow | undefined): List.Item.Accessory[] {
   if (!window) return [];
+  // null: the API reported the window without a utilization figure.
+  if (window.pct === null) return [{ tag: `${name} ?`, tooltip: window.countdown && `Resets in ${window.countdown}` }];
   const pct = Math.round(window.pct);
   const color = pct >= 90 ? Color.Red : pct >= 70 ? Color.Orange : undefined;
   return [{ tag: { value: `${name} ${pct}%`, color }, tooltip: window.countdown && `Resets in ${window.countdown}` }];

@@ -141,6 +141,14 @@ class AccountSnapshot:
     usage: UsageEntry
     alias: str = ""
     disabled: bool = False  # held out of auto-rotation (still a valid explicit target)
+    #: Stored subscription plan record (``subscription.PlanStore`` shape), or
+    #: None for a slot whose plan has never been fetched. Appended last and
+    #: defaulted, so every pre-existing construction site keeps working.
+    subscription_plan: dict | None = None
+    # Stored refresh token's expiry (epoch seconds), or None when missing/
+    # unreadable; see oauth.login_expires_at_epoch. Feeds the "re-login in
+    # 5d 12h" note every account view shows while the login is due.
+    login_expires_at: float | None = None
 
     @property
     def display_tag(self) -> str:

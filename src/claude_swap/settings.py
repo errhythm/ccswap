@@ -2,9 +2,9 @@
 
 One versioned JSON file for user-tunable claude-swap preferences, written
 atomically with the backup dir's 0600/0700 modes. v1 carries the
-``autoswitch``, ``ui``, ``run``, ``updates`` and ``credentials`` sections, plus
-``claude`` (the statusline saved by ``claude_integration``); other
-sections can be added additively.
+``autoswitch``, ``ui``, ``run``, ``updates``, ``usage`` and ``credentials``
+sections, plus ``claude`` (the statusline saved by ``claude_integration``);
+other sections can be added additively.
 Unknown keys (future fields, other tools' experiments) survive a round trip.
 
 Reading is forgiving — a missing or corrupt file yields defaults with a logged
@@ -119,7 +119,12 @@ class ClaudeIntegrationSettings:
 
 @dataclass(frozen=True)
 class RunSettings:
-    """Defaults for ``cswap run`` (``run`` section); its flags override them."""
+    """Defaults for ``cswap run`` (``run`` section); its flags override them.
+
+    ``share_history``: sessions of every account read and write the one chat
+    history in ``~/.claude``, so the account only decides whose quota is
+    used. Off gives each account a history of its own.
+    """
 
     share_history: bool = False
 
@@ -133,6 +138,20 @@ class UpdateSettings:
     check: bool = True
 
 
+@dataclass(frozen=True)
+class UsageSettings:
+    """Usage collection preferences (``usage`` section).
+
+    ``header_probe``: the usage endpoint never answers a setup-token account
+    (``cswap add-token``), so read its 5h/7d utilization from the rate-limit
+    headers of a 1-output-token Haiku request instead. Each probe is a real,
+    if tiny, request against that account's quota, sent at the normal poll
+    cadence, so it is opt-in; off leaves such accounts at "usage unavailable".
+    """
+
+    header_probe: bool = False
+
+
 _SECTION_DEFAULT_SOURCES = {
     "autoswitch": AutoSwitchSettings,
     "ui": UiSettings,
@@ -140,6 +159,7 @@ _SECTION_DEFAULT_SOURCES = {
     "claude": ClaudeIntegrationSettings,
     "run": RunSettings,
     "updates": UpdateSettings,
+    "usage": UsageSettings,
 }
 
 
@@ -152,7 +172,7 @@ class SettingSpec:
     (`parse_setting_value`) read from here, so the two can't drift.
     """
 
-    section: str  # top-level JSON section ("autoswitch", "ui", "updates")
+    section: str  # top-level JSON section ("autoswitch", "ui", "updates", "usage")
     json_key: str  # camelCase key inside the section
     field: str  # snake_case AutoSwitchSettings field
     kind: str  # "float" | "optional_float" | "int" | "bool" | "choice" | "string" | "model_thresholds"
@@ -277,6 +297,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "updates", "check", "check", "bool",
             help="Check PyPI once a day and print a hint when a newer release exists",
+        ),
+        SettingSpec(
+            "usage", "headerProbe", "header_probe", "bool",
+            help="Read setup-token usage from a 1-token Haiku request's rate-limit headers (opt-in: uses quota)",
         ),
     )
 }
@@ -525,9 +549,24 @@ def _clamped(settings: AutoSwitchSettings) -> AutoSwitchSettings:
             clamped = num(value, spec.default, spec.lo, spec.hi)
             kwargs[spec.field] = int(clamped) if spec.kind == "int" else clamped
         elif spec.kind == "bool":
-            kwargs[spec.field] = (
-                value is True if spec.field == "warmup_five_hour" else bool(value)
-            )
+            if isinstance(value, str):
+                # Never bool(str): bool("false") is True, so a hand-edited
+                # quoted "false" would switch the flag on rather than off. A
+                # quoted boolean is read by the same words `cswap config set`
+                # accepts; anything else is a bad type and reverts to the
+                # default like the other kinds do.
+                parsed = _BOOL_WORDS.get(value.strip().lower())
+                if parsed is None:
+                    _logger.warning(
+                        "settings.json: %s expects a boolean, got %r; using %r",
+                        spec.dotted, value, spec.default,
+                    )
+                    parsed = spec.default
+                kwargs[spec.field] = parsed
+            else:
+                kwargs[spec.field] = (
+                    value is True if spec.field == "warmup_five_hour" else bool(value)
+                )
         elif spec.kind == "string":
             # A non-empty string keeps as-is; anything else reverts to default
             # (None) so a null/garbage settings.json value disables the filter.
@@ -650,6 +689,26 @@ def load_credential_settings(backup_root: Path) -> CredentialSettings:
     return CredentialSettings(backend=backend)
 
 
+def load_run_settings(backup_root: Path) -> RunSettings:
+    """Load the run section; missing/corrupt file or non-bool value → default."""
+    chosen = explicit_share_history(backup_root)
+    return RunSettings() if chosen is None else RunSettings(share_history=chosen)
+
+
+def explicit_share_history(backup_root: Path) -> bool | None:
+    """``run.shareHistory`` as the user set it; None when they never did.
+
+    ``load_run_settings`` answers "what applies"; this answers "who decided".
+    The two differ where it matters: a default that cannot be honored (history
+    sharing on Windows) is dropped silently while a setting someone wrote
+    earns a warning, and only a user who never chose is told that sharing is
+    the default. A value that is not a boolean counts as never set.
+    """
+    section = _read_raw(settings_path(backup_root)).get("run")
+    value = section.get("shareHistory") if isinstance(section, dict) else None
+    return value if isinstance(value, bool) else None
+
+
 def load_update_settings(backup_root: Path) -> UpdateSettings:
     """Load the updates section; missing/corrupt file or non-boolean → default."""
     raw = _read_raw(settings_path(backup_root))
@@ -667,13 +726,21 @@ def load_update_settings(backup_root: Path) -> UpdateSettings:
     return UpdateSettings(check=check)
 
 
-def load_run_settings(backup_root: Path) -> RunSettings:
-    """Load the run section; missing/corrupt file or non-bool value → default."""
-    section = _read_raw(settings_path(backup_root)).get("run")
-    value = section.get("shareHistory") if isinstance(section, dict) else None
-    if not isinstance(value, bool):
-        return RunSettings()
-    return RunSettings(share_history=value)
+def load_usage_settings(backup_root: Path) -> UsageSettings:
+    """Load the usage section; missing/corrupt file or non-bool → default."""
+    raw = _read_raw(settings_path(backup_root))
+    section = raw.get("usage")
+    default = UsageSettings()
+    if not isinstance(section, dict):
+        return default
+    header_probe = section.get("headerProbe", default.header_probe)
+    if not isinstance(header_probe, bool):
+        _logger.warning(
+            "settings.json: usage.headerProbe must be true or false, got %r; "
+            "using %r", header_probe, default.header_probe,
+        )
+        return default
+    return UsageSettings(header_probe=header_probe)
 
 
 def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
@@ -864,6 +931,7 @@ def effective_settings(
         "credentials": load_credential_settings(backup_root),
         "run": load_run_settings(backup_root),
         "updates": load_update_settings(backup_root),
+        "usage": load_usage_settings(backup_root),
     }
     rows = []
     for spec in SETTING_SPECS.values():

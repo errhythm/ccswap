@@ -124,7 +124,7 @@ def usage_rows(
     fetched_at: float | None = None,
     *,
     tr: Callable[[str], str] = str,
-) -> list[tuple[str, float, str, str]]:
+) -> list[tuple[str, float | None, str, str]]:
     """(label, pct, suffix, suffix_full) rows mirroring the CLI's
     ``_format_usage_lines``.
 
@@ -162,10 +162,12 @@ def usage_rows(
                 if marker:
                     suffix = f"{suffix}  {marker}" if suffix else marker
                     suffix_full = f"{suffix_full}  {marker}" if suffix_full else marker
+            pct = window.get("pct")
             rows.append(
                 (
                     label,
-                    float(window["pct"]),
+                    # None (utilization unavailable) draws as "usage unknown".
+                    float(pct) if isinstance(pct, (int, float)) else None,
                     suffix,
                     suffix_full,
                 )
@@ -354,9 +356,10 @@ def account_card_text(
         }
         label_width = max(len(label) for label in display_labels.values())
         bar_width = max(12, min(30, width - 42 - label_width))
-        # everything on a row except the suffix: indent, label, bar, " NNN%", gap
-        row_overhead = 4 + label_width + 1 + bar_width + 5 + 2
         for label, pct, suffix, suffix_full in rows:
+            # everything on a row except the suffix: indent, label, bar,
+            # " NNN%" (or "  usage unknown" on a row without a figure), gap
+            row_overhead = 4 + label_width + 1 + bar_width + (15 if pct is None else 5) + 2
             # per-row: show the absolute clock only where it fits, so a long
             # spend row degrading doesn't cost the 5h/7d rows their clocks
             if suffix_full != suffix and row_overhead + len(suffix_full) <= width:
@@ -448,12 +451,17 @@ def mini_account_text(
         window = last_good.get(key) if isinstance(last_good, dict) else None
         if not window:
             continue
-        pct = float(window["pct"])
         if parts:
             text.append(" · ", style=palette.track)
-        color = palette.severity(pct)
         display_label = tr("Weekly") if label == "Weekly" else label
         text.append(f"{display_label} ", style=palette.muted)
+        if not isinstance(window.get("pct"), (int, float)):
+            # No figure (utilization unavailable): "?", as the CLI shows it.
+            text.append("?", style=palette.muted)
+            parts += 1
+            continue
+        pct = float(window["pct"])
+        color = palette.severity(pct)
         text.append(f"{pct:.0f}%", style=f"{color} dim" if stale else color)
         if pct >= 100:
             reset = data.reset_text(window, now, tr=tr)

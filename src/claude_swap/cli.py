@@ -13,7 +13,6 @@ from claude_swap.codex import CodexAccountSwitcher
 from claude_swap.agy import AgyAccountSwitcher
 from claude_swap.exceptions import ClaudeSwitchError, ConfigError
 from claude_swap.json_output import error_envelope
-from claude_swap.models import Platform
 from claude_swap.printer import (
     accent,
     bolded,
@@ -23,7 +22,7 @@ from claude_swap.printer import (
     muted,
     warning,
 )
-from claude_swap.settings import load_run_settings, load_ui_settings, load_update_settings
+from claude_swap.settings import load_ui_settings, load_update_settings
 from claude_swap.switcher import ClaudeAccountSwitcher
 
 
@@ -153,7 +152,8 @@ Examples:
         help=(
             "Don't share settings/keybindings/CLAUDE.md/skills/commands/agents/rules "
             "from ~/.claude into the session profile (and remove previously "
-            "shared items)"
+            "shared items). Chat history is not affected: see "
+            "--no-share-history"
         ),
     )
     parser.add_argument(
@@ -166,7 +166,9 @@ Examples:
             "unified history. History the profile already accumulated is "
             "merged into ~/.claude first. --no-share-history restores "
             "per-account history (the default, unless `ccswap config set "
-            "run.shareHistory true`). Not supported on Windows."
+            "run.shareHistory true`). On Windows, projects/ is shared either "
+            "way and history.jsonl only when symlinks are allowed (Developer "
+            "Mode, or an elevated terminal)."
         ),
     )
     parser.add_argument(
@@ -199,7 +201,7 @@ Examples:
                 args.account,
                 tail,
                 share=not args.no_share,
-                share_history=_resolve_share_history(args, switcher),
+                share_history=args.share_history,
                 require_session=args.require_session,
             )
             return  # only reachable in tests where exec/exit is mocked
@@ -212,7 +214,7 @@ Examples:
                 slot,
                 tail,
                 share=not args.no_share,
-                share_history=_resolve_share_history(args, switcher),
+                share_history=args.share_history,
                 require_session=args.require_session,
             )
             return  # only reachable in tests
@@ -247,26 +249,6 @@ def _refuse_session_in_file_backend(switcher: ClaudeAccountSwitcher) -> None:
             "ccswap run (session mode) needs the macOS Keychain and is not "
             "supported with credentials.backend file. Use `ccswap switch` instead."
         )
-
-
-def _resolve_share_history(args: argparse.Namespace, switcher) -> bool:
-    """The flag wins; otherwise run.shareHistory, which Windows can't honor.
-
-    An explicit --share-history still reaches SessionManager.run and errors
-    there; a setting-derived one just warns and falls back to per-account
-    history. Only called on account-targeting paths, so a bare unmapped run
-    (plain claude) stays silent.
-    """
-    if args.share_history is not None:
-        return args.share_history
-    enabled = load_run_settings(switcher.backup_dir).share_history
-    if enabled and switcher.platform == Platform.WINDOWS:
-        warning(
-            "run.shareHistory is not supported on Windows yet — "
-            "using per-account history."
-        )
-        return False
-    return enabled
 
 
 def _guard_root(switcher: ClaudeAccountSwitcher) -> None:
@@ -1814,6 +1796,25 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         or args.add_token is not None
     ):
         parser.error("no command given — try '%(prog)s help'" % {"prog": _prog_name()})
+
+    # An empty value satisfies the guard above (the option *is* set) but matches
+    # no truthiness-tested branch of the dispatch chain below, so cswap would
+    # fall out of it and exit 0 having done nothing: `cswap export "$DEST"` with
+    # an unset DEST must not look like a completed backup. Rejected here, ahead
+    # of the modifier guards, so the error names the empty value instead of
+    # blaming an --account/--force/--full that was used correctly. --add-token is
+    # exempt: its const="" means "prompt me for the token".
+    for subcommand, metavar, value in (
+        ("remove", "NUM|EMAIL", args.remove_account),
+        ("disable", "NUM|EMAIL", args.disable_account),
+        ("enable", "NUM|EMAIL", args.enable_account),
+        ("switch", "NUM|EMAIL", args.switch_to),
+        ("export", "PATH", args.export),
+        ("import", "PATH", args.import_),
+        ("import-usage", "PATH", args.import_usage),
+    ):
+        if value is not None and not value:
+            parser.error(f"'{subcommand}' requires a non-empty {metavar}")
 
     if args.token_status and not args.list:
         parser.error("--token-status can only be used with 'list'")

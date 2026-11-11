@@ -272,6 +272,8 @@ class CswapApp(App):
     ) -> None:
         snap = source.take(full=full, store_only=store_only)
         self.call_from_thread(self._apply_snapshot, provider, generation, lane, snap)
+        if store_only and provider == "claude":
+            source.refresh_plans()
 
     def _apply_snapshot(
         self, provider: str, generation: int, lane: str, snap: AccountsSnapshot

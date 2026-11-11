@@ -290,7 +290,7 @@ class TestUsageDisplay:
         get_global_config_path().write_text(
             json.dumps({"primaryApiKey": key}), encoding="utf-8"
         )
-        entry = s._active_account_usage("2", "api-key-2@token.local", "")
+        entry, _login_expires_at = s._active_account_usage("2", "api-key-2@token.local", "")
         assert entry.sentinel == USAGE_API_KEY
         assert entry.decision_value() == USAGE_API_KEY
 
@@ -1181,6 +1181,19 @@ class TestMcpOnlyOAuthItemDoesNotReplaceTheKey:
         # Activation still takes the live MCP state.
         live = json.loads(get_credentials_path().read_text(encoding="utf-8"))
         assert live["mcpOAuth"] == {"linear": {"refreshToken": "mcp-rt"}}
+
+    def test_switch_away_backs_up_a_changed_key(self, temp_home: Path):
+        s = self._key_slot_active_with_mcp_blob()
+        email = s._get_sequence_data()["accounts"]["1"]["email"]
+        new_key = "sk-ant-api03-" + "z9y8x7w6v5" * 4
+        cfg_path = get_global_config_path()
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["primaryApiKey"] = new_key
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+        s.switch_to("2", json_output=True)
+
+        assert s._read_account_credentials("1", email) == new_key
 
     def test_export_ships_the_key(self, temp_home: Path, tmp_path: Path):
         s = self._key_slot_active_with_mcp_blob()

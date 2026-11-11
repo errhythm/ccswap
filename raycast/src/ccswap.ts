@@ -9,7 +9,7 @@ export const SCHEMA_VERSION = 1;
 
 export type Provider = "claude" | "codex";
 
-export type UsageWindow = { pct: number; countdown?: string };
+export type UsageWindow = { pct: number | null; countdown?: string };
 
 export type Account = {
   number: number;
