@@ -1393,3 +1393,127 @@ class TestPinnedFileModeEndsWhenTheFileIsGone:
 
         store._read_active_credentials()
         assert store._use_keychain() is False
+
+
+class TestAnUnverifiedPinStaysPinned:
+    """`_pin_file_mode(residual_cleared=False)` must last the whole process.
+
+    The pin exists because a write that fell back to the plaintext file could
+    not verify-delete the old Keychain item, so a residual may still shadow it.
+    `_kc_call` re-arms `_keychain_disabled_until` on any later failure (that
+    deadline paces backup reads), and the backup paths reach `_kc_call`
+    without consulting `_use_keychain`. Once that deadline lapsed,
+    `_use_keychain` re-probed and the pin was gone. Ported from
+    realiti4/claude-swap#361, with the guard in `_use_keychain` as the
+    maintainer asked so backup-read backoff keeps working.
+    """
+
+    @staticmethod
+    def _past_the_cooldown(monkeypatch):
+        import time
+
+        from claude_swap.credentials import KEYCHAIN_RECHECK_COOLDOWN_S
+
+        real_monotonic = time.monotonic
+        monkeypatch.setattr(
+            time,
+            "monotonic",
+            lambda: real_monotonic() + KEYCHAIN_RECHECK_COOLDOWN_S + 1,
+        )
+
+    def test_routing_stays_pinned_after_a_later_failure_expires(
+        self, macos_switcher, monkeypatch
+    ):
+        from claude_swap import macos_keychain as _kc
+
+        store = macos_switcher._store
+        store._pin_file_mode(residual_cleared=False)
+
+        # A backup read for an idle slot fails against the still-locked
+        # Keychain and re-arms the cooldown the pin had zeroed.
+        with pytest.raises(_kc.KeychainError):
+            store._kc_call(lambda: (_ for _ in ()).throw(_kc.KeychainError("locked")))
+        assert store._keychain_disabled_until > 0.0, "premise: backoff re-armed"
+
+        self._past_the_cooldown(monkeypatch)
+        assert store._use_keychain() is False, (
+            "the re-armed cooldown lapsed and re-probed a Keychain whose "
+            "residual was never cleared"
+        )
+
+    def test_a_verified_pin_still_reprobes_after_a_later_failure(
+        self, macos_switcher, monkeypatch
+    ):
+        """A verified clear proves nothing can shadow the file: self-heal stays."""
+        from claude_swap import macos_keychain as _kc
+
+        store = macos_switcher._store
+        store._pin_file_mode(residual_cleared=True)
+
+        with pytest.raises(_kc.KeychainError):
+            store._kc_call(lambda: (_ for _ in ()).throw(_kc.KeychainError("locked")))
+        assert store._keychain_disabled_until > 0.0
+
+        self._past_the_cooldown(monkeypatch)
+        assert store._use_keychain() is True
+
+    def test_repeated_backup_reads_while_locked_probe_once(
+        self, macos_switcher, monkeypatch
+    ):
+        """The deadline still paces backup reads after an unverified pin."""
+        from claude_swap import macos_keychain as _kc
+
+        store = macos_switcher._store
+        store._pin_file_mode(residual_cleared=False)
+        calls = []
+
+        def locked(*_a, **_kw):
+            calls.append(1)
+            raise _kc.KeychainError("locked")
+
+        monkeypatch.setattr(_kc, "get_password", locked)
+        for _ in range(30):
+            macos_switcher._read_account_credentials("9", "idle@example.com")
+
+        assert len(calls) == 1, f"{len(calls)} Keychain calls for 30 backup reads"
+
+    def test_the_unverified_residual_is_not_served_after_the_cooldown(
+        self, macos_switcher, block_real_keychain, monkeypatch
+    ):
+        """End to end: a switch's write falls back and cannot clear the old
+        account's item; an idle slot's backup read fails and re-arms the
+        cooldown; the Keychain recovers and the cooldown lapses. The active
+        read must still be the file, not the residual."""
+        from claude_swap import macos_keychain as _kc
+        from claude_swap.credentials import CLAUDE_CODE_KEYCHAIN_SERVICE
+
+        store = macos_switcher._store
+        residual_key = (CLAUDE_CODE_KEYCHAIN_SERVICE, _kc.keychain_account_name())
+        block_real_keychain.data[residual_key] = "OLD-ACCOUNT-CREDENTIAL"
+
+        healthy_get = _kc.get_password
+        healthy_set = _kc.set_password
+        healthy_delete = _kc.delete_password
+
+        def locked(*_a, **_kw):
+            raise _kc.KeychainError("locked")
+
+        monkeypatch.setattr(_kc, "set_password", locked)
+        monkeypatch.setattr(_kc, "delete_password", locked)
+        store._write_oauth_credentials("NEW-ACCOUNT-CREDENTIAL")
+        monkeypatch.setattr(_kc, "set_password", healthy_set)
+        monkeypatch.setattr(_kc, "delete_password", healthy_delete)
+
+        assert store._last_active_credentials_backend == "file"
+        assert store._residual_verdict is False, "premise: unverified residual"
+        assert block_real_keychain.data[residual_key] == "OLD-ACCOUNT-CREDENTIAL"
+
+        monkeypatch.setattr(_kc, "get_password", locked)
+        macos_switcher._read_account_credentials("9", "idle@example.com")
+        monkeypatch.setattr(_kc, "get_password", healthy_get)
+
+        self._past_the_cooldown(monkeypatch)
+        assert store._read_credentials() == "NEW-ACCOUNT-CREDENTIAL", (
+            "the pinned file mode was re-probed away and the unverified "
+            "Keychain residual answered for the switch"
+        )

@@ -484,6 +484,13 @@ class CredentialStore:
             and self._keychain_disabled_until
             and time.monotonic() >= self._keychain_disabled_until
         ):
+            if self._residual_verdict is False:
+                # An unverified pin outlives the cooldown a later failure
+                # re-armed (that deadline exists to pace backup reads): a
+                # re-probe could serve the residual it never cleared. Drop
+                # back to the pinned state rather than re-probing.
+                self._keychain_disabled_until = 0.0
+                return False
             self._keychain_usable_cache = None  # cooldown elapsed → re-probe
             self._keychain_disabled_until = 0.0
         return self._keychain_usable_cache is not False
