@@ -483,6 +483,8 @@ class TestStatusJson:
             age_s=4000.0,
             last_error="http-429",
             backoff_until=time_mod.time() + 3600,
+            next_poll_at=time_mod.time() + 3600,
+            last_429_at=time_mod.time() - 60,
         )
 
         with patch.object(switcher, "_read_active_credentials",
@@ -497,6 +499,9 @@ class TestStatusJson:
         assert active["lastGoodAgeSeconds"] == 4000.0
         assert active["usageError"] == "http-429"
         assert active["usageRetryAt"].endswith("Z")
+        assert active["usageBackoffUntil"] == active["usageRetryAt"]
+        assert active["usageNextPollAt"].endswith("Z")
+        assert active["usageLast429At"].endswith("Z")
 
     def test_status_managed_includes_alias(
         self, temp_home: Path, mock_claude_config: Path,
@@ -791,6 +796,50 @@ class TestAccountRowFailure:
         )
         assert "usageError" not in row
         assert "usageRetryAt" not in row
+
+
+class TestAccountRowSchedule:
+    """#22: the additive refresh-schedule fields, on every usageStatus."""
+
+    def test_ok_row_carries_the_schedule(self):
+        row = account_row(
+            2, "b@example.com", "", "", False, {"five_hour": {"pct": 5.0}},
+            usage_fetched_at=1_800_000_000.0,
+            next_poll_at=1_800_000_600.0, last_429_at=1_799_999_000.0,
+        )
+        assert row["usageStatus"] == "ok"
+        assert row["usageNextPollAt"] == "2027-01-15T08:10:00Z"
+        assert row["usageLast429At"] == "2027-01-15T07:43:20Z"
+        assert "usageBackoffUntil" not in row
+
+    def test_backoff_matches_retry_at(self):
+        row = account_row(
+            2, "b@example.com", "", "", False, None,
+            last_error="http-429", backoff_until=1_800_000_000.0,
+        )
+        assert row["usageBackoffUntil"] == row["usageRetryAt"]
+
+    def test_no_schedule_adds_nothing(self):
+        row = account_row(2, "b@example.com", "", "", False, None)
+        assert not {"usageNextPollAt", "usageLast429At", "usageBackoffUntil"} & row.keys()
+
+    def test_list_payload_passes_the_entry_schedule(self, temp_home: Path):
+        from claude_swap.usage_store import UsageEntry
+
+        switcher = ClaudeAccountSwitcher()
+        switcher._setup_directories()
+        now = switcher._usage_store.clock()
+        entry = UsageEntry(
+            next_poll_at=now + 600, last_429_at=now - 60,
+            last_error="http-429", backoff_until=now + 300,
+        )
+        payload = switcher._build_list_payload(
+            [(1, "a@example.com", "", "", True, "", "")], {"1": entry},
+        )
+        row = payload["accounts"][0]
+        assert row["usageNextPollAt"].endswith("Z")
+        assert row["usageLast429At"].endswith("Z")
+        assert row["usageBackoffUntil"] == row["usageRetryAt"]
 
 
 class TestAccountRowDisabled:

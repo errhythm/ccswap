@@ -376,6 +376,25 @@ def usage_failure_fields(
     return out
 
 
+def usage_schedule_fields(
+    next_poll_at: float | None,
+    last_429_at: float | None,
+    backoff_until: float | None,
+) -> dict:
+    """Additive refresh-schedule fields for a Claude row, whatever its
+    ``usageStatus``: when the next fetch is due, the last usage-endpoint 429,
+    and the live failure backoff (the same value as ``usageRetryAt``)."""
+    out = {}
+    for key, epoch_s in (
+        ("usageNextPollAt", next_poll_at),
+        ("usageLast429At", last_429_at),
+        ("usageBackoffUntil", backoff_until),
+    ):
+        if epoch_s is not None:
+            out[key] = _timestamp(epoch_s)
+    return out
+
+
 def last_good_usage_fields(
     usage: dict | None, fetched_at: float | None, age_s: float | None
 ) -> dict:
@@ -428,6 +447,8 @@ def account_row(
     last_good_usage: dict | None = None,
     last_error: str | None = None,
     backoff_until: float | None = None,
+    next_poll_at: float | None = None,
+    last_429_at: float | None = None,
     alias: str = "",
     disabled: bool = False,
     login_expires_at: str | None = None,
@@ -466,6 +487,7 @@ def account_row(
     if subscription_plan:
         row["plan"] = subscription_plan_fields(subscription_plan)
     row.update(usage_extra)
+    row.update(usage_schedule_fields(next_poll_at, last_429_at, backoff_until))
     return row
 
 
