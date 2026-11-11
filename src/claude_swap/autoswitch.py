@@ -1205,7 +1205,10 @@ class AutoSwitchEngine:
                 return TickOutcome.NO_ACTION
             trigger = "failover"
 
-        if trigger in ("proactive", "consume-first") and self._in_cooldown(state):
+        decided_now = self.clock()
+        if trigger in ("proactive", "consume-first") and self._in_cooldown(
+            state, now=decided_now,
+        ):
             self._emit(NoSwitchEvent(reason="cooldown"))
             return TickOutcome.NO_ACTION
 
@@ -1332,7 +1335,6 @@ class AutoSwitchEngine:
                     return unbarred
             return ranked
 
-        decided_now = self.clock()
         ordered, any_known, active_reset_ts = _rank(
             trigger=trigger,
             consume_first=consume_first,
@@ -2388,11 +2390,22 @@ class AutoSwitchEngine:
 
     # -- helpers --------------------------------------------------------------
 
-    def _in_cooldown(self, state: dict) -> bool:
+    def _in_cooldown(self, state: dict, *, now: float | None = None) -> bool:
+        if now is None:
+            now = self.clock()
+        # Every completed switch records its timestamp in sequence.json.
+        # Metadata writes preserve it, including across restarts / auto --once.
+        # Either that record or the engine's own deadline can hold the cooldown.
+        sequence = self.switcher._get_sequence_data() or {}
+        switched_at = _parse_reset_ts(sequence.get("lastSwitchAt"))
+        if switched_at is not None:
+            elapsed = now - switched_at
+            if 0 <= elapsed < self.settings.cooldown_seconds:
+                return True
         last = state.get("lastSwitchAt")
         if not isinstance(last, (int, float)):
             return False
-        return (self.clock() - last) < self.settings.cooldown_seconds
+        return (now - last) < self.settings.cooldown_seconds
 
     def _check_model_names(
         self, quarantined: set[str], usage: dict[str, dict | str | None]

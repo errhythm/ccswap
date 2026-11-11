@@ -172,6 +172,7 @@ class SwitchTransaction:
     original_email: str
     config_path: Path
     completed_steps: list[str] = field(default_factory=list)
+    original_switch_record: dict = field(default_factory=dict)
 
     def record_step(self, step: str) -> None:
         """Record a completed step."""
@@ -196,6 +197,8 @@ class SwitchTransaction:
                     if data:
                         data["activeAccountNumber"] = int(self.original_account_num)
                         data["lastUpdated"] = get_timestamp()
+                        data.pop("lastSwitchAt", None)
+                        data.update(self.original_switch_record)
                         switcher._write_json(switcher.sequence_file, data)
                 switcher._logger.info(f"Rolled back step: {step}")
             except Exception as e:
