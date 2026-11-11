@@ -816,7 +816,8 @@ class SessionManager:
                     f"Account-{account_num} ({email}) is the default login, "
                     "but that login holds no usable token; launching from "
                     "the stored login in a session profile."
-                )
+                ),
+                file=sys.stderr,
             )
         if current is not None and current == (email, org_uuid) and not signed_out:
             if require_session:
@@ -832,7 +833,8 @@ class SessionManager:
                 dimmed(
                     f"Account-{account_num} ({email}) is already the active "
                     "default login — launching claude directly."
-                )
+                ),
+                file=sys.stderr,
             )
             self._history_on_the_fast_path(
                 session_dir_for(self.switcher.backup_dir, account_num, email),
@@ -861,7 +863,8 @@ class SessionManager:
 
         print(
             f"{accent('Launching')} Account-{account_num} ({email}) "
-            f"{muted('[session mode]')}"
+            f"{muted('[session mode]')}",
+            file=sys.stderr,
         )
         env = {
             k: v for k, v in os.environ.items() if k not in AUTH_OVERRIDE_ENV_VARS

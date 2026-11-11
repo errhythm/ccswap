@@ -1542,7 +1542,7 @@ class TestRun:
             manager.run("2", [])
 
     def test_exec_env_and_forwarded_args(
-        self, manager, capture_exec, auth_status_tracks_seed, refresh_rotates
+        self, manager, capture_exec, auth_status_tracks_seed, refresh_rotates, capsys
     ):
         with pytest.raises(_ExecCalled) as exc:
             manager.run("2", ["--resume", "--model", "x"])
@@ -1554,6 +1554,9 @@ class TestRun:
             manager.switcher.backup_dir, ACCOUNT_NUM, ACCOUNT_EMAIL
         )
         assert call.env["CLAUDE_CONFIG_DIR"] == str(session_dir)
+        captured = capsys.readouterr()
+        assert captured.out == ""  # notices must not corrupt piped output
+        assert "[session mode]" in captured.err
 
     def test_fast_path_for_active_account(
         self, manager, capture_exec, monkeypatch, capsys
@@ -1567,7 +1570,7 @@ class TestRun:
             manager.run("2", [])
 
         assert "CLAUDE_CONFIG_DIR" not in exc.value.env
-        assert "already the active default login" in capsys.readouterr().out
+        assert "already the active default login" in capsys.readouterr().err
 
     def test_require_session_refuses_fast_path(
         self, manager, capture_exec, monkeypatch
@@ -1632,7 +1635,7 @@ class TestRun:
             manager.run("2", [])
 
         assert "CLAUDE_CONFIG_DIR" not in exc.value.env
-        assert "already the active default login" in capsys.readouterr().out
+        assert "already the active default login" in capsys.readouterr().err
 
     def test_preset_config_dir_require_session_refuses_active_default(
         self, manager, capture_exec, monkeypatch
@@ -1680,9 +1683,10 @@ class TestRun:
             manager.switcher.backup_dir, ACCOUNT_NUM, ACCOUNT_EMAIL
         )
         assert exc.value.env["CLAUDE_CONFIG_DIR"] == str(session_dir)
-        out = capsys.readouterr().out
-        assert "holds no usable token" in out
-        assert "already the active default login" not in out
+        captured = capsys.readouterr()
+        assert "holds no usable token" not in captured.out
+        assert "holds no usable token" in captured.err
+        assert "already the active default login" not in captured.err
 
     def test_signed_out_default_login_is_not_refused_by_require_session(
         self,
@@ -1724,7 +1728,7 @@ class TestRun:
             manager.run("2", [])
 
         assert "CLAUDE_CONFIG_DIR" not in exc.value.env
-        assert "already the active default login" in capsys.readouterr().out
+        assert "already the active default login" in capsys.readouterr().err
 
     def test_auth_override_vars_scrubbed_from_session_env(
         self,
@@ -4130,7 +4134,7 @@ class TestShareHistoryDecision:
         _active_default_login(monkeypatch, manager)
         with pytest.raises(_ExecCalled):
             manager.run("2", [])
-        out = capsys.readouterr().out
+        out = "".join(capsys.readouterr())
         assert "already the active default login" in out
         assert "chat history" not in out
 
@@ -4166,7 +4170,7 @@ class TestShareHistoryDecision:
         with pytest.raises(_ExecCalled):
             manager.run("2", [], share_history=requested)
 
-        out = capsys.readouterr().out
+        out = "".join(capsys.readouterr())
         assert "already the active default login" in out
         assert "chat history" not in out
 
@@ -4310,7 +4314,7 @@ class TestShareHistoryIsTheDefault:
         ).read_text() == "profile-b\n"
         assert '{"p": "profile"}' in (shared / "history.jsonl").read_text()
         assert self._is_linked(session_dir, shared)
-        out = capsys.readouterr().out
+        out = "".join(capsys.readouterr())
         assert "already the active default login" in out
         assert out.count(OPT_OUT) == 1
         # History only: the profile's credential copy is what the fast path
