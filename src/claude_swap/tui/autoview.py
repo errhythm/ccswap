@@ -559,10 +559,10 @@ class AutoScreen(Screen):
                 entry.append(
                     f"  {data.sentinel_label(acc.usage.sentinel)}", style=palette.muted
                 )
-                ranked.append((998.0, acc.number))
+                key = 998.0
             elif pct is None:
                 entry.append(self.app.gettext("  usage unknown"), style=palette.muted)
-                ranked.append((999.0, acc.number))
+                key = 999.0
             else:
                 entry.append(
                     self.app.gettext("  {pct:3.0f}{percent} used").format(
@@ -570,7 +570,13 @@ class AutoScreen(Screen):
                     ),
                     style=palette.severity(pct),
                 )
-                ranked.append((pct, acc.number))
+                key = pct
+            # The engine skips disabled slots, so ranking one by headroom names
+            # a target it will never take. Mark and sink it instead of hiding.
+            if acc.disabled:
+                entry.append(self.app.gettext("  (disabled)"), style=palette.muted)
+                key = 1000.0
+            ranked.append((key, acc.number))
             lines[acc.number] = entry
 
         text = Text()

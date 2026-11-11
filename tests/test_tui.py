@@ -2440,6 +2440,31 @@ class TestAutoScreen:
                 "user2@example.com"
             )
 
+    async def test_candidates_demote_and_mark_disabled_accounts(
+        self, tmp_path, fake_engine
+    ):
+        """The engine never picks a disabled slot: rank it last and say why,
+        however much headroom it has."""
+        fake = FakeSwitcher(
+            [
+                make_account(1, active=True, entry=make_entry(91.0, 20.0)),
+                make_account(2, entry=make_entry(5.0, 5.0), disabled=True),
+                make_account(3, entry=make_entry(50.0, 10.0)),
+            ],
+            tmp_path,
+        )
+        app = make_app(fake)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await self._open(pilot)
+            await settle(pilot)
+            from textual.widgets import Static
+
+            plain = app.screen.query_one("#candidates", Static).render().plain
+            assert plain.index("user3@example.com") < plain.index(
+                "user2@example.com"
+            )
+            assert "(disabled)" in plain
+
     async def test_candidates_ranking_honors_configured_model(
         self, tmp_path, fake_engine
     ):
