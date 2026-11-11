@@ -1531,7 +1531,15 @@ class AutoSwitchEngine:
                 continue
             if status == "skip-live-session":
                 continue
-            return self._perform(num, email, trigger, left_snapshot)
+            outcome = self._perform(num, email, trigger, left_snapshot)
+            if (
+                outcome is TickOutcome.SWITCHED
+                and usage.get(current) is None
+            ):
+                # Give unknown usage a fresh run after a manual return, but
+                # retain every status string's count so it is left as before.
+                self._unhealthy_ticks = 0
+            return outcome
 
         if systemic or transient_failure:
             self._emit(

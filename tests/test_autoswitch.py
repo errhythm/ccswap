@@ -31,8 +31,15 @@ from claude_swap.autoswitch import (
     _recovery_is_useful,
     pct_label,
 )
-from claude_swap.json_output import USAGE_FOREIGN_CREDENTIAL, USAGE_TOKEN_EXPIRED
-from claude_swap.usage_store import FetchRecord, UsageEntry
+from claude_swap.json_output import (
+    USAGE_API_KEY,
+    USAGE_FOREIGN_CREDENTIAL,
+    USAGE_KEYCHAIN_UNAVAILABLE,
+    USAGE_NO_CREDENTIALS,
+    USAGE_RELOGIN_REQUIRED,
+    USAGE_TOKEN_EXPIRED,
+)
+from claude_swap.usage_store import AUTH_DEAD_STRIKES, FetchRecord, UsageEntry
 from claude_swap.models import Platform
 from claude_swap.settings import AutoSwitchSettings
 from claude_swap.switcher import ClaudeAccountSwitcher
@@ -497,6 +504,197 @@ class TestDecisionTable:
         switch = next(e for e in harness.events if isinstance(e, SwitchEvent))
         assert switch.trigger == "failover"
         assert harness.active_number() == 2
+
+    @pytest.mark.parametrize("count", [1, 3, 10])
+    @pytest.mark.parametrize("fresh_engine", [False, True], ids=["loop", "once"])
+    def test_manual_return_after_failover_restarts_unhealthy_count(
+        self, harness, count, fresh_engine
+    ):
+        harness.settings = replace(harness.settings, unhealthy_ticks=count)
+        harness.engine = harness._make_engine()
+        usage = {"1": None, "2": _usage(10), "3": _usage(50)}
+        for _ in range(harness.settings.unhealthy_ticks - 1):
+            if fresh_engine:
+                harness.engine = harness._make_engine()
+            assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+            harness.clock.advance(60)
+        if fresh_engine:
+            harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+
+        # Return by hand before the engine observes the account it switched to.
+        harness.clock.advance(56)
+        assert harness.switcher.switch_to("1", json_output=True)["switched"]
+        assert harness.active_number() == 1
+        harness.clock.advance(2)
+        for ticks in range(1, harness.settings.unhealthy_ticks):
+            if fresh_engine:
+                harness.engine = harness._make_engine()
+            assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+            assert harness.active_number() == 1
+            assert harness.state()["unhealthyTicks"] == ticks
+            harness.clock.advance(60)
+        if fresh_engine:
+            harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+        assert [
+            e.trigger for e in harness.events if isinstance(e, SwitchEvent)
+        ] == ["failover", "failover"]
+
+    @pytest.mark.parametrize("count", [1, 3, 10, 100])
+    @pytest.mark.parametrize("fresh_engine", [False, True], ids=["loop", "once"])
+    def test_dead_login_manual_return_not_left_later_than_base(
+        self, harness, count, fresh_engine
+    ):
+        harness.settings = replace(harness.settings, unhealthy_ticks=count)
+        harness.engine = harness._make_engine()
+        dead = UsageEntry(
+            sentinel=USAGE_RELOGIN_REQUIRED,
+            last_error="invalid_grant",
+            auth_dead_strikes=AUTH_DEAD_STRIKES,
+        )
+        assert dead.token_dead()
+        assert dead.decision_value() == USAGE_RELOGIN_REQUIRED
+
+        def dead_tick():
+            if fresh_engine:
+                harness.engine = harness._make_engine()
+            outcome = harness.tick_with_entries({
+                "1": dead,
+                "2": _entry_for(_usage(10), harness.clock()),
+                "3": _entry_for(_usage(50), harness.clock()),
+            })
+            harness.clock.advance(60)
+            return outcome
+
+        for _ in range(count - 1):
+            assert dead_tick() is TickOutcome.NO_ACTION
+        assert dead_tick() is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+        assert harness.switcher.switch_to("1", json_output=True)["switched"]
+        observations = []
+        for _ in range(count):
+            outcome = dead_tick()
+            observations.append((outcome, harness.active_number()))
+            if outcome is TickOutcome.SWITCHED:
+                break
+        assert len(observations) == 1, observations
+        assert harness.active_number() == 2
+
+    @pytest.mark.parametrize("status", [
+        USAGE_NO_CREDENTIALS,
+        USAGE_TOKEN_EXPIRED,
+        USAGE_API_KEY,
+        USAGE_KEYCHAIN_UNAVAILABLE,
+        USAGE_RELOGIN_REQUIRED,
+        USAGE_FOREIGN_CREDENTIAL,
+    ])
+    @pytest.mark.parametrize("count", [3, 10])
+    @pytest.mark.parametrize("fresh_engine", [False, True], ids=["loop", "once"])
+    def test_status_manual_return_not_left_later_than_base(
+        self, harness, status, count, fresh_engine
+    ):
+        harness.settings = replace(
+            harness.settings,
+            unhealthy_ticks=count,
+            include_api_key_accounts=status == USAGE_API_KEY,
+        )
+        harness.engine = harness._make_engine()
+        usage = {"1": status, "2": _usage(10), "3": _usage(50)}
+
+        def status_tick():
+            if fresh_engine:
+                harness.engine = harness._make_engine()
+            outcome = harness.tick_with_usage(usage)
+            harness.clock.advance(60)
+            return outcome
+
+        if status == USAGE_TOKEN_EXPIRED:
+            # Expired tokens can fail over only after the idle-hold cap.
+            assert status_tick() is TickOutcome.NO_ACTION
+            assert harness.state()["unhealthyTicks"] == 0
+            harness.clock.advance(IDLE_HOLD_MAX_S + 1)
+        for _ in range(count - 1):
+            assert status_tick() is TickOutcome.NO_ACTION
+        assert status_tick() is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+        assert harness.switcher.switch_to("1", json_output=True)["switched"]
+        assert harness.active_number() == 1
+        assert status_tick() is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+        assert [
+            e.trigger for e in harness.events if isinstance(e, SwitchEvent)
+        ] == ["failover", "failover"]
+
+    @pytest.mark.parametrize("result", [None, {}, {"switched": False, "reason": "refused"}])
+    def test_unsuccessful_switch_preserves_count(self, harness, result):
+        usage = {"1": None, "2": _usage(10), "3": _usage(50)}
+        for _ in range(harness.settings.unhealthy_ticks - 1):
+            assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+            harness.clock.advance(60)
+        with patch.object(harness.switcher, "switch_to", return_value=result):
+            assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+        assert harness.state()["unhealthyTicks"] == harness.settings.unhealthy_ticks
+        harness.clock.advance(60)
+        assert harness.tick_with_usage(usage) is TickOutcome.SWITCHED
+
+    def test_readable_tick_after_return_restarts_later_unknown_run(self, harness):
+        usage = {"1": None, "2": _usage(10), "3": _usage(50)}
+        for _ in range(harness.settings.unhealthy_ticks - 1):
+            assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+            harness.clock.advance(60)
+        assert harness.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert harness.switcher.switch_to("1", json_output=True)["switched"]
+        harness.clock.advance(60)
+        assert harness.tick_with_usage({**usage, "1": _usage(40)}) is TickOutcome.NO_ACTION
+        for _ in range(harness.settings.unhealthy_ticks - 1):
+            harness.clock.advance(60)
+            assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+            assert harness.active_number() == 1
+        harness.clock.advance(60)
+        assert harness.tick_with_usage(usage) is TickOutcome.SWITCHED
+
+    @pytest.mark.parametrize("fresh_engine", [False, True], ids=["loop", "once"])
+    def test_unknown_departure_then_dead_login_gets_new_run(self, harness, fresh_engine):
+        usage = {"1": None, "2": _usage(10), "3": _usage(50)}
+        for tick in range(harness.settings.unhealthy_ticks):
+            if fresh_engine:
+                harness.engine = harness._make_engine()
+            expected = (
+                TickOutcome.SWITCHED
+                if tick == harness.settings.unhealthy_ticks - 1
+                else TickOutcome.NO_ACTION
+            )
+            assert harness.tick_with_usage(usage) is expected
+            harness.clock.advance(60)
+        assert harness.active_number() == 2
+        assert harness.switcher.switch_to("1", json_output=True)["switched"]
+        dead = UsageEntry(
+            sentinel=USAGE_RELOGIN_REQUIRED,
+            last_error="invalid_grant",
+            auth_dead_strikes=AUTH_DEAD_STRIKES,
+        )
+        assert dead.token_dead()
+        for tick in range(harness.settings.unhealthy_ticks):
+            if fresh_engine:
+                harness.engine = harness._make_engine()
+            outcome = harness.tick_with_entries({
+                "1": dead,
+                "2": _entry_for(_usage(10), harness.clock()),
+                "3": _entry_for(_usage(50), harness.clock()),
+            })
+            if tick < harness.settings.unhealthy_ticks - 1:
+                assert outcome is TickOutcome.NO_ACTION
+                assert harness.active_number() == 1
+                assert harness.state()["unhealthyTicks"] == tick + 1
+            else:
+                assert outcome is TickOutcome.SWITCHED
+                assert harness.active_number() == 2
+            harness.clock.advance(60)
+        # This departure was known dead, so the spent count is retained.
+        assert harness.state()["unhealthyTicks"] == harness.settings.unhealthy_ticks
 
     def test_unhealthy_count_survives_a_fresh_engine_per_tick(self, harness):
         # `auto --once` builds a new engine every invocation.
