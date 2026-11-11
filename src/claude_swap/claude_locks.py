@@ -110,6 +110,24 @@ def _nap(want: float, start: float, timeout: float) -> None:
         time.sleep(min(want, left))
 
 
+def _identity(st: os.stat_result) -> tuple[int, int]:
+    return st.st_dev, st.st_ino
+
+
+def _pin(lock_dir: Path) -> tuple[int | None, tuple[int, int]]:
+    """Identify the lock directory we just made, holding it open on POSIX.
+
+    A stale takeover makes a NEW directory at the same path. With nothing
+    holding ours open, rmdir+mkdir can hand the takeover our old inode back,
+    so the open fd is what makes (st_dev, st_ino) tell the two apart.
+    Windows has no O_DIRECTORY; a plain stat is the best it offers.
+    """
+    if os.name == "nt":
+        return None, _identity(os.stat(lock_dir))
+    fd = os.open(lock_dir, os.O_RDONLY | os.O_DIRECTORY)
+    return fd, _identity(os.fstat(fd))
+
+
 def _remove_if_still_stale(lock_dir: Path, staleness: float) -> bool:
     """Remove ``lock_dir`` if it is still stale, under the takeover directory.
 
@@ -171,9 +189,12 @@ def proper_lockfile(
     while True:
         try:
             os.mkdir(lock_dir)
+            pinned_fd, ours = _pin(lock_dir)
             break
         except FileExistsError:
             pass
+        except FileNotFoundError:
+            pass  # swept between mkdir and _pin; the stat arm below backs off
         if time.monotonic() - start > timeout:
             raise ClaudeCodeLockTimeout(
                 f"Could not acquire {lock_dir.name} — Claude Code appears "
@@ -237,13 +258,26 @@ def proper_lockfile(
         stop_touching.set()
         toucher.join(timeout=1.0)
         try:
-            os.rmdir(lock_dir)
+            # Only remove the directory we made: after a stale takeover the
+            # path holds the new holder's lock, and removing it would let two
+            # processes refresh the same single-use token.
+            if _identity(os.stat(lock_dir)) == ours:
+                os.rmdir(lock_dir)
+            else:
+                _logger.warning(
+                    "Lock %s was taken over while held; leaving the new "
+                    "holder's lock in place",
+                    lock_dir,
+                )
         except FileNotFoundError:
             _logger.warning(
                 "Lock %s vanished while held (taken over as stale?)", lock_dir
             )
         except OSError as e:
             _logger.warning("Failed to release lock %s: %s", lock_dir, e)
+        finally:
+            if pinned_fd is not None:
+                os.close(pinned_fd)
 
 
 @contextmanager

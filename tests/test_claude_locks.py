@@ -129,6 +129,26 @@ class TestProperLockfile:
         # No exception; nothing left behind.
         assert not lock_dir.exists()
 
+    def test_release_after_takeover_keeps_the_new_holders_lock(
+        self, lock_dir, caplog
+    ):
+        """A's lock goes stale, B takes it over, A releases: B must still hold
+        it, or two processes refresh the same single-use token (#287)."""
+        a = proper_lockfile(lock_dir, timeout=2.0)
+        a.__enter__()
+        past = time.time() - 30
+        os.utime(lock_dir, (past, past))
+        b = proper_lockfile(lock_dir, timeout=2.0)
+        b.__enter__()
+        b_ident = (lock_dir.stat().st_dev, lock_dir.stat().st_ino)
+        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+            a.__exit__(None, None, None)
+        assert lock_dir.is_dir()
+        assert (lock_dir.stat().st_dev, lock_dir.stat().st_ino) == b_ident
+        assert "taken over while held" in caplog.text
+        b.__exit__(None, None, None)
+        assert not lock_dir.exists()
+
     def test_toucher_keeps_mtime_fresh(self, lock_dir, monkeypatch):
         monkeypatch.setattr(claude_locks, "TOUCH_INTERVAL_S", 0.005)
         with proper_lockfile(lock_dir):
