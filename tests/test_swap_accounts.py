@@ -873,3 +873,33 @@ class TestSwapAdoptsSessionCredentials:
             "1", "account1@example.com"
         ) == _creds("stored-1", 1)
         assert switcher._session_dir("1", "account1@example.com").exists()
+
+
+def test_staging_failure_does_not_reverse_untouched_session_profiles(
+    temp_home: Path, sample_sequence_data_with_org: dict, monkeypatch
+):
+    """realiti4/claude-swap#286: a same-email swap whose staging aborts has
+    moved nothing, so the rollback must not exchange the session profiles."""
+    switcher = ClaudeAccountSwitcher()
+    switcher._setup_directories()
+    switcher._write_json(switcher.sequence_file, sample_sequence_data_with_org)
+    email = "user@example.com"
+    switcher._write_account_credentials("1", email, "creds-org")
+    switcher._write_account_credentials("2", email, "creds-personal")
+    for num in ("1", "2"):
+        d = switcher._session_dir(num, email)
+        d.mkdir(parents=True)
+        (d / "marker.txt").write_text(f"SLOT-{num}-HISTORY")
+
+    def refuse(_material):
+        raise ConfigError("Could not stage swap material, nothing was changed")
+
+    monkeypatch.setattr(switcher, "_stage_overlap_material", refuse)
+    with pytest.raises(ConfigError, match="nothing was changed"):
+        switcher.swap_accounts("1", "2")
+
+    for num in ("1", "2"):
+        marker = switcher._session_dir(num, email) / "marker.txt"
+        assert marker.read_text() == f"SLOT-{num}-HISTORY"
+    assert switcher._read_account_credentials("1", email) == "creds-org"
+    assert switcher._read_account_credentials("2", email) == "creds-personal"

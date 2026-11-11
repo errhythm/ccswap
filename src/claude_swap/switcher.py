@@ -1479,17 +1479,18 @@ class ClaudeAccountSwitcher:
         config_b = self._read_account_config(num_b, email_b)
 
         staging: dict[str, Path] = {}
+        if email_a == email_b:
+            # Same email: the two slots' backup keys fully overlap, so
+            # every write below overwrites the other account's material.
+            # Park durable copies first — a failure mid-write can then
+            # never leave a credential existing only in this process's
+            # memory. Outside the try: staging cleans up after itself, and a
+            # failure here must not reach _rollback_swap, which would reverse
+            # a session-profile exchange that never ran (#270).
+            staging = self._stage_overlap_material(
+                {num_a: (creds_a, config_a), num_b: (creds_b, config_b)}
+            )
         try:
-            if email_a == email_b:
-                # Same email: the two slots' backup keys fully overlap, so
-                # every write below overwrites the other account's material.
-                # Park durable copies first — a failure mid-write can then
-                # never leave a credential existing only in this process's
-                # memory. (Staging fails -> abort before anything changed.)
-                staging = self._stage_overlap_material(
-                    {num_a: (creds_a, config_a), num_b: (creds_b, config_b)}
-                )
-
             # Move each session profile to its owner's new slot key. When both
             # accounts share an email the two paths swap directly, so stage the
             # first through a temporary name.
