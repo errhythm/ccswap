@@ -7547,6 +7547,8 @@ class ClaudeAccountSwitcher:
 
                     data["activeAccountNumber"] = int(target_account)
                     data["lastUpdated"] = get_timestamp()
+                    if from_ref != to_ref:
+                        data["lastSwitchAt"] = data["lastUpdated"]
                     self._write_json(self.sequence_file, data)
                 except Exception:
                     if config_written and rollback_config_text is not None:
@@ -7632,6 +7634,10 @@ class ClaudeAccountSwitcher:
                 original_account_num=current_account,
                 original_email=current_email,
                 config_path=config_path,
+                original_switch_record=(
+                    {"lastSwitchAt": data["lastSwitchAt"]}
+                    if "lastSwitchAt" in data else {}
+                ),
             )
 
             try:
@@ -7823,6 +7829,8 @@ class ClaudeAccountSwitcher:
                 # Step 5: Update sequence state
                 data["activeAccountNumber"] = int(target_account)
                 data["lastUpdated"] = get_timestamp()
+                if from_ref != to_ref:
+                    data["lastSwitchAt"] = data["lastUpdated"]
                 self._write_json(self.sequence_file, data)
                 transaction.record_step("sequence_updated")
 

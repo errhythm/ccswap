@@ -31,6 +31,7 @@ from claude_swap.autoswitch import (
     _recovery_is_useful,
     pct_label,
 )
+from claude_swap.exceptions import SwitchError
 from claude_swap.json_output import (
     USAGE_API_KEY,
     USAGE_FOREIGN_CREDENTIAL,
@@ -40,7 +41,8 @@ from claude_swap.json_output import (
     USAGE_TOKEN_EXPIRED,
 )
 from claude_swap.usage_store import AUTH_DEAD_STRIKES, FetchRecord, UsageEntry
-from claude_swap.models import Platform
+from claude_swap.models import Platform, SwitchTransaction
+from claude_swap.transfer import export_accounts, import_accounts
 from claude_swap.settings import AutoSwitchSettings
 from claude_swap.switcher import ClaudeAccountSwitcher
 
@@ -3330,6 +3332,48 @@ class TestConsumeFirstStrategy:
         assert outcome is TickOutcome.NO_ACTION
         assert h.active_number() == 2
         assert "cooldown" in [e.reason for e in h.events if isinstance(e, NoSwitchEvent)]
+
+    @pytest.mark.parametrize(
+        ("trigger", "active_pct"),
+        [("consume-first", 0), ("proactive", 99), ("at-limit", 100), ("failover", None)],
+    )
+    def test_manual_switch_starts_cooldown(self, temp_home, trigger, active_pct):
+        h = EngineHarness(
+            temp_home, strategy="consume-first", threshold=99.0, unhealthy_ticks=1,
+        )
+        h.seed(2, "b@example.com")
+        h.seed(3, "c@example.com")
+        h.make_live("c@example.com", 3)
+        # The engine's last landing is #3, and its own cooldown has expired.
+        h.engine._mutate_state(
+            lambda s: s.update(lastSwitchAt=h.clock() - 400, lastSwitchTo="3")
+        )
+        with patch("claude_swap.switcher.get_timestamp", return_value=_iso_at(h.clock())):
+            result = h.switcher.switch_to("2", json_output=True)
+        assert result["switched"]
+        assert h.active_number() == 2
+        h.clock.advance(55)
+        usage = {
+            "2": _usage7(active_pct, 0, _R_LATEST) if active_pct is not None else None,
+            "3": _usage7(98, 27, _R_LATER),
+        }
+
+        if trigger in ("proactive", "consume-first"):
+            for elapsed in (0, 244):  # 55s and 299s since the manual switch
+                h.clock.advance(elapsed)
+                assert h.tick_with_usage(usage) is TickOutcome.NO_ACTION
+                assert h.active_number() == 2
+                assert not any(isinstance(e, SwitchEvent) for e in h.events)
+                assert [e.reason for e in h.events if isinstance(e, NoSwitchEvent)][-1] == (
+                    "cooldown"
+                )
+            h.clock.advance(1)  # exactly the existing 300s cooldown
+
+        # Optimising resumes after cooldown; at-limit and failover leave at 55s.
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+        switch = next(e for e in h.events if isinstance(e, SwitchEvent))
+        assert switch.trigger == trigger
 
     def test_locked_recheck_stops_concurrent_engine(self, temp_home):
         """The under-lock cooldown recheck in _perform must cover consume-first.
@@ -7548,3 +7592,298 @@ class TestOptionalWarmup:
         assert harness.engine.tick() == TickOutcome.NO_ACTION
         assert harness.events[-1].kind == "warmup"
 
+
+def _manual_cooldown_harness(temp_home, *, last_to="3", active_pct=0, unhealthy_ticks=3):
+    h = EngineHarness(
+        temp_home, strategy="consume-first", threshold=99,
+        unhealthy_ticks=unhealthy_ticks,
+    )
+    for n in (2, 3, 4):
+        h.seed(n, f"account-{n}@example.invalid")
+    h.make_live("account-2@example.invalid", 2)
+    h.engine._mutate_state(
+        lambda s: s.update(lastSwitchAt=h.clock() - 1000, lastSwitchTo=last_to)
+    )
+    usage = {
+        "2": _usage7(active_pct, 0, _R_LATEST) if active_pct is not None else None,
+        "3": _usage7(10, 10, _R_LATER),
+        "4": None,
+    }
+    return h, usage
+
+
+def _manual_switch(h, target):
+    with patch("claude_swap.switcher.get_timestamp", return_value=_iso_at(h.clock())):
+        assert h.switcher.switch_to(str(target), json_output=True)["switched"]
+
+
+_COOLDOWN_WRITERS = [
+    "alias-set", "alias-unset", "swap", "move", "disable", "enable",
+    "uuid-backfill", "org-migrate", "capture-refresh", "capture-new",
+    "token-refresh", "token-new", "remove", "rollback", "import",
+    "import-activate", "direct-activate",
+]
+
+
+def _write_cooldown_metadata(h, writer):
+    s = h.switcher
+    data = s._get_sequence_data()
+    if writer == "alias-unset":
+        data["accounts"]["2"]["alias"] = "work"
+    if writer == "enable":
+        data["accounts"]["4"]["disabled"] = True
+    if writer == "uuid-backfill":
+        data["accounts"]["4"]["uuid"] = ""
+    if writer == "org-migrate":
+        data["accounts"]["4"].pop("organizationUuid")
+    s._write_json(s.sequence_file, data)
+    if writer == "alias-set":
+        s.set_alias("2", "work")
+    elif writer == "alias-unset":
+        s.unset_alias("2")
+    elif writer == "swap":
+        s.swap_accounts("3", "4")
+    elif writer == "move":
+        s.move_account("4", "5")
+    elif writer in ("disable", "enable"):
+        s.set_account_disabled("4", writer == "disable")
+    elif writer == "uuid-backfill":
+        s.backfill_account_uuid("4", "resolved-4")
+    elif writer == "org-migrate":
+        s._migrate_org_fields()
+    elif writer in ("capture-refresh", "capture-new"):
+        s.add_account(**({"slot": 5, "assume_yes": True} if writer == "capture-new" else {}))
+    elif writer in ("token-refresh", "token-new"):
+        s.add_account_from_token("synthetic-setup-token", email=(
+            "account-4@example.invalid" if writer == "token-refresh" else "account-5@example.invalid"))
+    elif writer == "remove":
+        s.remove_account("4", assume_yes=True)
+    elif writer == "rollback":
+        transaction = SwitchTransaction(
+            "", "", "2", "account-2@example.invalid",
+            h.temp_home / ".claude.json", ["sequence_updated"],
+        )
+        transaction.original_switch_record = (
+            {"lastSwitchAt": data["lastSwitchAt"]} if "lastSwitchAt" in data else {}
+        )
+        assert transaction.rollback(s)
+    elif writer == "direct-activate":
+        result = s.switch_to("2", json_output=True, force=True)
+        assert result["to"]["number"] == 2
+    elif writer in ("import", "import-activate"):
+        dest = h.temp_home / "export.json"
+        export_accounts(s, str(dest))
+        if writer == "import-activate":
+            data = s._get_sequence_data()
+            data["activeAccountNumber"] = None
+            s._write_json(s.sequence_file, data)
+        import_accounts(s, str(dest), force=True)
+
+
+class TestManualSwitchCooldown:
+    @pytest.mark.parametrize("active_pct", [0, 99], ids=["consume-first", "proactive"])
+    def test_return_to_engine_last_landing_keeps_manual_choice(self, temp_home, active_pct):
+        """Required: 2 -> 3 -> 2 in two seconds must buy a fresh 300 seconds."""
+        h, usage = _manual_cooldown_harness(temp_home, last_to="2", active_pct=active_pct)
+        _manual_switch(h, 3)
+        h.clock.advance(2)
+        _manual_switch(h, 2)
+        h.clock.advance(55)
+        result = h.tick_with_usage(usage)
+        assert result is TickOutcome.NO_ACTION, "manual account was taken away at 55 seconds"
+        assert h.active_number() == 2
+        assert not any(isinstance(e, SwitchEvent) for e in h.events)
+
+        h.clock.advance(244)  # 299 seconds after the return, 301 after departure
+        assert h.tick_with_usage(usage) is TickOutcome.NO_ACTION
+        assert h.active_number() == 2
+        h.clock.advance(1)
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+
+    @pytest.mark.parametrize("mode", ["restart", "once"])
+    def test_fresh_engines_respect_deadline(self, temp_home, mode):
+        h, usage = _manual_cooldown_harness(temp_home)
+        _manual_switch(h, 3)
+        _manual_switch(h, 2)
+        for offset in (60, 60, 60, 60, 59):
+            h.clock.advance(offset)
+            if mode == "once" or h.clock.now == 1_000_060:
+                h.engine = h._make_engine()
+            assert h.tick_with_usage(usage) is TickOutcome.NO_ACTION
+            assert h.active_number() == 2
+        h.clock.advance(1)
+        h.engine = h._make_engine()
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+
+    @pytest.mark.parametrize("active_pct,trigger", [(100, "at-limit"), (None, "failover")])
+    def test_escape_inside_manual_cooldown(self, temp_home, active_pct, trigger):
+        h, usage = _manual_cooldown_harness(temp_home, active_pct=active_pct)
+        _manual_switch(h, 3)
+        _manual_switch(h, 2)
+        h.clock.advance(1)
+        if trigger == "failover":
+            for _ in range(2):
+                assert h.tick_with_usage(usage) is TickOutcome.NO_ACTION
+                assert h.active_number() == 2
+                h.clock.advance(1)
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+        assert [e.trigger for e in h.events if isinstance(e, SwitchEvent)] == [trigger]
+
+    @pytest.mark.parametrize("stamp", ["missing", "unparseable", "future"])
+    def test_bad_manual_timestamp_uses_existing_engine_deadline(self, temp_home, stamp):
+        h, usage = _manual_cooldown_harness(temp_home)
+        data = h.switcher._get_sequence_data()
+        if stamp == "missing":
+            data.pop("lastSwitchAt", None)
+        else:
+            data["lastSwitchAt"] = "invalid" if stamp == "unparseable" else _iso_at(h.clock()+60)
+        h.switcher._write_json(h.switcher.sequence_file, data)
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+
+    def test_manual_choice_made_after_tick_gate_is_rechecked(self, temp_home):
+        h, usage = _manual_cooldown_harness(temp_home)
+        data = h.switcher._get_sequence_data()
+        data["lastSwitchAt"] = _iso_at(h.clock()-1000)
+        h.switcher._write_json(h.switcher.sequence_file, data)
+        original = h.engine._perform
+
+        def concurrent_manual(*args, **kwargs):
+            _manual_switch(h, 4)
+            return original(*args, **kwargs)
+
+        with patch.object(h.engine, "_perform", side_effect=concurrent_manual):
+            assert h.tick_with_usage(usage) is TickOutcome.NO_ACTION
+        assert h.active_number() == 4
+        assert not any(isinstance(e, SwitchEvent) for e in h.events)
+        assert any(isinstance(e, NoSwitchEvent) and e.reason == "cooldown" for e in h.events)
+
+    @pytest.mark.parametrize("writer", _COOLDOWN_WRITERS)
+    def test_nonmanual_writer_does_not_start_optimization_hold(self, temp_home, writer):
+        """A roster write preserves the completed-switch deadline."""
+        h, usage = _manual_cooldown_harness(temp_home)
+        _manual_switch(h, 3)
+        _manual_switch(h, 2)
+        h.clock.advance(1000)  # genuine manual cooldown long expired
+        previous_switch = h.switcher._get_sequence_data().get("lastSwitchAt")
+        with patch("claude_swap.switcher.get_timestamp", side_effect=lambda: _iso_at(h.clock())), \
+             patch("claude_swap.models.get_timestamp", side_effect=lambda: _iso_at(h.clock())), \
+             patch("claude_swap.transfer.get_timestamp", side_effect=lambda: _iso_at(h.clock())):
+            _write_cooldown_metadata(h, writer)
+        data = h.switcher._get_sequence_data()
+        assert data["lastUpdated"] == _iso_at(h.clock())
+        assert data.get("lastSwitchAt") == previous_switch
+        current = str(data["activeAccountNumber"])
+        if current != "2":
+            usage[current] = usage.pop("2")
+        # The swap reassigns account identities, so choose a still-managed peer.
+        target = "3"
+        usage[target] = _usage7(10, 10, _R_LATER)
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert str(h.active_number()) == target
+
+    def test_repeated_alias_edits_do_not_extend_cooldown(self, temp_home):
+        h, usage = _manual_cooldown_harness(temp_home)
+        _manual_switch(h, 3)
+        _manual_switch(h, 2)
+        previous_switch = h.switcher._get_sequence_data().get("lastSwitchAt")
+        for index in range(6):
+            h.clock.advance(299)
+            with patch("claude_swap.switcher.get_timestamp", return_value=_iso_at(h.clock())):
+                h.switcher.set_alias("2", f"work-{index}")
+            assert h.switcher._get_sequence_data().get("lastSwitchAt") == previous_switch
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+
+    @pytest.mark.parametrize("writer", _COOLDOWN_WRITERS)
+    @pytest.mark.parametrize("active_pct,trigger", [(100, "at-limit"), (None, "failover")])
+    def test_each_nonmanual_writer_does_not_delay_escape(self, temp_home, writer, active_pct, trigger):
+        h, usage = _manual_cooldown_harness(temp_home, active_pct=active_pct)
+        _manual_switch(h, 3)
+        _manual_switch(h, 2)
+        h.clock.advance(1000)
+        with patch("claude_swap.switcher.get_timestamp", side_effect=lambda: _iso_at(h.clock())), \
+             patch("claude_swap.models.get_timestamp", side_effect=lambda: _iso_at(h.clock())), \
+             patch("claude_swap.transfer.get_timestamp", side_effect=lambda: _iso_at(h.clock())):
+            _write_cooldown_metadata(h, writer)
+        current = str(h.active_number())
+        if current != "2":
+            usage[current] = usage.pop("2")
+        if trigger == "failover":
+            for _ in range(2):
+                assert h.tick_with_usage(usage) is TickOutcome.NO_ACTION
+                assert str(h.active_number()) == current
+                h.clock.advance(1)
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+        assert [e.trigger for e in h.events if isinstance(e, SwitchEvent)] == [trigger]
+
+    def test_engine_own_landing_uses_engine_deadline(self, temp_home):
+        h, usage = _manual_cooldown_harness(temp_home, active_pct=100)
+        with patch("claude_swap.switcher.get_timestamp", return_value=_iso_at(h.clock())):
+            assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+        assert h.engine._in_cooldown(h.state())
+        h.clock.advance(300)
+        # A later unrelated roster timestamp cannot extend the engine's own landing.
+        with patch("claude_swap.switcher.get_timestamp", return_value=_iso_at(h.clock())):
+            h.switcher.set_alias("3", "work")
+        assert not h.engine._in_cooldown(h.state())
+
+    def test_roster_creation_has_no_active_account_to_protect(self, temp_home):
+        h = EngineHarness(temp_home, strategy="consume-first")
+        assert h.switcher._get_sequence_data()["activeAccountNumber"] is None
+        assert not h.engine._in_cooldown({})
+        assert h.engine.tick() is TickOutcome.NO_ACTION
+
+    @pytest.mark.parametrize("fresh", [False, True])
+    def test_direct_activation_starts_cooldown(self, temp_home, fresh):
+        h, usage = _manual_cooldown_harness(temp_home)
+        if fresh:
+            (h.temp_home / ".claude.json").unlink()
+            target, peer = "2", "3"
+        else:
+            target, peer = "3", "2"
+            usage["3"] = _usage7(0, 0, _R_LATEST)
+            usage["2"] = _usage7(10, 10, _R_LATER)
+        with patch("claude_swap.switcher.get_timestamp", return_value=_iso_at(h.clock())):
+            result = h.switcher.switch_to(target, json_output=True, force=not fresh)
+        assert result["switched"]
+        assert h.switcher._get_sequence_data()["lastSwitchAt"] == _iso_at(h.clock())
+        h.clock.advance(299)
+        assert h.tick_with_usage(usage) is TickOutcome.NO_ACTION
+        assert str(h.active_number()) == target
+        h.clock.advance(1)
+        assert h.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert str(h.active_number()) == peer
+
+    @pytest.mark.parametrize("previous", ["missing", "recent", "expired", "invalid", None])
+    def test_failed_switch_restores_previous_record(self, temp_home, previous):
+        h, usage = _manual_cooldown_harness(temp_home)
+        data = h.switcher._get_sequence_data()
+        if previous != "missing":
+            data["lastSwitchAt"] = (
+                _iso_at(h.clock() - (1000 if previous == "expired" else 10))
+                if previous in ("recent", "expired") else previous
+            )
+        h.switcher._write_json(h.switcher.sequence_file, data)
+
+        def fail_after_sequence_write(message):
+            if message.startswith("Switched from account"):
+                raise RuntimeError("injected failure after sequence write")
+
+        with (
+            patch("claude_swap.switcher.get_timestamp", return_value=_iso_at(h.clock())),
+            patch.object(h.switcher._logger, "info", side_effect=fail_after_sequence_write),
+            pytest.raises(SwitchError, match="was rolled back"),
+        ):
+            h.switcher.switch_to("3", json_output=True)
+        restored = h.switcher._get_sequence_data()
+        assert ("lastSwitchAt" in restored) == ("lastSwitchAt" in data)
+        assert restored.get("lastSwitchAt") == data.get("lastSwitchAt")
+        assert h.active_number() == 2
+        expected = TickOutcome.NO_ACTION if previous == "recent" else TickOutcome.SWITCHED
+        assert h.tick_with_usage(usage) is expected

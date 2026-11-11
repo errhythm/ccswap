@@ -27,7 +27,7 @@
 | macOS | macOS Keychain (or explicit file backend) | `~/.claude-swap-backup/` |
 | Linux / WSL | File-based (inside the backup directory, under `credentials/`) | `${XDG_DATA_HOME:-~/.local/share}/claude-swap/` |
 
-Session-mode profiles (`ccswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`) and auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset) live in the backup directory root.
+Session-mode profiles (`ccswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`) and auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset) live in the backup directory root. The time of the last completed account switch is also kept in the roster (`sequence.json`, key `lastSwitchAt`), so the cooldown after a switch still applies when `autoswitch_state.json` is deleted.
 
 Codex saves sanitized quota snapshots in `codex/usage-N.json` beside its account roster. These contain the slot and public labels, last successful fetch time, quota windows, credits, allowance, banked resets and the last error class/attempt time. File-only consumers can read them without credentials; failed attempts preserve the last good measurement. See [Codex usage snapshots](codex.md#usage-snapshots-on-disk) for the schema and freshness rules.
 
