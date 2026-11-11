@@ -1110,10 +1110,8 @@ class AutoSwitchEngine:
         if not self._model_check_done:
             self._check_model_names(quarantined, usage)
 
-        if (
-            self.switcher.account_kind_for(current) == "api_key"
-            and not settings.include_api_key_accounts
-        ):
+        active_is_api_key = self.switcher.account_kind_for(current) == "api_key"
+        if active_is_api_key and not settings.include_api_key_accounts:
             self._emit(
                 NoSwitchEvent(
                     reason="active-api-key",
@@ -1124,7 +1122,40 @@ class AutoSwitchEngine:
 
         active_headroom = headroom.get(current)
         active_policy = policy.get(current)
-        if active_headroom is not None:
+        if active_is_api_key:
+            # An active API key reads no quota by design (headroom None): a
+            # resting state, not a failing poll. Counted as unhealthy it failed
+            # over to a nearly spent subscription, then bounced back. Hold it
+            # until a subscription is under its threshold(s), then leave as an
+            # exhausted account would be left (at-limit ranking).
+            self._unhealthy_ticks = 0
+            self._idle_hold_since = None
+            # Same test the engine applies to an active account, per candidate.
+            overrides = bool(self._decision_gates.overrides)
+            recovered = [
+                num
+                for num in self.switcher.switchable_account_numbers()
+                if num != current
+                and num not in quarantined
+                and self.switcher.account_kind_for(num) != "api_key"
+                and (policy if overrides else headroom).get(num) is not None
+                and (100.0 - (policy if overrides else headroom)[num])
+                < settings.threshold
+            ]
+            if not recovered:
+                self._emit(
+                    NoSwitchEvent(
+                        reason="active-api-key",
+                        detail=(
+                            "holding the API key until a subscription account "
+                            "is below the threshold"
+                        ),
+                    )
+                )
+                return TickOutcome.NO_ACTION
+            active_headroom = 0.0
+            trigger = "at-limit"
+        elif active_headroom is not None:
             self._unhealthy_ticks = 0
             self._idle_hold_since = None
             # No per-gate overrides: the historical `max(pct) >= threshold`
