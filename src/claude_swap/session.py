@@ -847,14 +847,16 @@ class SessionManager:
         if config_dir_preset:
             warning(
                 f"CLAUDE_CONFIG_DIR is already set ({config_dir_preset}); "
-                "overriding it for this launch."
+                "overriding it for this launch.",
+                file=sys.stderr,
             )
 
         scrubbed = [v for v in AUTH_OVERRIDE_ENV_VARS if os.environ.get(v)]
         if scrubbed:
             warning(
                 f"Ignoring {', '.join(scrubbed)} for this session — it would "
-                f"override the selected account inside Claude Code."
+                f"override the selected account inside Claude Code.",
+                file=sys.stderr,
             )
 
         session_dir, account_num, email = self.setup_session(
@@ -901,7 +903,8 @@ class SessionManager:
                 dimmed(
                     "   This launch uses the default login's chat history "
                     "(~/.claude), not the account's own."
-                )
+                ),
+                file=sys.stderr,
             )
 
     def _resolve_share_history(self, requested: bool | None) -> bool:

@@ -40,6 +40,7 @@ from claude_swap.models import Platform
 from claude_swap.paths import get_backup_root, get_global_config_path
 from claude_swap.process_detection import ClaudeSession
 from claude_swap.session import (
+    AUTH_OVERRIDE_ENV_VARS,
     MCP_DISPLACED_STASH,
     MCP_MIRROR_MARKER,
     SHARE_MANIFEST,
@@ -1558,6 +1559,21 @@ class TestRun:
         assert captured.out == ""  # notices must not corrupt piped output
         assert "[session mode]" in captured.err
 
+    def test_preset_env_warnings_stay_off_stdout(
+        self, manager, capture_exec, auth_status_tracks_seed, refresh_rotates,
+        monkeypatch, capsys,
+    ):
+        # Inside a `ccswap run` shell CLAUDE_CONFIG_DIR is always set.
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/somewhere/else")
+        monkeypatch.setenv(AUTH_OVERRIDE_ENV_VARS[0], "x")
+        with pytest.raises(_ExecCalled):
+            manager.run("2", [])
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "CLAUDE_CONFIG_DIR is already set" in captured.err
+        assert f"Ignoring {AUTH_OVERRIDE_ENV_VARS[0]}" in captured.err
+
     def test_fast_path_for_active_account(
         self, manager, capture_exec, monkeypatch, capsys
     ):
@@ -1618,7 +1634,7 @@ class TestRun:
             manager.switcher.backup_dir, ACCOUNT_NUM, ACCOUNT_EMAIL
         )
         assert exc.value.env["CLAUDE_CONFIG_DIR"] == str(session_dir)
-        assert "overriding it for this launch" in capsys.readouterr().out
+        assert "overriding it for this launch" in capsys.readouterr().err
 
     def test_preset_config_dir_fast_paths_for_active_default_account(
         self, manager, capture_exec, monkeypatch, capsys
@@ -1747,7 +1763,7 @@ class TestRun:
 
         # Warned, and the overrides are scrubbed from the launched env —
         # `cswap run 2` means account 2, not whatever the API key resolves to.
-        out = capsys.readouterr().out
+        out = capsys.readouterr().err
         assert "Ignoring ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN" in out
         assert "ANTHROPIC_API_KEY" not in exc.value.env
         assert "ANTHROPIC_AUTH_TOKEN" not in exc.value.env
@@ -4152,7 +4168,7 @@ class TestShareHistoryDecision:
             manager.run("2", [], share_history=requested)
 
         assert "CLAUDE_CONFIG_DIR" not in exc.value.env
-        assert "default login's chat history" in capsys.readouterr().out
+        assert "default login's chat history" in capsys.readouterr().err
         # Said, not acted on: the history stays where the user keeps it.
         assert (
             session_dir / "projects" / "-home-user-app" / "bbb.jsonl"
