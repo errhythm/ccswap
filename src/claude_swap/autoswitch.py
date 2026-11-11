@@ -727,6 +727,7 @@ class AutoSwitchEngine:
         self._wake = threading.Event()
         self._unhealthy_ticks = 0
         self._health_account: str | None = None
+        self._unknown_departure: str | None = self._read_state().get("unknownDeparture")
         # Both set per tick: a known-reset sleep target, and whether a BLOCKED
         # outcome is static enough (truly exhausted / no candidates) to wait
         # longer than the normal interval.
@@ -1001,9 +1002,14 @@ class AutoSwitchEngine:
         if self.dry_run:
             return
         ticks, since = self._unhealthy_ticks, self._idle_hold_since
+        departure = self._unknown_departure
         now = self.clock()
 
         def store(state: dict) -> None:
+            if departure is not None:
+                state["unknownDeparture"] = departure
+            else:
+                state.pop("unknownDeparture", None)
             if current is not None and (ticks or since is not None):
                 state["unhealthyTicks"] = ticks
                 state["idleHoldSince"] = since
@@ -1017,7 +1023,12 @@ class AutoSwitchEngine:
                     state.pop(key, None)
 
         stored = self._read_state()
-        if not (ticks or since is not None) and "healthAccount" not in stored:
+        if (
+            not (ticks or since is not None)
+            and "healthAccount" not in stored
+            and departure is None
+            and "unknownDeparture" not in stored
+        ):
             return
         self._mutate_state(store)
 
@@ -1047,6 +1058,8 @@ class AutoSwitchEngine:
         )
 
         current = self.switcher.current_account_number()
+        if current != self._unknown_departure:
+            self._unknown_departure = None
         # A tick with no managed active account keeps the current context;
         # a different account reseeds from the state file so its counts are
         # never inherited from the previous one.
@@ -1084,6 +1097,10 @@ class AutoSwitchEngine:
         entries, usage, headroom = self._collect_scheduled_usage(
             current, quarantined, threshold=settings.threshold
         )
+        if current == self._unknown_departure:
+            if usage.get(current) is None:
+                self._unhealthy_ticks = 0
+            self._unknown_departure = None
         policy = self._policy_headroom_map(usage, headroom)
         self._emit(
             PollEvent(
@@ -1534,13 +1551,11 @@ class AutoSwitchEngine:
             if status == "skip-live-session":
                 continue
             outcome = self._perform(num, email, trigger, left_snapshot)
-            if (
-                outcome is TickOutcome.SWITCHED
-                and usage.get(current) is None
-            ):
-                # Give unknown usage a fresh run after a manual return, but
-                # retain every status string's count so it is left as before.
-                self._unhealthy_ticks = 0
+            if outcome is TickOutcome.SWITCHED:
+                # Keep the spent count until this account returns unknown.
+                self._unknown_departure = (
+                    current if trigger == "failover" and usage.get(current) is None else None
+                )
             return outcome
 
         if systemic or transient_failure:

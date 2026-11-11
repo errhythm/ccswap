@@ -204,6 +204,112 @@ def harness(temp_home: Path) -> EngineHarness:
     return h
 
 
+_FAILOVER_STATUSES = [
+    USAGE_NO_CREDENTIALS,
+    USAGE_TOKEN_EXPIRED,
+    USAGE_API_KEY,
+    USAGE_KEYCHAIN_UNAVAILABLE,
+    USAGE_RELOGIN_REQUIRED,
+    USAGE_FOREIGN_CREDENTIAL,
+]
+_FAILOVER_SEQUENCES = [
+    "first-failover", "unknown-return", "landing-unknown", "refused-switch",
+    "readable-return", "third-account", "observed-landing", *_FAILOVER_STATUSES,
+]
+
+
+def _failover_sequence(harness, count, fresh_engine, scenario):
+    """Return (outcome, active account, health count) for every observed tick."""
+    harness.settings = replace(
+        harness.settings, unhealthy_ticks=count, include_api_key_accounts=True
+    )
+    harness.engine = harness._make_engine()
+    usage = {"1": None, "2": _usage(10), "3": _usage(50)}
+    trace = []
+
+    def tick():
+        if fresh_engine:
+            harness.engine = harness._make_engine()
+        outcome = harness.tick_with_usage(usage)
+        trace.append((
+            outcome.name, harness.active_number(),
+            harness.state().get("unhealthyTicks", 0),
+        ))
+        harness.clock.advance(60)
+
+    for _ in range(count - 1):
+        tick()
+    if scenario == "refused-switch":
+        with patch.object(
+            harness.switcher, "switch_to",
+            return_value={"switched": False, "reason": "refused"},
+        ):
+            tick()
+    tick()
+    if scenario in ("first-failover", "refused-switch"):
+        return trace
+
+    if scenario == "landing-unknown":
+        usage["2"] = None
+    elif scenario == "third-account":
+        assert harness.switcher.switch_to("3", json_output=True)["switched"]
+        usage["3"] = None
+    else:
+        if scenario == "observed-landing":
+            tick()
+        assert harness.switcher.switch_to("1", json_output=True)["switched"]
+        if scenario == "readable-return":
+            usage["1"] = _usage(40)
+            tick()
+            usage["1"] = None
+        elif scenario in _FAILOVER_STATUSES:
+            usage["1"] = scenario
+            if scenario == USAGE_TOKEN_EXPIRED:
+                # Preserve the base's idle hold before counting resumes.
+                tick()
+                harness.clock.advance(IDLE_HOLD_MAX_S + 1)
+            else:
+                tick()
+                return trace
+    for _ in range(count):
+        tick()
+    return trace
+
+
+class TestFailoverSequences:
+    @pytest.mark.parametrize("scenario", _FAILOVER_SEQUENCES)
+    @pytest.mark.parametrize("count", [1, 3, 10])
+    @pytest.mark.parametrize("fresh_engine", [False, True], ids=["loop", "once"])
+    def test_tick_trace(self, harness, scenario, count, fresh_engine):
+        trace = _failover_sequence(harness, count, fresh_engine, scenario)
+
+        def run(active, landing):
+            return [
+                ("NO_ACTION", active, tick) for tick in range(1, count)
+            ] + [("SWITCHED", landing, count)]
+
+        expected = run(1, 2)
+        if scenario == "refused-switch":
+            expected = expected[:-1] + [
+                ("NO_ACTION", 1, count), ("SWITCHED", 2, count + 1),
+            ]
+        elif scenario == "landing-unknown":
+            expected += run(2, 3)
+        elif scenario == "third-account":
+            expected += run(3, 2)
+        elif scenario in ("unknown-return", "readable-return", "observed-landing"):
+            if scenario == "readable-return":
+                expected += [("NO_ACTION", 1, 0)]
+            elif scenario == "observed-landing":
+                expected += [("NO_ACTION", 2, 0)]
+            expected += run(1, 2)
+        elif scenario == USAGE_TOKEN_EXPIRED:
+            expected += [("NO_ACTION", 1, 0)] + run(1, 2)
+        elif scenario in _FAILOVER_STATUSES:
+            expected += [("SWITCHED", 2, count + 1)]
+        assert trace == expected
+
+
 class TestEngineHarnessIsolation:
     """Pins the guarantee `EngineHarness.__init__`'s per-instance isolation
     exists for (see its docstring): two harnesses built against the SAME
@@ -659,7 +765,7 @@ class TestDecisionTable:
         assert harness.tick_with_usage(usage) is TickOutcome.SWITCHED
 
     @pytest.mark.parametrize("fresh_engine", [False, True], ids=["loop", "once"])
-    def test_unknown_departure_then_dead_login_gets_new_run(self, harness, fresh_engine):
+    def test_unknown_departure_then_dead_login_leaves_immediately(self, harness, fresh_engine):
         usage = {"1": None, "2": _usage(10), "3": _usage(50)}
         for tick in range(harness.settings.unhealthy_ticks):
             if fresh_engine:
@@ -679,24 +785,15 @@ class TestDecisionTable:
             auth_dead_strikes=AUTH_DEAD_STRIKES,
         )
         assert dead.token_dead()
-        for tick in range(harness.settings.unhealthy_ticks):
-            if fresh_engine:
-                harness.engine = harness._make_engine()
-            outcome = harness.tick_with_entries({
-                "1": dead,
-                "2": _entry_for(_usage(10), harness.clock()),
-                "3": _entry_for(_usage(50), harness.clock()),
-            })
-            if tick < harness.settings.unhealthy_ticks - 1:
-                assert outcome is TickOutcome.NO_ACTION
-                assert harness.active_number() == 1
-                assert harness.state()["unhealthyTicks"] == tick + 1
-            else:
-                assert outcome is TickOutcome.SWITCHED
-                assert harness.active_number() == 2
-            harness.clock.advance(60)
-        # This departure was known dead, so the spent count is retained.
-        assert harness.state()["unhealthyTicks"] == harness.settings.unhealthy_ticks
+        if fresh_engine:
+            harness.engine = harness._make_engine()
+        assert harness.tick_with_entries({
+            "1": dead,
+            "2": _entry_for(_usage(10), harness.clock()),
+            "3": _entry_for(_usage(50), harness.clock()),
+        }) is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+        assert harness.state()["unhealthyTicks"] == harness.settings.unhealthy_ticks + 1
 
     def test_unhealthy_count_survives_a_fresh_engine_per_tick(self, harness):
         # `auto --once` builds a new engine every invocation.
