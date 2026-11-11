@@ -55,6 +55,13 @@ Weekly windows (`sevenDay` and per-model `scoped` entries — never `fiveHour`) 
 
 File-only quota consumers can read [`<backup>/codex/usage-N.json`](codex.md#usage-snapshots-on-disk), a separate, sanitized snapshot with its own `schemaVersion: 1`. It records last-good measurements and safe failure metadata without credentials. This does not change Codex command `--json` payloads or their in-memory cache behavior.
 
+## Usage on every provider
+
+`list --json` gives each provider section (`claude`, `codex`, `agy`, merged or alone with `--provider`) a `schemaVersion` of `1`, and every account row the same usage fields as the Claude rows above: `usageStatus`, `usage`, and, as they apply, `usageFetchedAt`/`usageAgeSeconds`, `lastGoodUsage`/`lastGoodFetchedAt`/`lastGoodAgeSeconds` and `usageError`. The trust rule is the same too: `usage` is set only while the measurement is recent enough to act on, and older readings move to `lastGoodUsage`.
+
+- **Codex** windows are `fiveHour` and `weekly`, plus `credits`, `creditAllowance` and `resetCredits` when the account has them. `list` never fetches or touches credentials for Codex: it reads the snapshots that `ccswap codex usage`, `ccswap codex auto` and the dashboard save after each fetch. With none of those running, Codex rows go to `lastGoodUsage` and then `unavailable`. `usageError` carries only the error class (e.g. `CodexUsageError`). API-key logins read `api_key`.
+- **Antigravity** reports every quota bucket under `usage.scoped`, each with `name`, `pct`, `resetsAt` and `window` (`5h` or `weekly`). Weekly buckets carry the pace fields; 5h buckets don't. `list` refreshes Antigravity usage at most once a minute. The older `error` field stays on its rows. The `usage` object changed shape: it used to be the internal form (`resets_at`, `bucket_id`, `group`), and `ccswap agy usage --json` still prints that form.
+
 ## Codex session fields
 
 Codex list account rows carry an additive `session` object. This is preserved both in the bare `ccswap codex list --json` / `ccswap list --provider codex --json` payload and under `codex.accounts` in the merged list. `ccswap codex status --json` adds a `sessions` array of `{ "number": N, "session": ... }` for every saved slot, including slots without a session home. Existing active-account fields keep describing the default login.

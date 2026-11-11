@@ -121,7 +121,7 @@ def test_display_read_only_schema(usage, monkeypatch):
     monkeypatch.setattr(cs, 'slot_custody', lambda *_: cs.Custody('quiescent', 'no_writers'))
     row = switcher.list_payload()['accounts'][0]
     assert list(row) == ['number', 'email', 'authMode', 'planType', 'label', 'active',
-                         'disabled', 'session']
+                         'disabled', 'session', 'usageStatus', 'usage']
     assert row['session'] == {'state': 'idle', 'capturePending': True,
                               'runCount': 0, 'shared': False}
     assert switcher.status()['sessions'] == [{'number': 1, 'session': row['session']}]

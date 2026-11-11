@@ -1165,7 +1165,7 @@ class TestJsonOutputCli:
         assert json.loads(capsys.readouterr().out) == {
             "claude": claude_payload,
             "codex": codex_payload,
-            "agy": {"provider": "agy", "activeAccountNumber": None, "accounts": []},
+            "agy": {"schemaVersion": 1, "provider": "agy", "activeAccountNumber": None, "accounts": []},
         }
 
     def test_switch_json_forwarded_and_serialized(self, capsys):

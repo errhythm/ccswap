@@ -18,6 +18,7 @@ from pathlib import Path
 from claude_swap import macos_keychain, paths, spawn
 from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.fsutil import atomic_write_text
+from claude_swap.json_output import SCHEMA_VERSION, usage_row_fields
 from claude_swap.locking import FileLock
 from claude_swap.models import AccountSnapshot, AccountsSnapshot
 from claude_swap.usage_store import UsageEntry, UsageRecovery
@@ -399,10 +400,17 @@ class AgyAccountSwitcher:
 
     def list_payload(self) -> dict:
         snapshot = self.accounts_snapshot()
-        return {"provider": "agy", "activeAccountNumber": int(snapshot.active_number) if snapshot.active_number else None,
+        return {"schemaVersion": SCHEMA_VERSION, "provider": "agy",
+                "activeAccountNumber": int(snapshot.active_number) if snapshot.active_number else None,
                 "accounts": [{"number": int(account.number), "email": account.email,
                               "authMode": _AUTH_METHOD, "active": account.is_active,
-                              "usage": account.usage.last_good, "error": account.usage.last_error}
+                              **usage_row_fields(
+                                  account.usage.decision_value(),
+                                  usage_fetched_at=account.usage.fetched_at,
+                                  usage_age_s=account.usage.age_s,
+                                  last_good_usage=account.usage.last_good,
+                                  last_error=account.usage.last_error),
+                              "error": account.usage.last_error}
                              for account in snapshot.accounts]}
 
     def list_accounts(self, json_output: bool = False) -> dict:
@@ -415,7 +423,7 @@ class AgyAccountSwitcher:
             for account in payload["accounts"]:
                 marker = " ● active" if account["active"] else ""
                 print(f"{account['number']:>2}  {account['email']}  [Antigravity]{marker}")
-                for window in (account["usage"] or {}).get("scoped", []):
+                for window in (account["usage"] or account.get("lastGoodUsage") or {}).get("scoped", []):
                     print(f"    {window['name']}: {window['pct']:.0f}% used")
                 if account["error"]:
                     print(f"    {account['error']}")

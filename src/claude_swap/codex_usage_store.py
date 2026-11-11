@@ -11,10 +11,10 @@ from claude_swap.codex_usage import _iso_timestamp, _number
 from claude_swap.exceptions import ConfigError, LockError
 from claude_swap.fsutil import atomic_write_text
 from claude_swap.locking import FileLock
+from claude_swap.usage_store import UsageEntry
 
 if TYPE_CHECKING:
     from claude_swap.codex import CodexAccountSwitcher
-    from claude_swap.usage_store import UsageEntry
 
 
 # Snapshots are normally about 0.5 KiB; bound I/O while holding .usage.lock.
@@ -205,3 +205,44 @@ def write_usage(
 def remove_usage_locked(provider_dir: Path, number: str) -> None:
     """Invalidate a snapshot; caller must hold the store and usage locks."""
     (provider_dir / f"usage-{number}.json").unlink(missing_ok=True)
+
+
+def read_usage(
+    provider_dir: Path, number: str, account: dict[str, Any], now: float,
+) -> UsageEntry:
+    """Read a slot's published snapshot back as a ``UsageEntry``, without any
+    credential access or network. For ``list --json``, which stays read-only:
+    its numbers are as fresh as the last fetch by ``codex usage``, ``codex
+    auto`` or the TUI. A snapshot from a replaced slot reads as empty."""
+    snapshot = _read_snapshot(provider_dir / f"usage-{number}.json")
+    if (snapshot.get("schemaVersion") != 1 or snapshot.get("number") != int(number)
+            or not account.get("usageGeneration")
+            or snapshot.get("slotGeneration") != account["usageGeneration"]):
+        return UsageEntry()
+    measurement = _measurement(snapshot, now)
+    usage: dict[str, Any] = {}
+    for source, target in (("fiveHour", "five_hour"), ("weekly", "weekly")):
+        window = measurement["windows"].get(source)
+        if window is not None:
+            usage[target] = _renamed(window, {"usedPercent": "pct", "resetsAt": "resets_at"})
+    for source, target, fields in (
+        ("credits", "credits", {"hasCredits": "has_credits", "unlimited": "unlimited",
+                                "balance": "balance"}),
+        ("allowance", "credit_allowance", {"remaining": "remaining", "limit": "limit",
+                                           "resetsAt": "resets_at"}),
+        ("bankedResets", "reset_credits", {"count": "available",
+                                           "earliestExpiry": "expires_at"}),
+    ):
+        if measurement[source] is not None:
+            usage[target] = {key: value for key, value in _renamed(measurement[source], fields).items()
+                             if value is not None}
+    if "reset_credits" in usage and "available" not in usage["reset_credits"]:
+        del usage["reset_credits"]  # usage_to_json requires the count
+    fetched_at = measurement["fetchedAt"]
+    error = snapshot.get("lastError")
+    return UsageEntry(
+        last_good=usage if fetched_at is not None and usage else None,
+        fetched_at=fetched_at,
+        age_s=max(0.0, now - fetched_at) if fetched_at is not None else None,
+        last_error=_error_class(error.get("class")) if isinstance(error, dict) else None,
+    )
