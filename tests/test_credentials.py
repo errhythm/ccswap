@@ -342,3 +342,37 @@ class TestActiveWriteStaysOnOneProfile:
         store._write_credentials(CUSTOM_PROFILE_CREDS)
 
         assert store._read_active_credentials().value == CUSTOM_PROFILE_CREDS
+
+
+class TestStrictDeleteKeepsRollbackStateOnFailure:
+    """A failed strict clear aborts the transaction, so the best-effort sweep
+    (which drops ``.prev``) must not have run before it. Ported from
+    realiti4/claude-swap#214."""
+
+    def test_failed_clear_keeps_the_prev_generation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from claude_swap.exceptions import CredentialError
+
+        creds_dir = tmp_path / "backups"
+        creds_dir.mkdir()
+        host = _Host(creds_dir)
+        host.platform = Platform.LINUX
+        store = CredentialStore(host)
+        enc = store._backup_enc_path("2", "a@example.com")
+        prev = store._prev_backup_path("2", "a@example.com")
+        enc.write_text("served")
+        prev.write_text("previous-generation")
+
+        real_unlink = Path.unlink
+
+        def failing_unlink(path, *args, **kwargs):
+            if path == enc:
+                raise OSError("permission denied (injected)")
+            return real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        with pytest.raises(CredentialError, match="aborting before commit"):
+            store.delete_account_credentials_strict("2", "a@example.com")
+
+        assert prev.read_text() == "previous-generation"
