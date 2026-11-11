@@ -20,6 +20,13 @@ OAUTH_BETA_HEADER = "oauth-2025-04-20"
 OAUTH_EXPIRY_BUFFER_MS = 5 * 60 * 1000
 OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+# How long a refresh POST waits for its reply unless the caller passes a
+# tighter budget. The grant is single-use, so a request that reached the server
+# cannot be taken back: giving up on a slow reply discards the only copy of the
+# successor while the server retires the token we still hold, and the slot then
+# needs a fresh /login. Waiting is the cheap side of that trade. 30 s is what
+# Claude Code gives the same request.
+OAUTH_REFRESH_TIMEOUT_S = 30.0
 
 # What ``claude setup-token`` grants (and what ``cswap add-token`` stores).
 # Such a token can run inference but cannot read the usage endpoint.
@@ -241,7 +248,7 @@ class RefreshOutcome:
 
 
 def try_refresh_oauth_credentials(
-    credentials: str, timeout_s: float = 10.0
+    credentials: str, timeout_s: float = OAUTH_REFRESH_TIMEOUT_S
 ) -> RefreshOutcome:
     """Refresh an OAuth access token via direct token endpoint POST.
 
@@ -320,10 +327,42 @@ def try_refresh_oauth_credentials(
             # keeps its own kind and lands no strike.
             if err in ("invalid_grant", "invalid_client"):
                 return RefreshOutcome(None, err)
+        if e.code >= 500:
+            # Not a verdict on the grant either: a gateway can report an error
+            # for a request the origin already acted on.
+            _warn_grant_fate_unknown(credentials, f"HTTP {e.code}")
+        return RefreshOutcome(None, "transient")
+    except urllib.error.URLError as e:
+        # The request did not go out whole: urllib wraps resolve, connect, TLS
+        # and send failures in URLError and leaves a failure while reading the
+        # reply unwrapped. No grant was spent, so this stays quiet.
+        _logger.debug("OAuth refresh not sent: %r", e)
         return RefreshOutcome(None, "transient")
     except Exception as e:
+        # The request went out and no usable reply came back: a timeout or
+        # reset while waiting, or a reply that could not be read.
         _logger.debug("OAuth refresh failed: %r", e)
+        _warn_grant_fate_unknown(credentials, type(e).__name__)
         return RefreshOutcome(None, "transient")
+
+
+def _warn_grant_fate_unknown(credentials: str, what: str) -> None:
+    """Log a refresh that went out and came back without a verdict on the grant.
+
+    The outcome stays ``transient``, but a timeout, reset or server error is
+    not proof that nothing was spent: if the server rotated the grant, the next
+    refresh of these bytes gets invalid_grant. WARNING survives the default log
+    level so that later strike can be traced back here. The line carries the
+    head of the credential fingerprint ("sha256:" + 12 hex), never a repr: a
+    decode error's repr is the reply body, which can hold tokens.
+    """
+    _logger.warning(
+        "OAuth refresh for %s got no usable reply (%s). The refresh token "
+        "on disk may now be spent; if the next refresh fails with "
+        "invalid_grant, log in again and re-run `ccswap add`.",
+        credential_fingerprint(credentials)[:19],
+        what,
+    )
 
 
 def _parse_token_account(resp_data: dict) -> dict | None:
