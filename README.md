@@ -58,6 +58,8 @@ Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-wi
 
 **Dashboard and menu bar.** Run `ccswap` for the dashboard, or `ccswap watch` for the live monitor above. On macOS, `ccswap menubar --install-service` keeps a menu bar app running at login. [Dashboard and menu bar](https://github.com/errhythm/ccswap/blob/main/docs/dashboard.md)
 
+**Quota in T3 Code.** `ccswap hub install` runs a small read-only server at login that speaks CLIProxyAPI's management API. In T3 Code, add a CLIProxyAPI hub with the URL `http://127.0.0.1:8317` and the key from `ccswap hub key`, and every ccswap account shows its quota there. No token leaves ccswap. [T3 Code hub](docs/hub.md)
+
 **Inside Claude Code.** An optional statusline and a `/ccswap` pane, both off until you turn them on. [Statusline and mod](https://github.com/errhythm/ccswap/blob/main/docs/statusline-and-mod.md)
 
 ## Documentation
@@ -68,6 +70,7 @@ Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-wi
 - [Codex accounts](https://github.com/errhythm/ccswap/blob/main/docs/codex.md)
 - [Antigravity accounts](docs/antigravity.md)
 - [Dashboard and menu bar](https://github.com/errhythm/ccswap/blob/main/docs/dashboard.md)
+- [T3 Code hub](docs/hub.md): show ccswap quota in T3 Code as a CLIProxyAPI hub
 - [Statusline and mod](https://github.com/errhythm/ccswap/blob/main/docs/statusline-and-mod.md)
 - [Configuration, backup and sharing](https://github.com/errhythm/ccswap/blob/main/docs/configuration.md)
 - [JSON output for scripting](https://github.com/errhythm/ccswap/blob/main/docs/json.md)

@@ -605,6 +605,84 @@ class _CodexRunParser(argparse.ArgumentParser):
         super().error("Invalid Codex run arguments; wrapper options must precede --.")
 
 
+def _hub_command(argv: list[str]) -> None:
+    from claude_swap import hub
+
+    parser = argparse.ArgumentParser(
+        prog=f"{_prog_name()} hub",
+        description=(
+            "Serve ccswap's Claude and Codex usage over CLIProxyAPI's management API, "
+            "so T3 Code can show it as a hub. Read-only: answers come from ccswap's "
+            "usage store and no token leaves ccswap."
+        ),
+    )
+    commands = parser.add_subparsers(dest="action", required=True)
+    serve = commands.add_parser("serve", help="run the hub server")
+    serve.add_argument("--host", default=hub.DEFAULT_HOST)
+    serve.add_argument("--port", type=int, default=hub.DEFAULT_PORT)
+    serve.add_argument("--debug", action="store_true")
+    commands.add_parser("key", help="print the management key to paste into T3 Code")
+    install = commands.add_parser("install", help="run the hub at login as a launchd service (macOS)")
+    install.add_argument("--host", default=hub.DEFAULT_HOST)
+    install.add_argument("--port", type=int, default=hub.DEFAULT_PORT)
+    commands.add_parser("uninstall", help="stop and remove the hub service")
+    commands.add_parser("status", help="show the hub service state")
+    args = parser.parse_args(argv)
+    if args.action in ("install", "uninstall", "status"):
+        sys.exit(_hub_service(args))
+    if args.action == "key":
+        print(hub.ensure_key())
+        print(dimmed(f"Stored in {hub.key_path()}. Delete that file to rotate it."), file=sys.stderr)
+        return
+    if not hub.is_loopback(args.host):
+        warning(
+            f"Listening on {args.host} without TLS: the management key travels in clear "
+            "text. Prefer a loopback host behind an SSH tunnel or TLS proxy."
+        )
+    print(f"ccswap hub on http://{args.host}:{args.port} (Ctrl-C to stop)", file=sys.stderr)
+    print(dimmed(f"In T3 Code, add a CLIProxyAPI hub with this URL and `{_prog_name()} hub key`."),
+          file=sys.stderr)
+    try:
+        hub.serve(args.host, args.port, debug=args.debug)
+    except OSError as exc:
+        error(f"Error: cannot listen on {args.host}:{args.port}: {exc.strerror or exc}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        pass
+
+
+def _hub_service(args) -> int:
+    """Handle ``hub install|uninstall|status``, like ``auto --install-service``."""
+    from claude_swap import hub, launch_agent
+
+    label = launch_agent.HUB_LABEL
+    try:
+        if args.action == "install":
+            if not hub.is_loopback(args.host):
+                warning(f"The service will listen on {args.host} without TLS.", file=sys.stderr)
+            hub.ensure_key()
+            result = launch_agent.install(
+                label=label, extra_args=("--host", args.host, "--port", str(args.port))
+            )
+            print(f"Hub service installed ({result['label']}) on http://{args.host}:{args.port}.")
+            print(f"  plist: {result['plist']}")
+            print(f"  logs:  {result['stderr_log']}")
+            print(dimmed(
+                f"It starts at login from now on. Paste `{_prog_name()} hub key` into T3 Code. "
+                "Re-run this after a ccswap upgrade."
+            ))
+            return 0
+        if args.action == "uninstall":
+            result = launch_agent.uninstall(label=label)
+            removed = result["was_loaded"] or result["removed_plist"]
+            print("Hub service removed." if removed else "Hub service was not installed.")
+            return 0
+        return _print_service_status(launch_agent.status(label=label), "Hub", "hub install")
+    except ClaudeSwitchError as exc:
+        error(f"Error: {exc}")
+        return 1
+
+
 def _agy_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog=f"{_prog_name()} agy")
     commands = parser.add_subparsers(dest="action", required=True)
@@ -1362,7 +1440,7 @@ def _menubar_service(args) -> int:
             print("Menu bar service was not installed.")
         return 0
 
-    return _print_service_status(launch_agent.status(), "Menu bar", "menubar")
+    return _print_service_status(launch_agent.status(), "Menu bar", "menubar --install-service")
 
 
 def _auto_service(args) -> int:
@@ -1398,13 +1476,13 @@ def _auto_service(args) -> int:
             print("Auto-switch service was not installed.")
         return 0
 
-    return _print_service_status(launch_agent.status(label=label), "Auto-switch", "auto")
+    return _print_service_status(launch_agent.status(label=label), "Auto-switch", "auto --install-service")
 
 
-def _print_service_status(result: dict, name: str, subcommand: str) -> int:
+def _print_service_status(result: dict, name: str, install_cmd: str) -> int:
     if not result["installed"] and not result["loaded"]:
         print(f"{name} service is not installed.")
-        print(dimmed(f"Install it with: ccswap {subcommand} --install-service"))
+        print(dimmed(f"Install it with: ccswap {install_cmd}"))
         return 0
     state = result["state"] or ("loaded" if result["loaded"] else "stopped")
     pid = f" (pid {result['pid']})" if result["pid"] else ""
@@ -1446,6 +1524,9 @@ def main() -> None:
         return
     if argv and argv[0] == "agy":
         _agy_command(argv[1:])
+        return
+    if argv and argv[0] == "hub":
+        _hub_command(argv[1:])
         return
     if argv and argv[0] == "auto":
         _auto_command(argv[1:])
@@ -1511,6 +1592,7 @@ Commands:
   %(prog)s move <a> <slot>            assign an account to a slot (swaps if taken)
   %(prog)s codex <command>            manage Codex CLI accounts
   %(prog)s auto                       auto-switch when nearing rate limits
+  %(prog)s hub install | serve | key  serve usage to T3 Code as a CLIProxyAPI hub
   %(prog)s config [set KEY VALUE]     show or change settings (settings.json)
   %(prog)s unclaimed [--purge ID]     list or drop stashed credential entries
   %(prog)s export <path>              export accounts
