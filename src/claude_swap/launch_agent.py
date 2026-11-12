@@ -42,14 +42,16 @@ from claude_swap.fsutil import atomic_write_bytes
 
 LABEL = "com.ccswap.menubar"
 AUTO_LABEL = "com.ccswap.auto"
+HUB_LABEL = "com.ccswap.hub"
 
-# Label -> (subcommand, launchd ProcessType). A menu bar owner is a UI process;
+# Label -> (subcommand args, launchd ProcessType). A menu bar owner is a UI process;
 # Background would have launchd apply throttled I/O and CPU bands to it. The
 # auto-switch loop sleeps between polls and has nobody waiting on it, so
 # Background is what it wants.
 _SERVICES = {
-    LABEL: ("menubar", "Interactive"),
-    AUTO_LABEL: ("auto", "Background"),
+    LABEL: (("menubar",), "Interactive"),
+    AUTO_LABEL: (("auto",), "Background"),
+    HUB_LABEL: (("hub", "serve"), "Background"),
 }
 
 # launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin, which covers
@@ -151,13 +153,17 @@ def _path_env(program: list[str]) -> str:
 def _forwarded_env(label: str, env: Mapping[str, str]) -> dict[str, str]:
     """Allowlisted variables of ``env`` for the agent."""
     forwarded = {k: env[k] for k in _FORWARDED_ENV_KEYS if k in env}
-    if label == AUTO_LABEL:
+    if label in (AUTO_LABEL, HUB_LABEL):
+        # Both read the installing shell's Claude profile; the hub reads its
+        # Codex home too.
+        keys = _AUTO_FORWARDED_ENV_KEYS + (("CODEX_HOME",) if label == HUB_LABEL else ())
         # Inside `ccswap run` the config dir is a throwaway profile under
-        # <backup>/sessions/, which a login service must not pin itself to.
+        # <backup>/sessions/ (Codex: <backup>/codex/sessions/), which a login
+        # service must not pin itself to.
         forwarded.update(
             {
                 k: env[k]
-                for k in _AUTO_FORWARDED_ENV_KEYS
+                for k in keys
                 if k in env and Path(env[k]).parent.name != "sessions"
             }
         )
@@ -169,6 +175,7 @@ def build_plist(
     label: str = LABEL,
     home: Path | None = None,
     env: Mapping[str, str] | None = None,
+    extra_args: tuple[str, ...] = (),
 ) -> bytes:
     """Serialize the LaunchAgent plist.
 
@@ -183,7 +190,7 @@ def build_plist(
     return plistlib.dumps(
         {
             "Label": label,
-            "ProgramArguments": [*program, subcommand],
+            "ProgramArguments": [*program, *subcommand, *extra_args],
             "RunAtLoad": True,
             # Restart a crash, but respect a deliberate Quit. The menu bar's
             # quit handler calls rumps.quit_application(), a clean exit(0);
@@ -267,6 +274,7 @@ def install(
     home: Path | None = None,
     program: list[str] | None = None,
     uid: int | None = None,
+    extra_args: tuple[str, ...] = (),
 ) -> dict:
     """Write the plist and hand the service to launchd.
 
@@ -284,7 +292,7 @@ def install(
     # Owner-only and atomic, not the umask's 0644 via write_bytes: a forwarded
     # proxy URL can carry credentials, and a write cut short by Ctrl-C must
     # not leave a truncated plist for the next login to choke on.
-    atomic_write_bytes(target_plist, build_plist(program, label, home))
+    atomic_write_bytes(target_plist, build_plist(program, label, home, extra_args=extra_args))
 
     settled = True
     if is_loaded(label, uid):
@@ -304,7 +312,7 @@ def install(
     return {
         "label": label,
         "plist": str(target_plist),
-        "program": [*program, _SERVICES[label][0]],
+        "program": [*program, *_SERVICES[label][0], *extra_args],
         "stdout_log": str(out_log),
         "stderr_log": str(err_log),
     }

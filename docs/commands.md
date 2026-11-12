@@ -71,6 +71,8 @@ ccswap run 2                     # Run an account in this terminal only (session
 ccswap auto                      # Auto-switch when nearing rate limits (see [auto-switching.md](auto-switching.md))
 ccswap auto --install-service    # Keep auto-switch running via launchd (macOS)
 ccswap codex list                # List saved Codex CLI accounts
+ccswap hub install               # Serve quota to T3 Code as a CLIProxyAPI hub (see [hub.md](hub.md))
+ccswap hub key                   # Print the hub's management key
 ccswap codex switch 2            # Switch the file-backed Codex login
 ccswap config                    # Show or edit settings (see [configuration.md](configuration.md))
 ccswap list                      # Claude + Codex accounts with quota and reset times
