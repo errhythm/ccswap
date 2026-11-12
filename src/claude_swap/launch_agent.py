@@ -154,13 +154,16 @@ def _forwarded_env(label: str, env: Mapping[str, str]) -> dict[str, str]:
     """Allowlisted variables of ``env`` for the agent."""
     forwarded = {k: env[k] for k in _FORWARDED_ENV_KEYS if k in env}
     if label in (AUTO_LABEL, HUB_LABEL):
-        # Both read the installing shell's Claude profile.
+        # Both read the installing shell's Claude profile; the hub reads its
+        # Codex home too.
+        keys = _AUTO_FORWARDED_ENV_KEYS + (("CODEX_HOME",) if label == HUB_LABEL else ())
         # Inside `ccswap run` the config dir is a throwaway profile under
-        # <backup>/sessions/, which a login service must not pin itself to.
+        # <backup>/sessions/ (Codex: <backup>/codex/sessions/), which a login
+        # service must not pin itself to.
         forwarded.update(
             {
                 k: env[k]
-                for k in _AUTO_FORWARDED_ENV_KEYS
+                for k in keys
                 if k in env and Path(env[k]).parent.name != "sessions"
             }
         )

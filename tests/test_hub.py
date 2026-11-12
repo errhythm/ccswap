@@ -4,9 +4,10 @@ from __future__ import annotations
 import http.client
 import json
 import stat
+import sys
 import threading
 import time
-from http.server import HTTPServer
+from http.server import ThreadingHTTPServer
 
 import pytest
 
@@ -14,7 +15,7 @@ from claude_swap import hub
 from claude_swap.codex_usage import _convert_payload
 from claude_swap.models import AccountSnapshot, AccountsSnapshot
 from claude_swap.oauth import build_usage_result
-from claude_swap.usage_store import UsageEntry
+from claude_swap.usage_store import STALE_OK_S, UsageEntry
 
 CLAUDE_RAW = {
     "five_hour": {"utilization": 42.0, "resets_at": "2026-11-12T15:00:00+00:00"},
@@ -31,10 +32,11 @@ CODEX_RAW = {"rate_limit": {
 }}
 
 
-def _acc(number, email, usage, *, kind="oauth", org_uuid="", disabled=False):
+def _acc(number, email, usage, *, kind="oauth", org_uuid="", disabled=False, age_s=0.0, sentinel=None):
     return AccountSnapshot(
         number=number, email=email, org_name="", org_uuid=org_uuid, is_active=False,
-        kind=kind, switchable=True, usage=UsageEntry(last_good=usage), disabled=disabled,
+        kind=kind, switchable=True, disabled=disabled,
+        usage=UsageEntry(last_good=usage, age_s=age_s, sentinel=sentinel),
     )
 
 
@@ -102,7 +104,8 @@ def test_ensure_key_is_stable_and_private(tmp_path):
     path = tmp_path / "hub-key"
     key = hub.ensure_key(path)
     assert len(key) >= 40 and hub.ensure_key(path) == key
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # Windows has no POSIX modes to check
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 @pytest.fixture
@@ -113,7 +116,7 @@ def server():
         calls.append(1)
         return _snaps()
 
-    srv = HTTPServer(("127.0.0.1", 0), hub.make_handler("secret", snapshots))
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), hub.make_handler("secret", snapshots))
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     yield srv, calls
@@ -159,11 +162,14 @@ def test_http_accepts_x_management_key_and_404s_other_routes(server):
     assert _request(srv, "POST", "/v0/management/api-call", {"X-Management-Key": "secret"}, b"[]")[0] == 400
 
 
-def test_idle_client_does_not_stall_the_server(server):
+def test_half_sent_header_does_not_stall_other_clients(server):
     import socket as _socket
     srv, _ = server
-    srv.RequestHandlerClass.timeout = 0.3
-    idle = _socket.create_connection(("127.0.0.1", srv.server_address[1]))
+    # A trickling client resets a per-read timeout forever, so only
+    # per-connection threads keep the hub answering.
+    slow = _socket.create_connection(("127.0.0.1", srv.server_address[1]))
+    slow.sendall(b"GET /v0/management/auth-files HTTP/1.1\r\nHost: x\r\n")
+    idle = slow
     try:
         assert _request(srv, "GET", "/v0/management/auth-files", {"Authorization": "Bearer secret"})[0] == 200
     finally:
@@ -171,7 +177,7 @@ def test_idle_client_does_not_stall_the_server(server):
 
 
 def test_all_providers_failing_is_an_error_not_an_empty_hub():
-    srv = HTTPServer(("127.0.0.1", 0), hub.make_handler("secret", lambda: {"claude": None, "codex": None}))
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), hub.make_handler("secret", lambda: {"claude": None, "codex": None}))
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     try:
@@ -179,3 +185,16 @@ def test_all_providers_failing_is_an_error_not_an_empty_hub():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@pytest.mark.parametrize("usage_kwargs,error", [
+    ({"age_s": STALE_OK_S + 60}, "no recent usage reading"),
+    ({"sentinel": "token expired"}, "token expired"),
+])
+def test_untrustworthy_usage_is_unavailable_not_current(usage_kwargs, error):
+    acc = _acc("1", "a@x.io", build_usage_result(CLAUDE_RAW), **usage_kwargs)
+    out = hub.api_call(
+        {"auth_index": "claude-1", "url": "https://api.anthropic.com/api/oauth/usage"},
+        {"claude": AccountsSnapshot("1", (acc,), time.time()), "codex": None},
+    )
+    assert out["status_code"] == 503 and json.loads(out["body"])["error"] == error

@@ -528,3 +528,15 @@ def test_build_plist_for_hub_serves_with_its_address_and_claude_profile(tmp_path
     assert parsed["ProgramArguments"] == [*PROGRAM, "hub", "serve", "--host", "127.0.0.1", "--port", "9000"]
     assert parsed["ProcessType"] == "Background"
     assert parsed["EnvironmentVariables"]["CLAUDE_CONFIG_DIR"] == "/Users/x/.claude-work"
+
+
+@pytest.mark.parametrize("label,home,forwarded", [
+    (launch_agent.HUB_LABEL, "/Users/x/.codex-work", True),
+    (launch_agent.HUB_LABEL, "/Users/x/.claude-swap-backup/codex/sessions/2-a_b.c", False),
+    (launch_agent.AUTO_LABEL, "/Users/x/.codex-work", False),
+])
+def test_build_plist_forwards_codex_home_only_to_the_hub(tmp_path, label, home, forwarded):
+    parsed = plistlib.loads(
+        launch_agent.build_plist(PROGRAM, label=label, home=tmp_path, env={"CODEX_HOME": home})
+    )
+    assert ("CODEX_HOME" in parsed["EnvironmentVariables"]) is forwarded

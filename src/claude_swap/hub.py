@@ -17,9 +17,10 @@ import logging
 import os
 import secrets
 import socket
+import threading
 import time
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
@@ -198,20 +199,23 @@ def api_call(request: dict, snaps: dict[str, AccountsSnapshot | None]) -> dict:
     )
     if match is None:
         return reply(404, {"error": "unknown account"})
-    usage = match.usage.last_good
+    # Same trust rule as switch decisions: a sentinel (e.g. login needed) or a
+    # reading too old to act on is unavailable, not a current percentage.
+    usage = match.usage.decision_value()
     if not isinstance(usage, dict):
-        return reply(503, {"error": match.usage.sentinel or "usage not fetched yet"})
+        return reply(503, {"error": usage or "no recent usage reading"})
     return reply(200, claude_body(usage) if provider == "claude" else codex_body(usage))
 
 
 def make_handler(key: str, snapshots: Snapshots) -> type[BaseHTTPRequestHandler]:
     expected = key.encode()
     cache: dict[str, AccountsSnapshot | None] = {}
+    lock = threading.Lock()  # one snapshot pass at a time, whatever the thread count
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ccswap-hub"
-        # The server is single-threaded: an idle or short-bodied client must
-        # not stall every other request.
+        # Each connection has its own thread, so a slow client only holds its
+        # own; the timeout reclaims that thread.
         timeout = 10
 
         def log_message(self, fmt: str, *args) -> None:
@@ -250,10 +254,12 @@ def make_handler(key: str, snapshots: Snapshots) -> type[BaseHTTPRequestHandler]
             if route != "auth-files":
                 return self._send(404, {"error": "not found"})
             try:
-                snaps = self._snaps(fresh=True)
-                if not any(snaps.values()):
+                with lock:
+                    snaps = self._snaps(fresh=True)
+                    body = auth_files(snaps) if any(snaps.values()) else None
+                if body is None:
                     return self._send(502, {"error": "ccswap could not read its accounts"})
-                self._send(200, auth_files(snaps))
+                self._send(200, body)
             except Exception:
                 _logger.exception("hub: account listing failed")
                 self._send(502, {"error": "ccswap could not read its accounts"})
@@ -277,7 +283,9 @@ def make_handler(key: str, snapshots: Snapshots) -> type[BaseHTTPRequestHandler]
             if not isinstance(request, dict):
                 return self._send(400, {"error": "invalid JSON"})
             try:
-                self._send(200, api_call(request, self._snaps(fresh=False)))
+                with lock:
+                    body = api_call(request, self._snaps(fresh=False))
+                self._send(200, body)
             except Exception:
                 _logger.exception("hub: api-call failed")
                 self._send(502, {"error": "ccswap could not read usage"})
@@ -316,10 +324,9 @@ def is_loopback(host: str) -> bool:
 
 
 def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, debug: bool = False) -> None:
-    # Single-threaded on purpose: requests queue, so snapshot passes never overlap.
-    server_cls = HTTPServer
+    server_cls = ThreadingHTTPServer
     if ":" in host:
-        server_cls = type("HTTPServer6", (HTTPServer,), {"address_family": socket.AF_INET6})
+        server_cls = type("HTTPServer6", (ThreadingHTTPServer,), {"address_family": socket.AF_INET6})
     server = server_cls((host, port), make_handler(ensure_key(), default_snapshots(debug)))
     try:
         server.serve_forever()
