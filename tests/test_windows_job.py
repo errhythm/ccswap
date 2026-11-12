@@ -556,9 +556,17 @@ def test_native_extra_inheritable_handle_is_excluded(tmp_path):
         api = ctypes.WinDLL("kernel32", use_last_error=True)
         api.GetHandleInformation.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
         api.GetHandleInformation.restype = ctypes.c_int32
+        api.GetFileType.argtypes = [ctypes.c_void_p]
+        api.GetFinalPathNameByHandleW.argtypes = [
+            ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
+        handle = int(sys.argv[1])
         flags = ctypes.c_uint32()
-        assert not api.GetHandleInformation(int(sys.argv[1]), ctypes.byref(flags))
-        assert ctypes.get_last_error() == 6
+        # Handle values are per process: the child may own an unrelated handle
+        # with the same number, so only a handle to extra.txt is a leak.
+        if api.GetHandleInformation(handle, ctypes.byref(flags)) and api.GetFileType(handle) == 1:
+            path = ctypes.create_unicode_buffer(1024)
+            assert not (api.GetFinalPathNameByHandleW(handle, path, 1024, 0)
+                        and path.value.lower().endswith("\\\\extra.txt")), path.value
         print("excluded")
     """))
     with (tmp_path / "extra.txt").open("wb") as extra:
