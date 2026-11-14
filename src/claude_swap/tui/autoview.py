@@ -54,6 +54,7 @@ _EVENT_ROLES = {
     "switch": "accent",
     "error": "sev_warn",
     "account-quarantined": "sev_warn",
+    "waste-warning": "sev_warn",
     "all-exhausted": "sev_crit",
 }
 _QUIET_KINDS = {"poll", "no-switch", "sleep", "account-unquarantined"}

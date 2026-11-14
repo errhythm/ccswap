@@ -22,6 +22,9 @@ ccswap config set autoswitch.modelThresholds Fable=40  # Fable gate; Fable=40,Op
 ccswap config set autoswitch.weeklyThreshold 97  # 7d/model gate when threshold7d/modelThresholds are unset
 ccswap config set autoswitch.windows 5h    # switch on the session window only; 7d for weekly-only, both to reset
 ccswap config set autoswitch.warmupFiveHour true  # opt-in Claude warming; uses quota
+ccswap config set usage.wasteWarning true   # opt-in: warn before a weekly window resets with quota unused
+ccswap config set usage.wasteWarningHours 6 # warn within this many hours of the reset (1 to 168)
+ccswap config set usage.wasteWarningPct 40  # and only when at least this pct is unused (1 to 100)
 ccswap config unset autoswitch.threshold   # back to the default
 ccswap config path                         # where settings.json lives
 ```

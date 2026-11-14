@@ -61,6 +61,7 @@ from claude_swap.settings import (
     atomic_write_json,
     effective_model_names,
     gate_thresholds,
+    load_usage_settings,
     parse_window_selection,
 )
 from claude_swap.switcher import ClaudeAccountSwitcher
@@ -323,6 +324,30 @@ class WarmupEvent(AutoSwitchEvent):
 
     def human(self) -> str:
         return self.message
+
+
+@dataclass(frozen=True)
+class WasteWarningEvent(AutoSwitchEvent):
+    """A weekly window is about to reset with much of it still unused."""
+
+    kind: ClassVar[str] = "waste-warning"
+    account: dict  # account_ref shape
+    hours_left: float
+    unused_pct: float
+
+    def _fields(self) -> dict:
+        return {
+            "account": self.account,
+            "hoursLeft": round(self.hours_left, 1),
+            "unusedPct": round(self.unused_pct),
+        }
+
+    def human(self) -> str:
+        who = f"Account {self.account.get('number')}"
+        if self.account.get("email"):
+            who += f" ({self.account['email']})"
+        hours = max(1, round(self.hours_left))
+        return f"{who} resets in {hours}h with {round(self.unused_pct)}% unused"
 
 
 @dataclass(frozen=True)
@@ -669,6 +694,20 @@ def _every_account_above_threshold(
     return all((100.0 - h) >= threshold for h in measured)
 
 
+def _waste_claimed(book: dict, key: str, reset: float) -> bool:
+    """True when ``key`` was already warned for this reset.
+
+    ``resets_at`` drifts by about a second between polls, so a stored reset
+    within an hour counts as the same one.
+    """
+    prev = book.get(key)
+    return (
+        isinstance(prev, (int, float))
+        and not isinstance(prev, bool)
+        and abs(prev - reset) < 3600
+    )
+
+
 def _ref(number: str, email: str) -> dict:
     return {"number": int(number), "email": email}
 
@@ -731,6 +770,9 @@ class AutoSwitchEngine:
         self.state_path = state_path or (switcher.backup_dir / STATE_FILENAME)
         self.clock = clock
         self._warmup = None
+        # Resets already warned about this run; covers dry-run, which never
+        # writes the state file.
+        self._waste_seen: dict[str, float] = {}
         self._stop = threading.Event()
         # Cuts the current inter-tick sleep short (a session threshold change
         # from the TUI should show a fresh decision now, not next interval).
@@ -973,6 +1015,85 @@ class AutoSwitchEngine:
             )
             return TickOutcome.ERROR
 
+    def _check_waste(self, usage: dict) -> None:
+        """Warn once per account per weekly reset when much of it is unused.
+
+        Reads only the usage already polled this tick. The warned reset is
+        kept in the state file so a restarted loop does not repeat it.
+        """
+        try:
+            cfg = load_usage_settings(self.switcher.backup_dir)
+            if not cfg.waste_warning:
+                return
+            now = self.clock()
+            candidates: dict[str, tuple[float, WasteWarningEvent]] = {}
+            accounts = (self.switcher._get_sequence_data() or {}).get("accounts", {})
+            for num, value in usage.items():
+                if not isinstance(value, dict):
+                    continue
+                window = value.get("seven_day")
+                pct = window.get("pct") if isinstance(window, dict) else None
+                reset = _seven_day_reset_ts(value, now)
+                if (
+                    isinstance(pct, bool)
+                    or not isinstance(pct, (int, float))
+                    or reset is None
+                ):
+                    continue
+                hours_left = (reset - now) / 3600
+                unused = 100.0 - pct
+                if hours_left > cfg.waste_warning_hours or unused < cfg.waste_warning_pct:
+                    continue
+                email = self.switcher.account_email(num) or ""
+                # Email plus org, not slot number, so renumbering does not
+                # re-warn while sibling accounts sharing an email stay apart.
+                org = accounts.get(str(num), {}).get("organizationUuid") or ""
+                key = f"{email.lower()}:{org}" if email else str(num)
+                if _waste_claimed(self._waste_seen, key, reset):
+                    continue
+                candidates[key] = (
+                    reset,
+                    WasteWarningEvent(
+                        account=_ref(num, email),
+                        hours_left=hours_left,
+                        unused_pct=unused,
+                    ),
+                )
+            if not candidates:
+                return
+            claimed: set[str] = set()
+
+            def claim(book: dict) -> None:
+                for key, (reset, _ev) in candidates.items():
+                    if not _waste_claimed(book, key, reset):
+                        book[key] = reset
+                        claimed.add(key)
+
+            if self.dry_run:
+                claim(self._waste_seen)
+            else:
+                def store(state: dict) -> None:
+                    saved = state.get("wasteWarned")
+                    saved = saved if isinstance(saved, dict) else {}
+                    claim(saved)
+                    # Drop resets long past so the map does not grow forever.
+                    state["wasteWarned"] = {
+                        k: v for k, v in saved.items()
+                        if isinstance(v, (int, float)) and v > now - 86400
+                    }
+
+                self._mutate_state(store)
+                # Cache keys another engine or an earlier run claimed too, so
+                # they do not cost a locked state rewrite every tick.
+                for key, (reset, _ev) in candidates.items():
+                    self._waste_seen[key] = reset
+            # Only the engine that claimed a key notifies, so two engines
+            # ticking together do not both warn.
+            for key in claimed:
+                self._emit(candidates[key][1])
+        except Exception as e:  # a warning must never break a tick
+            _logger.debug("waste warning check failed: %r", e)
+
     def _load_health_counters(self, state: dict, current: str) -> None:
         """Seed the unreadable-active counters from the state file.
 
@@ -1133,6 +1254,8 @@ class AutoSwitchEngine:
                 },
             )
         )
+
+        self._check_waste(usage)
 
         if not self._model_check_done:
             self._check_model_names(quarantined, usage)
