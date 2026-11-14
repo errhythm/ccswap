@@ -61,10 +61,14 @@ from claude_swap.settings import (
     atomic_write_json,
     effective_model_names,
     gate_thresholds,
+    load_usage_settings,
     parse_window_selection,
 )
 from claude_swap.switcher import ClaudeAccountSwitcher
-from claude_swap.usage_store import due_candidate, plan_oversleeps_interval
+from claude_swap.usage_store import (
+    due_candidate,
+    plan_oversleeps_interval,
+)
 
 STATE_FILENAME = "autoswitch_state.json"
 STATE_SCHEMA_VERSION = 1
@@ -326,6 +330,30 @@ class WarmupEvent(AutoSwitchEvent):
 
 
 @dataclass(frozen=True)
+class WasteWarningEvent(AutoSwitchEvent):
+    """A weekly window is about to reset with much of it still unused."""
+
+    kind: ClassVar[str] = "waste-warning"
+    account: dict  # account_ref shape
+    hours_left: float
+    unused_pct: float
+
+    def _fields(self) -> dict:
+        return {
+            "account": self.account,
+            "hoursLeft": round(self.hours_left, 1),
+            "unusedPct": round(self.unused_pct),
+        }
+
+    def human(self) -> str:
+        who = f"Account {self.account.get('number')}"
+        if self.account.get("email"):
+            who += f" ({self.account['email']})"
+        hours = max(1, round(self.hours_left))
+        return f"{who} resets in {hours}h with {round(self.unused_pct)}% unused"
+
+
+@dataclass(frozen=True)
 class PollEvent(AutoSwitchEvent):
     kind: ClassVar[str] = "poll"
     active: dict | None  # account_ref shape, or None
@@ -389,7 +417,7 @@ class PollEvent(AutoSwitchEvent):
 @dataclass(frozen=True)
 class SwitchEvent(AutoSwitchEvent):
     kind: ClassVar[str] = "switch"
-    trigger: str  # "proactive" | "at-limit" | "failover" | "consume-first"
+    trigger: str  # "proactive" | "at-limit" | "failover" | "consume-first" | "home"
     from_ref: dict | None
     to_ref: dict | None
     warnings: list[str] = field(default_factory=list)
@@ -588,6 +616,16 @@ def _seven_day_reset_ts(usage: dict | str | None, now: float) -> float | None:
     return None
 
 
+def _reset_hour(ts: float) -> int:
+    """Clock hour of a reset, the unit consume-first compares resets in.
+
+    Resets a few minutes apart are a tie, broken by headroom: moving from 10%
+    to 95% to gain four minutes wastes nothing worth saving. Borrowed from
+    magpie's "smart" routing.
+    """
+    return int(ts // 3600)
+
+
 def _binding_recovery_ts(
     usage: dict | str | None,
     models: Sequence[str],
@@ -659,6 +697,20 @@ def _every_account_above_threshold(
     return all((100.0 - h) >= threshold for h in measured)
 
 
+def _waste_claimed(book: dict, key: str, reset: float) -> bool:
+    """True when ``key`` was already warned for this reset.
+
+    ``resets_at`` drifts by about a second between polls, so a stored reset
+    within an hour counts as the same one.
+    """
+    prev = book.get(key)
+    return (
+        isinstance(prev, (int, float))
+        and not isinstance(prev, bool)
+        and abs(prev - reset) < 3600
+    )
+
+
 def _ref(number: str, email: str) -> dict:
     return {"number": int(number), "email": email}
 
@@ -721,6 +773,9 @@ class AutoSwitchEngine:
         self.state_path = state_path or (switcher.backup_dir / STATE_FILENAME)
         self.clock = clock
         self._warmup = None
+        # Resets already warned about this run; covers dry-run, which never
+        # writes the state file.
+        self._waste_seen: dict[str, float] = {}
         self._stop = threading.Event()
         # Cuts the current inter-tick sleep short (a session threshold change
         # from the TUI should show a fresh decision now, not next interval).
@@ -728,6 +783,8 @@ class AutoSwitchEngine:
         self._unhealthy_ticks = 0
         self._health_account: str | None = None
         self._unknown_departure: str | None = self._read_state().get("unknownDeparture")
+        self._home_block_status: str | None = None
+        self._home_warned: str | None = None
         # Both set per tick: a known-reset sleep target, and whether a BLOCKED
         # outcome is static enough (truly exhausted / no candidates) to wait
         # longer than the normal interval.
@@ -963,6 +1020,85 @@ class AutoSwitchEngine:
             )
             return TickOutcome.ERROR
 
+    def _check_waste(self, usage: dict) -> None:
+        """Warn once per account per weekly reset when much of it is unused.
+
+        Reads only the usage already polled this tick. The warned reset is
+        kept in the state file so a restarted loop does not repeat it.
+        """
+        try:
+            cfg = load_usage_settings(self.switcher.backup_dir)
+            if not cfg.waste_warning:
+                return
+            now = self.clock()
+            candidates: dict[str, tuple[float, WasteWarningEvent]] = {}
+            accounts = (self.switcher._get_sequence_data() or {}).get("accounts", {})
+            for num, value in usage.items():
+                if not isinstance(value, dict):
+                    continue
+                window = value.get("seven_day")
+                pct = window.get("pct") if isinstance(window, dict) else None
+                reset = _seven_day_reset_ts(value, now)
+                if (
+                    isinstance(pct, bool)
+                    or not isinstance(pct, (int, float))
+                    or reset is None
+                ):
+                    continue
+                hours_left = (reset - now) / 3600
+                unused = 100.0 - pct
+                if hours_left > cfg.waste_warning_hours or unused < cfg.waste_warning_pct:
+                    continue
+                email = self.switcher.account_email(num) or ""
+                # Email plus org, not slot number, so renumbering does not
+                # re-warn while sibling accounts sharing an email stay apart.
+                org = accounts.get(str(num), {}).get("organizationUuid") or ""
+                key = f"{email.lower()}:{org}" if email else str(num)
+                if _waste_claimed(self._waste_seen, key, reset):
+                    continue
+                candidates[key] = (
+                    reset,
+                    WasteWarningEvent(
+                        account=_ref(num, email),
+                        hours_left=hours_left,
+                        unused_pct=unused,
+                    ),
+                )
+            if not candidates:
+                return
+            claimed: set[str] = set()
+
+            def claim(book: dict) -> None:
+                for key, (reset, _ev) in candidates.items():
+                    if not _waste_claimed(book, key, reset):
+                        book[key] = reset
+                        claimed.add(key)
+
+            if self.dry_run:
+                claim(self._waste_seen)
+            else:
+                def store(state: dict) -> None:
+                    saved = state.get("wasteWarned")
+                    saved = saved if isinstance(saved, dict) else {}
+                    claim(saved)
+                    # Drop resets long past so the map does not grow forever.
+                    state["wasteWarned"] = {
+                        k: v for k, v in saved.items()
+                        if isinstance(v, (int, float)) and v > now - 86400
+                    }
+
+                self._mutate_state(store)
+                # Cache keys another engine or an earlier run claimed too, so
+                # they do not cost a locked state rewrite every tick.
+                for key, (reset, _ev) in candidates.items():
+                    self._waste_seen[key] = reset
+            # Only the engine that claimed a key notifies, so two engines
+            # ticking together do not both warn.
+            for key in claimed:
+                self._emit(candidates[key][1])
+        except Exception as e:  # a warning must never break a tick
+            _logger.debug("waste warning check failed: %r", e)
+
     def _load_health_counters(self, state: dict, current: str) -> None:
         """Seed the unreadable-active counters from the state file.
 
@@ -1124,6 +1260,8 @@ class AutoSwitchEngine:
             )
         )
 
+        self._check_waste(usage)
+
         if not self._model_check_done:
             self._check_model_names(quarantined, usage)
 
@@ -1136,6 +1274,14 @@ class AutoSwitchEngine:
                 )
             )
             return TickOutcome.NO_ACTION
+
+        home_num = self._home_number(settings)
+        if home_num is not None and home_num != current and home_num not in quarantined:
+            returned = self._try_return_home(
+                home_num, current, settings, state, entries, usage, headroom, policy,
+            )
+            if returned is not None:
+                return returned
 
         active_headroom = headroom.get(current)
         active_policy = policy.get(current)
@@ -1186,7 +1332,9 @@ class AutoSwitchEngine:
             else:
                 utilization_over = (100.0 - active_headroom) >= settings.threshold
             if not utilization_over:
-                if settings.strategy != "consume-first":
+                # Home below its gates: consume-first must not nudge off it,
+                # or it would flap with the return-home rule.
+                if settings.strategy != "consume-first" or current == home_num:
                     self._emit(
                         NoSwitchEvent(
                             reason="below-threshold",
@@ -1601,6 +1749,117 @@ class AutoSwitchEngine:
             return TickOutcome.ERROR
         self._emit(NoSwitchEvent(reason="no-viable-target"))
         return TickOutcome.BLOCKED
+
+    def _home_number(self, settings: AutoSwitchSettings) -> str | None:
+        """Slot of ``autoswitch.homeAccount`` among the accounts auto may use.
+
+        The value is ``email|organizationUuid``; ``email|`` means a personal
+        account. A hand-edited plain email (no ``|``) matches any org and only
+        counts when it names one slot; an
+        unknown, ambiguous, removed or disabled home reads as unset.
+        """
+        raw = (settings.home_account or "").strip().lower()
+        if not raw:
+            return None
+        email, pinned, org = raw.partition("|")
+        data = self.switcher._get_sequence_data() or {}
+        accounts = data.get("accounts", {})
+        matches = [
+            num
+            for num in self.switcher.switchable_account_numbers()
+            if num == raw
+            or (
+                self.switcher.account_email(num).lower() == email
+                and (
+                    not pinned
+                    or (accounts.get(num, {}).get("organizationUuid") or "").lower()
+                    == org
+                )
+            )
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1 and raw != self._home_warned:
+            self._home_warned = raw
+            _logger.warning(
+                "autoswitch.homeAccount %r matches several accounts; "
+                "re-run 'ccswap config set autoswitch.homeAccount <num>'",
+                settings.home_account,
+            )
+        return None
+
+    def _home_blocked(self, status: str | None) -> None:
+        """Say why a due return did not happen, once per change of reason."""
+        if status != self._home_block_status and status is not None:
+            self._emit(NoSwitchEvent(reason="home-blocked", detail=status))
+        self._home_block_status = status
+
+    def _try_return_home(
+        self,
+        home: str,
+        current: str,
+        settings: AutoSwitchSettings,
+        state: dict,
+        entries: dict,
+        usage: dict,
+        headroom: dict,
+        policy: dict,
+    ) -> TickOutcome | None:
+        """Switch back to the home account once it is below every gate by the
+        hysteresis margin. None means no return this tick; the normal flow
+        runs."""
+        if self.switcher.account_kind_for(home) == "api_key":
+            return None
+        bar = settings.threshold - settings.hysteresis_pct
+
+        def recovered(h: float | None, p: float | None) -> bool:
+            return h is not None and p is not None and (100.0 - p) < bar
+
+        if not recovered(headroom.get(home), policy.get(home)):
+            self._home_blocked(None)
+            return None
+        now = self.clock()
+        if self._in_cooldown(state, now=now):
+            return None
+        # Re-read home only when its own poll plan is due; otherwise a blocked
+        # return would refetch it every tick. No age check: a reading older
+        # than STALE_OK_S is already unknown, so it never reaches this line.
+        stored = entries.get(home)
+        due = (
+            stored is None
+            or stored.next_poll_at is None
+            or now >= stored.next_poll_at
+        )
+        if due:
+            stored = self.switcher.usage_entries_by_account(fetch={home}).get(home)
+            if stored is None or not stored.fresh(self.clock()):
+                return None
+            fresh_usage = {home: stored.decision_value()}
+            fresh_headroom = _headroom_by_account(
+                fresh_usage, self._models, self._windows
+            )
+            fresh_policy = self._policy_headroom_map(fresh_usage, fresh_headroom)
+            if not recovered(fresh_headroom.get(home), fresh_policy.get(home)):
+                self._home_blocked(None)
+                return None
+        email = self.switcher.account_email(home)
+        left = (
+            headroom.get(current),
+            _binding_recovery_ts(
+                usage.get(current), self._models, now, self._windows,
+                self._active_gates(),
+            ),
+        )
+        if not self.dry_run:
+            status = self._freshen_target(home, email)
+            if status == "identity-conflict" or status == "invalid_grant":
+                self._quarantine(home, email, status)
+                return None
+            if status != "ok":
+                self._home_blocked(status)
+                return None
+        self._home_blocked(None)
+        return self._perform(home, email, "home", left)
 
     def _no_return_account(
         self,
@@ -2156,7 +2415,7 @@ class AutoSwitchEngine:
                     if trigger == "consume-first" and (
                         reset_ts is None
                         or active_reset_ts is None
-                        or reset_ts >= active_reset_ts
+                        or _reset_hour(reset_ts) >= _reset_hour(active_reset_ts)
                     ):
                         continue
                 elif active_policy is not None:
@@ -2194,10 +2453,13 @@ class AutoSwitchEngine:
                     (0, recovery_ts, -h) if by_recovery else (1, -h, recovery_ts)
                 )
             elif consume_first:
-                # Soonest weekly reset first (unknown resets sort last), most
+                # Soonest weekly reset hour first (unknown resets sort last), most
                 # slack before the next gate breaks ties, then sequence order.
                 # `p` equals raw headroom when gates share one threshold.
-                key = (reset_ts if reset_ts is not None else float("inf"), -p)
+                key = (
+                    _reset_hour(reset_ts) if reset_ts is not None else float("inf"),
+                    -p,
+                )
             else:
                 key = (-p,)
             qualifying.append((key, num))
@@ -2402,7 +2664,7 @@ class AutoSwitchEngine:
         # state lock.
         with self._state_lock():
             state = self._read_state()
-            if trigger in ("proactive", "consume-first") and self._in_cooldown(state):
+            if trigger in ("proactive", "consume-first", "home") and self._in_cooldown(state):
                 self._emit(NoSwitchEvent(reason="cooldown"))
                 return TickOutcome.NO_ACTION
 

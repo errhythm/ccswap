@@ -62,6 +62,7 @@ class TestConfigList:
             "autoswitch.threshold5h",
             "autoswitch.threshold7d",
             "autoswitch.modelThresholds",
+            "autoswitch.homeAccount",
             "ui.language",
             "ui.theme",
             "ui.view",
@@ -71,11 +72,12 @@ class TestConfigList:
             "claude.statusline",
             "claude.mod",
             "run.shareHistory",
+            "run.autoPick",
             "updates.check",
             "usage.headerProbe",
         ):
             assert key in out
-        assert out.count("(default)") == 25
+        assert out.count("(default)") == 30
 
     def test_set_key_not_marked_default(self, temp_home, capsys):
         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
@@ -102,7 +104,7 @@ class TestConfigList:
         assert payload["schemaVersion"] == 1
         assert payload["path"].endswith("settings.json")
         by_key = {entry["key"]: entry for entry in payload["settings"]}
-        assert len(by_key) == 25
+        assert len(by_key) == 30
         assert by_key["autoswitch.warmupFiveHour"]["value"] is False
         assert by_key["ui.starPrompt"]["value"] is True
         assert by_key["ui.starPrompt"]["isSet"] is False
@@ -368,3 +370,23 @@ class TestWeeklyThresholdConfig:
                 cli.main()
         assert captured["settings"].threshold == 85.0
         assert captured["settings"].weekly_threshold == 97.0
+
+
+class TestHomeAccount:
+    def test_unknown_account_is_rejected_and_not_stored(self, temp_home, capsys):
+        code, _, _ = _run(["set", "autoswitch.homeAccount", "nobody@example.com"], capsys)
+        assert code != 0
+        code, out, _ = _run(["get", "autoswitch.homeAccount"], capsys)
+        assert out.strip() == "(none)"
+
+    def test_set_stores_email_and_org(self, temp_home, capsys):
+        from claude_swap.switcher import ClaudeAccountSwitcher
+
+        with patch.object(
+            ClaudeAccountSwitcher, "resolve_account",
+            return_value=("3", "you@work.com", "org-1"),
+        ):
+            code, _, _ = _run(["set", "autoswitch.homeAccount", "3"], capsys)
+        assert code == 0
+        raw = json.loads(_settings_file(capsys).read_text())
+        assert raw["autoswitch"]["homeAccount"] == "you@work.com|org-1"

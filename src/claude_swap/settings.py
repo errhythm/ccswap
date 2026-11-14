@@ -83,6 +83,10 @@ class AutoSwitchSettings:
     model_thresholds: str | None = None
     # Real, quota-consuming Haiku requests; deliberately opt-in.
     warmup_five_hour: bool = False
+    # Email of the preferred account. Auto-switch returns to it once it is
+    # below every gate by ``hysteresis_pct`` and never proactively leaves it
+    # while it is below its gates. None = no preferred account.
+    home_account: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,9 +128,13 @@ class RunSettings:
     ``share_history``: sessions of every account read and write the one chat
     history in ``~/.claude``, so the account only decides whose quota is
     used. Off gives each account a history of its own.
+
+    ``auto_pick``: a bare ``cswap run`` in an unmapped directory starts on the
+    least busy account instead of plain claude on the default login.
     """
 
     share_history: bool = False
+    auto_pick: bool = False
 
 
 @dataclass(frozen=True)
@@ -150,6 +158,11 @@ class UsageSettings:
     """
 
     header_probe: bool = False
+    # Waste warning: an opt-in notice when a weekly window is about to reset
+    # with much of it unused (see autoswitch.AutoSwitchEngine).
+    waste_warning: bool = False
+    waste_warning_hours: int = 6
+    waste_warning_pct: int = 40
 
 
 _SECTION_DEFAULT_SOURCES = {
@@ -254,6 +267,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
             help="Per-model gates, e.g. Fable=40 or Fable=40,Opus=70 (each 1-99.9)",
         ),
         SettingSpec(
+            "autoswitch", "homeAccount", "home_account", "string",
+            help="Account to return to once it recovers (email; 'config set' accepts a number or email)",
+        ),
+        SettingSpec(
             "ui", "language", "language", "choice", choices=tuple(LANGUAGES),
             help="TUI language; restart the dashboard after changing it",
         ),
@@ -295,12 +312,28 @@ SETTING_SPECS: dict[str, SettingSpec] = {
             help="ccswap run shares chat history unless --no-share-history",
         ),
         SettingSpec(
+            "run", "autoPick", "auto_pick", "bool",
+            help="A bare ccswap run in an unmapped directory picks the account with the fewest live sessions and room left",
+        ),
+        SettingSpec(
             "updates", "check", "check", "bool",
             help="Check PyPI once a day and print a hint when a newer release exists",
         ),
         SettingSpec(
             "usage", "headerProbe", "header_probe", "bool",
             help="Read setup-token usage from a 1-token Haiku request's rate-limit headers (opt-in: uses quota)",
+        ),
+        SettingSpec(
+            "usage", "wasteWarning", "waste_warning", "bool",
+            help="Warn shortly before a weekly window resets with much of it unused",
+        ),
+        SettingSpec(
+            "usage", "wasteWarningHours", "waste_warning_hours", "int", 1, 168,
+            help="Warn when the weekly window resets within this many hours",
+        ),
+        SettingSpec(
+            "usage", "wasteWarningPct", "waste_warning_pct", "int", 1, 100,
+            help="Warn only when at least this pct of the weekly window is unused",
         ),
     )
 }
@@ -692,7 +725,12 @@ def load_credential_settings(backup_root: Path) -> CredentialSettings:
 def load_run_settings(backup_root: Path) -> RunSettings:
     """Load the run section; missing/corrupt file or non-bool value → default."""
     chosen = explicit_share_history(backup_root)
-    return RunSettings() if chosen is None else RunSettings(share_history=chosen)
+    section = _read_raw(settings_path(backup_root)).get("run")
+    pick = section.get("autoPick") if isinstance(section, dict) else None
+    return RunSettings(
+        share_history=RunSettings().share_history if chosen is None else chosen,
+        auto_pick=pick if isinstance(pick, bool) else RunSettings().auto_pick,
+    )
 
 
 def explicit_share_history(backup_root: Path) -> bool | None:
@@ -733,14 +771,24 @@ def load_usage_settings(backup_root: Path) -> UsageSettings:
     default = UsageSettings()
     if not isinstance(section, dict):
         return default
-    header_probe = section.get("headerProbe", default.header_probe)
-    if not isinstance(header_probe, bool):
-        _logger.warning(
-            "settings.json: usage.headerProbe must be true or false, got %r; "
-            "using %r", header_probe, default.header_probe,
+    values = {}
+    for spec in SETTING_SPECS.values():
+        if spec.section != "usage":
+            continue
+        value = section.get(spec.json_key, spec.default)
+        ok = isinstance(value, bool) if spec.kind == "bool" else (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and spec.lo <= value <= spec.hi
         )
-        return default
-    return UsageSettings(header_probe=header_probe)
+        if not ok:
+            _logger.warning(
+                "settings.json: usage.%s %r is invalid; using %r",
+                spec.json_key, value, spec.default,
+            )
+            value = spec.default
+        values[spec.field] = value
+    return UsageSettings(**values)
 
 
 def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:

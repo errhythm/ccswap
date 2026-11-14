@@ -1136,6 +1136,8 @@ def run(switcher) -> int:
                     rumps.notification("ccswap", "Account quarantined", ev.human())
                 elif ev.kind == "all-exhausted":
                     rumps.notification("ccswap", "All accounts exhausted", ev.human())
+                elif ev.kind == "waste-warning":
+                    rumps.notification("ccswap", "Quota about to go unused", ev.human())
                 elif ev.kind == "config-warning":
                     # e.g. an autoswitch.model name no account reports — the
                     # engine emits it once per run; dropping it would leave a

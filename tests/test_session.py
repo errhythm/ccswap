@@ -55,7 +55,7 @@ from claude_swap.session import (
     slugify_email,
     stale_marker_for,
 )
-from claude_swap.settings import RunSettings, set_setting
+from claude_swap.settings import GateThresholds, RunSettings, set_setting
 from claude_swap.switcher import ClaudeAccountSwitcher
 
 ACCOUNT_EMAIL = "account2@example.com"
@@ -5573,3 +5573,138 @@ class TestDefaultLoginSignedOut:
         monkeypatch.setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
 
         assert manager._default_login_signed_out() is True
+
+
+# ---------------------------------------------------------------------------
+# run.autoPick: pick_least_busy / auto_pick_slot
+# ---------------------------------------------------------------------------
+
+
+def _u(five=None, seven=None):
+    out = {}
+    if five is not None:
+        out["five_hour"] = {"pct": five, "resets_at": None}
+    if seven is not None:
+        out["seven_day"] = {"pct": seven, "resets_at": None}
+    return out
+
+
+class TestPickLeastBusy:
+    GATES = GateThresholds(90.0, {})
+
+    def pick(self, candidates, usage, sessions):
+        from claude_swap.session import pick_least_busy
+
+        return pick_least_busy(candidates, usage, sessions, self.GATES)
+
+    def test_fewest_sessions_wins_over_headroom(self):
+        usage = {"1": _u(five=5), "2": _u(five=60)}
+        assert self.pick(["1", "2"], usage, {"1": 2, "2": 0}) == ("2", 0, 60.0)
+
+    def test_over_threshold_dropped_in_any_window(self):
+        usage = {"1": _u(five=10, seven=95), "2": _u(five=50, seven=50)}
+        assert self.pick(["1", "2"], usage, {"1": 0, "2": 3})[0] == "2"
+
+    def test_per_window_gate_is_honoured(self):
+        from claude_swap.session import pick_least_busy
+
+        gates = GateThresholds(90.0, {"5h": 40.0})
+        usage = {"1": _u(five=50), "2": _u(five=45)}
+        assert pick_least_busy(["1", "2"], usage, {}, gates) is None
+
+    def test_unknown_usage_ranks_after_known_on_equal_sessions(self):
+        usage = {"1": None, "2": _u(five=70)}
+        assert self.pick(["1", "2"], usage, {}) == ("2", 0, 70.0)
+
+    def test_unknown_usage_still_wins_on_fewer_sessions(self):
+        usage = {"1": None, "2": _u(five=20)}
+        assert self.pick(["1", "2"], usage, {"1": 0, "2": 1}) == ("1", 0, None)
+
+    def test_tie_goes_to_headroom_then_order(self):
+        usage = {"1": _u(five=40), "2": _u(five=20), "3": _u(five=20)}
+        assert self.pick(["1", "2", "3"], usage, {})[0] == "2"
+
+    def test_none_eligible(self):
+        assert self.pick(["1"], {"1": _u(five=99)}, {}) is None
+        assert self.pick([], {}, {}) is None
+
+
+class _PickEnv:
+    """A fake switcher around the real auto_pick_slot; only I/O edges are faked."""
+
+    def __init__(self, monkeypatch, usage, kinds=None, active="1", plain=1):
+        from unittest.mock import MagicMock
+
+        from claude_swap import session as session_mod
+
+        self.mod = session_mod
+        self.plain_dirs = []
+        sw = MagicMock()
+        sw.backup_dir = Path("/nonexistent-ccswap-test")
+        sw.switchable_account_numbers.return_value = list(usage)
+        sw.account_kind_for.side_effect = lambda n: (kinds or {}).get(n, "oauth")
+        sw.account_identity.side_effect = lambda n: {"email": f"{n}@x.com"}
+        sw.live_session_pids_for.return_value = []
+        sw._get_sequence_data_migrated.return_value = {}
+        sw._find_account_slot.return_value = active
+        sw.usage_entries_by_account.return_value = {
+            n: MagicMock(decision_value=lambda v=v: v) for n, v in usage.items()
+        }
+        self.sw = sw
+        monkeypatch.setattr(
+            session_mod.SessionManager, "_default_login_identity",
+            staticmethod(lambda: ("1@x.com", "")),
+        )
+
+        def fake_list(d=None):
+            self.plain_dirs.append(d)
+            return [object()] * plain
+
+        monkeypatch.setattr(session_mod, "list_sessions", fake_list)
+
+    def pick(self, **kw):
+        return self.mod.auto_pick_slot(self.sw, **kw)
+
+
+def test_auto_pick_counts_plain_sessions_on_active_account(monkeypatch):
+    env = _PickEnv(monkeypatch, {"1": _u(five=10), "2": _u(five=10)})
+    assert env.pick() == ("2", "2@x.com", 0, 10.0)
+    env.sw.usage_entries_by_account.assert_called_once_with(fetch=set())
+
+
+def test_auto_pick_skips_api_key_accounts(monkeypatch):
+    env = _PickEnv(
+        monkeypatch, {"1": _u(five=50), "2": _u(five=1)}, kinds={"2": "api_key"}, plain=0
+    )
+    assert env.pick()[0] == "1"
+
+
+def test_auto_pick_skips_relogin_sentinel_keeps_token_expired(monkeypatch):
+    from claude_swap.json_output import USAGE_RELOGIN_REQUIRED, USAGE_TOKEN_EXPIRED
+
+    env = _PickEnv(
+        monkeypatch,
+        {"1": _u(five=90 - 1), "2": USAGE_RELOGIN_REQUIRED, "3": USAGE_TOKEN_EXPIRED},
+        plain=1,
+    )
+    assert env.pick()[0] == "3"
+
+
+def test_auto_pick_reads_default_profile_even_inside_a_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "session-profile"))
+    env = _PickEnv(monkeypatch, {"1": _u(five=10), "2": _u(five=10)})
+    env.pick()
+    assert env.plain_dirs == [session_default_home()]
+
+
+def session_default_home():
+    from claude_swap.paths import get_default_claude_config_home
+
+    return get_default_claude_config_home()
+
+
+def test_auto_pick_require_session_excludes_active(monkeypatch):
+    env = _PickEnv(monkeypatch, {"1": _u(five=1), "2": _u(five=80)}, plain=0)
+    assert env.pick(require_session=True)[0] == "2"
+    only_active = _PickEnv(monkeypatch, {"1": _u(five=1)}, plain=0)
+    assert only_active.pick(require_session=True) is None

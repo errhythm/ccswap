@@ -15,13 +15,18 @@ ccswap config set ui.starPrompt off          # stop asking for a GitHub star aft
 ccswap config set credentials.backend file  # macOS headless/SSH: never use the Keychain
 ccswap config set updates.check off         # stop the daily PyPI check for a newer release
 ccswap config set run.shareHistory on       # make --share-history the default for ccswap run
+ccswap config set run.autoPick on           # bare ccswap run in an unmapped directory picks the least busy account
 ccswap config set autoswitch.model Fable   # per-model switching (see "auto"); Fable,Opus for several
 ccswap config set autoswitch.threshold5h 85 # 5h gate; unset inherits autoswitch.threshold
 ccswap config set autoswitch.threshold7d 70 # weekly gate, independent of the 5h one
 ccswap config set autoswitch.modelThresholds Fable=40  # Fable gate; Fable=40,Opus=60 for several
 ccswap config set autoswitch.weeklyThreshold 97  # 7d/model gate when threshold7d/modelThresholds are unset
+ccswap config set autoswitch.homeAccount you@work.com  # auto-switch returns here once it recovers (number or email)
 ccswap config set autoswitch.windows 5h    # switch on the session window only; 7d for weekly-only, both to reset
 ccswap config set autoswitch.warmupFiveHour true  # opt-in Claude warming; uses quota
+ccswap config set usage.wasteWarning true   # opt-in: warn before a weekly window resets with quota unused
+ccswap config set usage.wasteWarningHours 6 # warn within this many hours of the reset (1 to 168)
+ccswap config set usage.wasteWarningPct 40  # and only when at least this pct is unused (1 to 100)
 ccswap config unset autoswitch.threshold   # back to the default
 ccswap config path                         # where settings.json lives
 ```

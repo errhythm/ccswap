@@ -60,12 +60,25 @@ request a one-minute timeout, delaying the next auto-switch check. CLI wrappers
 may have child processes that outlive that timeout and delay cleanup further;
 the persistent guard still prevents retries.
 
+## Warning before unused quota is lost
+
+Quota left in a weekly window is lost when it resets. To get a heads-up, turn on the opt-in warning:
+
+```bash
+ccswap config set usage.wasteWarning true
+ccswap config set usage.wasteWarningHours 6   # default: warn within 6 hours of the reset
+ccswap config set usage.wasteWarningPct 40    # default: only if 40% or more is unused
+```
+
+While `ccswap auto` runs, or the menu bar with auto-switch enabled, each saved Claude account whose weekly window resets within that many hours with at least that much unused produces one `waste-warning` event, for example `Account 2 (x@y) resets in 3h with 58% unused`. The menu bar shows it as a notification. Each account is warned once per weekly reset, and the record is kept in `autoswitch_state.json`, so a restart does not repeat it. The check reads usage the loop already polled and never adds requests. It does not change which account is active.
+
 ## How it behaves & advanced usage
 
 - Runs safely alongside Claude Code: switches take the same credential locks Claude Code uses, so a swap never collides with a token refresh.
 - A cooldown (default 5 min) and a hysteresis margin stop it flip-flopping near the threshold: a proactive switch only lands on an account that's below the threshold *and* better than the current one by the margin — a candidate that clears the margin is always taken, but two accounts hovering at the line never ping-pong. When every account is exhausted it keeps checking on a bounded slow cadence, waking sooner for an imminent reset.
 - The cooldown starts at every completed switch, including one you make by hand with `ccswap switch`, so auto-switch does not undo a manual choice straight away. Switches away from an exhausted or unreadable account are never delayed by it.
 - **Strategies** (`--strategy`, or `ccswap config set autoswitch.strategy`): `best` (default) stays put until the active account nears its limit, then moves to the account with the most quota left. `consume-first` proactively keeps you on the account whose **weekly window resets soonest** — use-it-or-lose-it — switching to a sooner-resetting account (with room to spare) even below the threshold, so perishable weekly quota isn't wasted.
+- **Home account** (`ccswap config set autoswitch.homeAccount <num|email>`): the account you prefer, such as a Teams seat. Auto-switch moves off it when it hits a gate, and signs you back in once its usage is below every gate by the hysteresis margin (default 10 points under the threshold), so you do not drift away from it for good. While home is below its gates, `consume-first` will not move you off it. The return follows the usual guards: cooldown, quarantine, live `ccswap run` sessions and `--dry-run`, and it is reported as a `home` switch. A home account that is disabled, removed or unreadable is ignored. The email and organization are what get stored, so renumbering accounts does not change it. A blocked return is reported once as `home-blocked`. Unset by default.
 - Usage polling is adaptive — a couple of accounts per check, busy alternates watched more closely, and exhausted ones checked about every ten minutes (or slower after 429s) — so API traffic stays flat no matter how many accounts you manage.
 - It fails safe: if a usage check errors it keeps trusting the last-known numbers while retries back off, and an expired token on an idle machine makes it hold rather than fail over (Claude Code refreshes the token on your next message).
 - An account whose refresh token has died is quarantined and reported until you either log in with it and re-run `ccswap add --slot N`, or replace its stored credentials from a known-good export — a plain `ccswap import backup.cswap` replaces dead-token slots on its own (`--force` is still required to replace other existing accounts; note a stale export can carry an already-superseded token). API-key accounts are never rotated onto unless you pass `--include-api-key-accounts`.
