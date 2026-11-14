@@ -230,6 +230,11 @@ Examples:
                 picked = auto_pick_slot(switcher, args.require_session)
             except Exception as exc:  # a launch must not fail on the picker
                 logging.getLogger(__name__).debug("auto-pick failed", exc_info=True)
+                if args.require_session:
+                    raise ClaudeSwitchError(
+                        f"--require-session: could not pick an account ({exc}); "
+                        "refusing to run plain claude on the default login."
+                    ) from exc
                 print(dimmed(f"ccswap run: could not pick an account ({exc}) — launching the default account."))
                 manager.exec_default(tail)
                 return  # only reachable in tests
@@ -251,6 +256,12 @@ Examples:
                     require_session=args.require_session,
                 )
                 return  # only reachable in tests
+            if args.require_session:
+                raise ClaudeSwitchError(
+                    "--require-session: no other account has room under the "
+                    "autoswitch threshold; refusing to run plain claude on the "
+                    "default login."
+                )
             print(
                 dimmed(
                     "ccswap run: no account has room under the autoswitch "

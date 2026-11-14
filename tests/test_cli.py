@@ -1993,7 +1993,9 @@ class TestRunAutoResolve:
         assert ("exec_default", []) in calls
         assert "No account mapped" in capsys.readouterr().out
 
-    def _auto_pick_run(self, tmp_path, monkeypatch, *, setting, mapped, picked):
+    def _auto_pick_run(
+        self, tmp_path, monkeypatch, *, setting, mapped, picked, extra=(), pick_error=None
+    ):
         from claude_swap.mappings import MappingStore
         from claude_swap.settings import set_setting
 
@@ -2014,11 +2016,12 @@ class TestRunAutoResolve:
         calls = []
         monkeypatch.chdir(repo)
         with patch("claude_swap.session.SessionManager", self._fake_manager(calls)), \
-             patch("claude_swap.session.auto_pick_slot", return_value=picked) as pick, \
+             patch("claude_swap.session.auto_pick_slot", return_value=picked,
+                   side_effect=pick_error) as pick, \
              patch("claude_swap.cli.ClaudeAccountSwitcher",
                    return_value=self._fake_switcher(backup, seq)), \
              patch("os.geteuid", return_value=1000, create=True), \
-             patch.object(sys, "argv", ["claude-swap", "run"]):
+             patch.object(sys, "argv", ["claude-swap", "run", *extra]):
             cli.main()
         return calls, pick
 
@@ -2036,6 +2039,18 @@ class TestRunAutoResolve:
         )
         assert ("exec_default", []) in calls
         assert "no account has room" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("picked,pick_error", [(None, None), (None, RuntimeError("boom"))])
+    def test_auto_pick_require_session_refuses_the_default_fallback(
+        self, tmp_path, monkeypatch, capsys, picked, pick_error
+    ):
+        with pytest.raises(SystemExit) as exc:
+            self._auto_pick_run(
+                tmp_path, monkeypatch, setting=True, mapped=False, picked=picked,
+                extra=["--require-session"], pick_error=pick_error,
+            )
+        assert exc.value.code == 1
+        assert "--require-session" in capsys.readouterr().err
 
     def test_auto_pick_off_is_unchanged(self, tmp_path, monkeypatch, capsys):
         calls, pick = self._auto_pick_run(

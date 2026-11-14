@@ -66,7 +66,6 @@ from claude_swap.settings import (
 )
 from claude_swap.switcher import ClaudeAccountSwitcher
 from claude_swap.usage_store import (
-    STALE_OK_S,
     due_candidate,
     plan_oversleeps_interval,
 )
@@ -1822,15 +1821,14 @@ class AutoSwitchEngine:
         now = self.clock()
         if self._in_cooldown(state, now=now):
             return None
-        # Re-read home only when its own poll plan is due or the stored
-        # reading is too old to trust; otherwise a blocked return would
-        # refetch it every tick.
+        # Re-read home only when its own poll plan is due; otherwise a blocked
+        # return would refetch it every tick. No age check: a reading older
+        # than STALE_OK_S is already unknown, so it never reaches this line.
         stored = entries.get(home)
         due = (
             stored is None
             or stored.next_poll_at is None
             or now >= stored.next_poll_at
-            or stored.age_s > STALE_OK_S
         )
         if due:
             stored = self.switcher.usage_entries_by_account(fetch={home}).get(home)
