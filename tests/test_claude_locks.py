@@ -656,14 +656,16 @@ class _ForcedTakeoverRace:
         return os.rmdir(path, *args, **kwargs)
 
 
-class _AccessDeniedOnce:
-    """Stand-in for ``claude_locks.os`` that answers access denied the first
-    time ``op`` touches the lock directory, as Windows does for a directory a
-    peer has removed while a handle to it is still open."""
+class _AccessDenied:
+    """Stand-in for ``claude_locks.os`` that answers access denied when ``op``
+    touches the lock directory (once, or every time with ``always``), as
+    Windows does for a directory a peer has removed while a handle to it is
+    still open."""
 
-    def __init__(self, lock_dir: Path, op: str, name: str) -> None:
+    def __init__(self, lock_dir: Path, op: str, name: str, always: bool = False) -> None:
         self._lock_dir = str(lock_dir)
         self._op = op
+        self._always = always
         self.name = name
         self.denied = 0
 
@@ -671,7 +673,9 @@ class _AccessDeniedOnce:
         return getattr(os, attr)
 
     def _maybe_deny(self, op: str, path) -> None:
-        if op == self._op and str(path) == self._lock_dir and not self.denied:
+        if op == self._op and str(path) == self._lock_dir and (
+            self._always or not self.denied
+        ):
             self.denied += 1
             raise PermissionError(13, "Access is denied")
 
@@ -689,7 +693,7 @@ class TestWindowsDeletePending:
     def test_access_denied_is_retried_on_windows(self, lock_dir, monkeypatch, op):
         if op == "stat":
             lock_dir.mkdir()  # held, so the loop stats it
-        fake = _AccessDeniedOnce(lock_dir, op, "nt")
+        fake = _AccessDenied(lock_dir, op, "nt")
         monkeypatch.setattr(claude_locks, "os", fake)
         if op == "stat":
             past = time.time() - 30
@@ -702,10 +706,35 @@ class TestWindowsDeletePending:
     def test_access_denied_surfaces_on_posix(self, lock_dir, monkeypatch, op):
         if op == "stat":
             lock_dir.mkdir()
-        monkeypatch.setattr(claude_locks, "os", _AccessDeniedOnce(lock_dir, op, "posix"))
+        monkeypatch.setattr(claude_locks, "os", _AccessDenied(lock_dir, op, "posix"))
         with pytest.raises(PermissionError):
             with proper_lockfile(lock_dir, timeout=5.0):
                 pass
+
+    @pytest.mark.parametrize("op", ["mkdir", "stat"])
+    def test_persistent_access_denied_backs_off_until_the_timeout(
+        self, lock_dir, monkeypatch, op
+    ):
+        """A denial that never clears must sleep between retries and stop at
+        the budget, not spin a core until it gives up."""
+        if op == "stat":
+            lock_dir.mkdir()
+        fake = _AccessDenied(lock_dir, op, "nt", always=True)
+        monkeypatch.setattr(claude_locks, "os", fake)
+        budget = 0.3
+        clock, slept = [0.0], []
+        monkeypatch.setattr(
+            claude_locks.time, "sleep", _thread_scoped_sleep(claude_locks, clock, slept)
+        )
+        monkeypatch.setattr(claude_locks.time, "monotonic", _advancing_clock(clock, budget))
+        with pytest.raises(ClaudeCodeLockTimeout):
+            with proper_lockfile(lock_dir, timeout=budget):
+                pass
+        # 0.3s at the 0.05s decline back-off is about 6 tries; a spin makes
+        # thousands before the stepping clock reaches the deadline.
+        assert 1 <= fake.denied <= 12, f"{fake.denied} denied tries in {budget}s"
+        assert all(s > 0 for s in slept[:-1]), slept
+        assert sum(slept) <= budget + 1e-9, f"slept {sum(slept)} past a {budget}s budget"
 
 
 class TestLockPaths:
