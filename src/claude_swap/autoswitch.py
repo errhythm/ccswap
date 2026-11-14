@@ -1017,6 +1017,7 @@ class AutoSwitchEngine:
                 return
             now = self.clock()
             candidates: dict[str, tuple[float, WasteWarningEvent]] = {}
+            accounts = (self.switcher._get_sequence_data() or {}).get("accounts", {})
             for num, value in usage.items():
                 if not isinstance(value, dict):
                     continue
@@ -1034,8 +1035,10 @@ class AutoSwitchEngine:
                 if hours_left > cfg.waste_warning_hours or unused < cfg.waste_warning_pct:
                     continue
                 email = self.switcher.account_email(num) or ""
-                # Email, not slot number, so renumbering does not re-warn.
-                key = email.lower() or str(num)
+                # Email plus org, not slot number, so renumbering does not
+                # re-warn while sibling accounts sharing an email stay apart.
+                org = accounts.get(str(num), {}).get("organizationUuid") or ""
+                key = f"{email.lower()}:{org}" if email else str(num)
                 if _waste_claimed(self._waste_seen, key, reset):
                     continue
                 candidates[key] = (
@@ -1070,8 +1073,10 @@ class AutoSwitchEngine:
                     }
 
                 self._mutate_state(store)
-                for key in claimed:
-                    self._waste_seen[key] = candidates[key][0]
+                # Cache keys another engine or an earlier run claimed too, so
+                # they do not cost a locked state rewrite every tick.
+                for key, (reset, _ev) in candidates.items():
+                    self._waste_seen[key] = reset
             # Only the engine that claimed a key notifies, so two engines
             # ticking together do not both warn.
             for key in claimed:

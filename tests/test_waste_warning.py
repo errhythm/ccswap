@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from unittest.mock import patch
+
 import pytest
 
 from claude_swap.autoswitch import WasteWarningEvent
@@ -90,7 +92,7 @@ def test_once_per_reset_across_restart_then_again_next_reset(h):
     assert len(_warnings(h)) == 1
     h.clock.advance(8 * 24 * 3600)  # next weekly window
     _tick(h)
-    assert len(_warnings(h)) == 2
+    assert len(_warnings(h)) == 2, [e.human() for e in h.events]
 
 
 def _tick_at(h, reset_epoch, pct7=40, usage_one=None):
@@ -109,7 +111,7 @@ def test_reset_drift_between_polls_is_one_warning(h):
     assert len(_warnings(h)) == 1
     h.clock.advance(8 * 24 * 3600)
     _tick_at(h, h.clock.now + 3 * 3600)
-    assert len(_warnings(h)) == 2
+    assert len(_warnings(h)) == 2, [e.human() for e in h.events]
 
 
 def test_renumbered_account_is_not_warned_again(h):
@@ -140,6 +142,31 @@ def test_dry_run_dedupes_in_memory_without_writing_state(h):
     _tick(h)
     assert len(_warnings(h)) == 1
     assert "wasteWarned" not in h.state()
+
+
+def test_sibling_accounts_sharing_an_email_each_warn_once(h):
+    _enable(h)
+    data = h.switcher._get_sequence_data()
+    data["accounts"]["2"].update(email="a@example.com", organizationUuid="org-b")
+    h.switcher._write_json(h.switcher.sequence_file, data)
+    for _ in range(4):
+        h.tick_with_usage({
+            "1": _usage7(10, 40, _iso_at(h.clock.now + 3 * 3600)),
+            "2": _usage7(10, 40, _iso_at(h.clock.now + 5 * 3600)),
+        })
+        h.clock.advance(0)  # same instant, resets stay fixed below
+    assert len(_warnings(h)) == 2, [e.human() for e in h.events]
+
+
+def test_already_claimed_key_does_not_rewrite_state_every_tick(h):
+    _enable(h)
+    _tick(h)
+    h.engine = h._make_engine()  # fresh memory; the claim is in the file
+    with patch.object(h.engine, "_mutate_state", wraps=h.engine._mutate_state) as m:
+        _tick(h)
+        _tick(h)
+    assert m.call_count == 1
+    assert len(_warnings(h)) == 1
 
 
 def test_ignored_usage_shapes(h):
