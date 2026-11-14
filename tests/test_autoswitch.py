@@ -3436,6 +3436,30 @@ class TestConsumeFirstStrategy:
         reasons = [e.reason for e in h.events if isinstance(e, NoSwitchEvent)]
         assert reasons == ["already-consuming-soonest"]
 
+    def test_resets_in_the_same_hour_tie_and_headroom_breaks_it(self, temp_home):
+        h = self._harness(temp_home)
+        # Over threshold, so the move happens. #2 resets 4 minutes sooner but
+        # is nearly spent; in the same clock hour #3 wins on headroom.
+        outcome = h.tick_with_usage({
+            "1": _usage7(95, 20, _R_LATEST),
+            "2": _usage7(80, 80, "2024-01-05T14:01:00Z"),
+            "3": _usage7(10, 10, "2024-01-05T14:05:00Z"),
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 3
+
+    def test_below_threshold_does_not_move_for_minutes_in_the_same_hour(
+        self, temp_home
+    ):
+        h = self._harness(temp_home)
+        outcome = h.tick_with_usage({
+            "1": _usage7(20, 20, "2024-01-05T14:50:00Z"),
+            "2": _usage7(10, 10, "2024-01-05T14:10:00Z"),
+            "3": _usage7(10, 10, _R_LATEST),
+        })
+        assert outcome is TickOutcome.NO_ACTION
+        assert h.active_number() == 1
+
     def test_over_threshold_prefers_soonest_reset_over_max_headroom(self, temp_home):
         h = self._harness(temp_home)
         # Active over threshold -> must move. #2 has LESS headroom but resets

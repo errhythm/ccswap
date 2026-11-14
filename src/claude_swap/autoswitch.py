@@ -588,6 +588,16 @@ def _seven_day_reset_ts(usage: dict | str | None, now: float) -> float | None:
     return None
 
 
+def _reset_hour(ts: float) -> int:
+    """Clock hour of a reset, the unit consume-first compares resets in.
+
+    Resets a few minutes apart are a tie, broken by headroom: moving from 10%
+    to 95% to gain four minutes wastes nothing worth saving. Borrowed from
+    magpie's "smart" routing.
+    """
+    return int(ts // 3600)
+
+
 def _binding_recovery_ts(
     usage: dict | str | None,
     models: Sequence[str],
@@ -2156,7 +2166,7 @@ class AutoSwitchEngine:
                     if trigger == "consume-first" and (
                         reset_ts is None
                         or active_reset_ts is None
-                        or reset_ts >= active_reset_ts
+                        or _reset_hour(reset_ts) >= _reset_hour(active_reset_ts)
                     ):
                         continue
                 elif active_policy is not None:
@@ -2194,10 +2204,13 @@ class AutoSwitchEngine:
                     (0, recovery_ts, -h) if by_recovery else (1, -h, recovery_ts)
                 )
             elif consume_first:
-                # Soonest weekly reset first (unknown resets sort last), most
+                # Soonest weekly reset hour first (unknown resets sort last), most
                 # slack before the next gate breaks ties, then sequence order.
                 # `p` equals raw headroom when gates share one threshold.
-                key = (reset_ts if reset_ts is not None else float("inf"), -p)
+                key = (
+                    _reset_hour(reset_ts) if reset_ts is not None else float("inf"),
+                    -p,
+                )
             else:
                 key = (-p,)
             qualifying.append((key, num))
