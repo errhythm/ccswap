@@ -81,7 +81,8 @@ from claude_swap.fsutil import (
 )
 from claude_swap.locking import FileLock
 from claude_swap.models import Platform
-from claude_swap.paths import get_default_global_config_path
+from claude_swap.json_output import USAGE_TOKEN_EXPIRED
+from claude_swap.paths import get_default_claude_config_home, get_default_global_config_path
 from claude_swap.printer import accent, dimmed, muted, warning
 from claude_swap.process_detection import ClaudeSession, list_sessions, scan_sessions
 from claude_swap.settings import (
@@ -625,28 +626,40 @@ def pick_least_busy(
     return num, count, used
 
 
-def auto_pick_slot(switcher: ClaudeAccountSwitcher) -> tuple[str, str, int, float | None] | None:
+def auto_pick_slot(
+    switcher: ClaudeAccountSwitcher, require_session: bool = False
+) -> tuple[str, str, int, float | None] | None:
     """``pick_least_busy`` over stored accounts, from cached usage only.
 
     Session-mode claudes count per account. Plain claudes on the default login
-    (``~/.claude/sessions``) count against the active account too.
+    (``~/.claude/sessions``) count against the active account too. The default
+    login is read the way ``SessionManager.run`` reads it, ignoring
+    ``CLAUDE_CONFIG_DIR``. ``require_session`` leaves the active account out so
+    the pick is always a session profile.
     """
     settings = load_settings(switcher.backup_dir)
-    candidates = switcher.switchable_account_numbers()
-    if not candidates:
-        return None
-    emails = {n: switcher.account_identity(n)["email"] for n in candidates}
-    sessions = {n: len(switcher.live_session_pids_for(n, emails[n])) for n in candidates}
-    current = switcher._get_current_account()
-    if current is not None:
-        seq = switcher._get_sequence_data_migrated() or {}
-        active = switcher._find_account_slot(seq, *current)
-        if active in sessions:
-            sessions[active] += len(list_sessions())
+    seq = switcher._get_sequence_data_migrated() or {}
+    current = SessionManager._default_login_identity()
+    active = switcher._find_account_slot(seq, *current) if current else None
     usage = {
         n: e.decision_value()
         for n, e in switcher.usage_entries_by_account(fetch=set()).items()
     }
+    # A sentinel is a known problem with the login. "token expired" is the
+    # exception: Claude Code refreshes that itself on launch.
+    candidates = [
+        n
+        for n in switcher.switchable_account_numbers()
+        if switcher.account_kind_for(n) != "api_key"
+        and not (isinstance(usage.get(n), str) and usage[n] != USAGE_TOKEN_EXPIRED)
+        and not (require_session and n == active)
+    ]
+    if not candidates:
+        return None
+    emails = {n: switcher.account_identity(n)["email"] for n in candidates}
+    sessions = {n: len(switcher.live_session_pids_for(n, emails[n])) for n in candidates}
+    if active in sessions:
+        sessions[active] += len(list_sessions(get_default_claude_config_home()))
     picked = pick_least_busy(
         candidates, usage, sessions, gate_thresholds(settings),
         effective_model_names(settings), parse_window_selection(settings.windows),

@@ -2025,10 +2025,10 @@ class TestRunAutoResolve:
     def test_auto_pick_launches_picked_account(self, tmp_path, monkeypatch, capsys):
         calls, _ = self._auto_pick_run(
             tmp_path, monkeypatch, setting=True, mapped=False,
-            picked=("3", "x@y.com", 0, 31.0),
+            picked=("3", "x@y.com", 1, 31.0),
         )
         assert ("run", "3", [], True, None) in calls
-        assert "picked account 3 (x@y.com), 0 live sessions, 31% used" in capsys.readouterr().out
+        assert "picked account 3 (x@y.com), 1 live session, 31% used" in capsys.readouterr().out
 
     def test_auto_pick_nothing_eligible_launches_default(self, tmp_path, monkeypatch, capsys):
         calls, _ = self._auto_pick_run(
@@ -2045,6 +2045,26 @@ class TestRunAutoResolve:
         assert ("exec_default", []) in calls
         pick.assert_not_called()
         assert "No account mapped" in capsys.readouterr().out
+
+    def test_auto_pick_failure_falls_back_to_default(self, tmp_path, monkeypatch, capsys):
+        from claude_swap.settings import set_setting
+
+        backup = tmp_path / "backup"
+        backup.mkdir()
+        set_setting(backup, "run.autoPick", "true")
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        calls = []
+        monkeypatch.chdir(scratch)
+        with patch("claude_swap.session.SessionManager", self._fake_manager(calls)), \
+             patch("claude_swap.session.auto_pick_slot", side_effect=RuntimeError("boom")), \
+             patch("claude_swap.cli.ClaudeAccountSwitcher",
+                   return_value=self._fake_switcher(backup, {"accounts": {}, "sequence": []})), \
+             patch("os.geteuid", return_value=1000, create=True), \
+             patch.object(sys, "argv", ["claude-swap", "run"]):
+            cli.main()
+        assert ("exec_default", []) in calls
+        assert "could not pick an account" in capsys.readouterr().out
 
     def test_mapping_wins_over_auto_pick(self, tmp_path, monkeypatch):
         calls, pick = self._auto_pick_run(

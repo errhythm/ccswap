@@ -5629,23 +5629,82 @@ class TestPickLeastBusy:
         assert self.pick([], {}, {}) is None
 
 
-def test_auto_pick_slot_counts_plain_sessions_on_active_account(monkeypatch):
-    from unittest.mock import MagicMock
+class _PickEnv:
+    """A fake switcher around the real auto_pick_slot; only I/O edges are faked."""
 
-    from claude_swap import session as session_mod
+    def __init__(self, monkeypatch, usage, kinds=None, active="1", plain=1):
+        from unittest.mock import MagicMock
 
-    sw = MagicMock()
-    sw.backup_dir = Path("/nonexistent-ccswap-test")
-    sw.switchable_account_numbers.return_value = ["1", "2"]
-    sw.account_identity.side_effect = lambda n: {"email": f"{n}@x.com"}
-    sw.live_session_pids_for.return_value = []
-    sw._get_current_account.return_value = ("1@x.com", "")
-    sw._get_sequence_data_migrated.return_value = {}
-    sw._find_account_slot.return_value = "1"
-    sw.usage_entries_by_account.return_value = {
-        "1": MagicMock(decision_value=lambda: _u(five=10)),
-        "2": MagicMock(decision_value=lambda: _u(five=10)),
-    }
-    monkeypatch.setattr(session_mod, "list_sessions", lambda: [object()])
-    assert session_mod.auto_pick_slot(sw) == ("2", "2@x.com", 0, 10.0)
-    sw.usage_entries_by_account.assert_called_once_with(fetch=set())
+        from claude_swap import session as session_mod
+
+        self.mod = session_mod
+        self.plain_dirs = []
+        sw = MagicMock()
+        sw.backup_dir = Path("/nonexistent-ccswap-test")
+        sw.switchable_account_numbers.return_value = list(usage)
+        sw.account_kind_for.side_effect = lambda n: (kinds or {}).get(n, "oauth")
+        sw.account_identity.side_effect = lambda n: {"email": f"{n}@x.com"}
+        sw.live_session_pids_for.return_value = []
+        sw._get_sequence_data_migrated.return_value = {}
+        sw._find_account_slot.return_value = active
+        sw.usage_entries_by_account.return_value = {
+            n: MagicMock(decision_value=lambda v=v: v) for n, v in usage.items()
+        }
+        self.sw = sw
+        monkeypatch.setattr(
+            session_mod.SessionManager, "_default_login_identity",
+            staticmethod(lambda: ("1@x.com", "")),
+        )
+
+        def fake_list(d=None):
+            self.plain_dirs.append(d)
+            return [object()] * plain
+
+        monkeypatch.setattr(session_mod, "list_sessions", fake_list)
+
+    def pick(self, **kw):
+        return self.mod.auto_pick_slot(self.sw, **kw)
+
+
+def test_auto_pick_counts_plain_sessions_on_active_account(monkeypatch):
+    env = _PickEnv(monkeypatch, {"1": _u(five=10), "2": _u(five=10)})
+    assert env.pick() == ("2", "2@x.com", 0, 10.0)
+    env.sw.usage_entries_by_account.assert_called_once_with(fetch=set())
+
+
+def test_auto_pick_skips_api_key_accounts(monkeypatch):
+    env = _PickEnv(
+        monkeypatch, {"1": _u(five=50), "2": _u(five=1)}, kinds={"2": "api_key"}, plain=0
+    )
+    assert env.pick()[0] == "1"
+
+
+def test_auto_pick_skips_relogin_sentinel_keeps_token_expired(monkeypatch):
+    from claude_swap.json_output import USAGE_RELOGIN_REQUIRED, USAGE_TOKEN_EXPIRED
+
+    env = _PickEnv(
+        monkeypatch,
+        {"1": _u(five=90 - 1), "2": USAGE_RELOGIN_REQUIRED, "3": USAGE_TOKEN_EXPIRED},
+        plain=1,
+    )
+    assert env.pick()[0] == "3"
+
+
+def test_auto_pick_reads_default_profile_even_inside_a_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "session-profile"))
+    env = _PickEnv(monkeypatch, {"1": _u(five=10), "2": _u(five=10)})
+    env.pick()
+    assert env.plain_dirs == [session_default_home()]
+
+
+def session_default_home():
+    from claude_swap.paths import get_default_claude_config_home
+
+    return get_default_claude_config_home()
+
+
+def test_auto_pick_require_session_excludes_active(monkeypatch):
+    env = _PickEnv(monkeypatch, {"1": _u(five=1), "2": _u(five=80)}, plain=0)
+    assert env.pick(require_session=True)[0] == "2"
+    only_active = _PickEnv(monkeypatch, {"1": _u(five=1)}, plain=0)
+    assert only_active.pick(require_session=True) is None
