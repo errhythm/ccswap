@@ -44,3 +44,13 @@ ccswap run                       # → account 2, session mode
 ```
 
 Subfolders inherit the nearest mapped ancestor. In an unmapped directory, `ccswap run` just launches plain `claude` with your default login. Mappings are per-machine (not part of `ccswap export`) and are cleaned up when their account is removed.
+
+## Spread parallel sessions across accounts
+
+Turn on `ccswap config set run.autoPick on` and a bare `ccswap run` in an unmapped directory starts on the least busy account instead of plain `claude`. Mappings still win. The pick runs on cached usage only, so launch stays fast:
+
+1. Accounts at or over the autoswitch threshold in any gated window are skipped, as are disabled and broken ones.
+2. The account with the fewest live sessions goes first. Session-mode sessions count on their own account, and plain `claude` processes on the default login count on the active account.
+3. Ties go to the account with the most headroom, then to the lowest slot. Accounts with unknown usage rank after known ones.
+
+ccswap prints one line first, for example `ccswap run: picked account 2 (x@y), 0 live sessions, 31% used`. If the pick is the active default login it runs plain `claude` there, as `ccswap run <n>` does. If no account has room, you get plain `claude` on the default login and a note saying so.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import sys
@@ -191,7 +192,8 @@ Examples:
         switcher = ClaudeAccountSwitcher(debug=args.debug)
         _guard_root(switcher)
 
-        from claude_swap.session import SessionManager
+        from claude_swap.session import SessionManager, auto_pick_slot
+        from claude_swap.settings import load_run_settings
 
         manager = SessionManager(switcher)
 
@@ -222,6 +224,38 @@ Examples:
             warning(
                 f"Mapped account {email} no longer exists — "
                 "launching the default account."
+            )
+        elif load_run_settings(switcher.backup_dir).auto_pick:
+            try:
+                picked = auto_pick_slot(switcher, args.require_session)
+            except Exception as exc:  # a launch must not fail on the picker
+                logging.getLogger(__name__).debug("auto-pick failed", exc_info=True)
+                print(dimmed(f"ccswap run: could not pick an account ({exc}) — launching the default account."))
+                manager.exec_default(tail)
+                return  # only reachable in tests
+            if picked is not None:
+                num, pick_email, count, used = picked
+                print(
+                    dimmed(
+                        f"ccswap run: picked account {num} ({pick_email}), "
+                        f"{count} live session{'' if count == 1 else 's'}, "
+                        + (f"{used:.0f}% used" if used is not None else "usage unknown")
+                    )
+                )
+                _refuse_session_in_file_backend(switcher)
+                manager.run(
+                    num,
+                    tail,
+                    share=not args.no_share,
+                    share_history=args.share_history,
+                    require_session=args.require_session,
+                )
+                return  # only reachable in tests
+            print(
+                dimmed(
+                    "ccswap run: no account has room under the autoswitch "
+                    "threshold — launching the default account."
+                )
             )
         else:
             print(
