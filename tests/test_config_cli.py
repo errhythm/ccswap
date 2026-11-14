@@ -377,3 +377,15 @@ class TestHomeAccount:
         assert code != 0
         code, out, _ = _run(["get", "autoswitch.homeAccount"], capsys)
         assert out.strip() == "(none)"
+
+    def test_set_stores_email_and_org(self, temp_home, capsys):
+        from claude_swap.switcher import ClaudeAccountSwitcher
+
+        with patch.object(
+            ClaudeAccountSwitcher, "resolve_account",
+            return_value=("3", "you@work.com", "org-1"),
+        ):
+            code, _, _ = _run(["set", "autoswitch.homeAccount", "3"], capsys)
+        assert code == 0
+        raw = json.loads(_settings_file(capsys).read_text())
+        assert raw["autoswitch"]["homeAccount"] == "you@work.com|org-1"

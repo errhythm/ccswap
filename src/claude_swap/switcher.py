@@ -4109,7 +4109,7 @@ class ClaudeAccountSwitcher:
 
         matches = [
             num for num, account in data.get("accounts", {}).items()
-            if account.get("email") == identifier
+            if (account.get("email") or "").lower() == identifier.lower()
         ]
 
         if len(matches) == 0:

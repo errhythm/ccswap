@@ -1334,9 +1334,10 @@ Examples:
                     switcher._refuse_leaving_file_backend()
             raw_value = args.value
             if args.key == "autoswitch.homeAccount":
-                # Stored as the email: slot numbers shift when accounts are
-                # removed, an email keeps naming the same login.
-                _num, raw_value, _org = switcher.resolve_account(raw_value.strip())
+                # Stored as email|organizationUuid: slot numbers shift when
+                # accounts are removed, and one email can own several slots.
+                _num, _email, _org = switcher.resolve_account(raw_value.strip())
+                raw_value = f"{_email}|{_org}" if _org else _email
             value = set_setting(root, args.key, raw_value)
             print(f"{args.key} = {format_setting_value(value)}")
             if args.key == "credentials.backend":
