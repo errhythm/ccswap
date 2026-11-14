@@ -124,9 +124,13 @@ class RunSettings:
     ``share_history``: sessions of every account read and write the one chat
     history in ``~/.claude``, so the account only decides whose quota is
     used. Off gives each account a history of its own.
+
+    ``auto_pick``: a bare ``cswap run`` in an unmapped directory starts on the
+    least busy account instead of plain claude on the default login.
     """
 
     share_history: bool = False
+    auto_pick: bool = False
 
 
 @dataclass(frozen=True)
@@ -293,6 +297,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "run", "shareHistory", "share_history", "bool",
             help="ccswap run shares chat history unless --no-share-history",
+        ),
+        SettingSpec(
+            "run", "autoPick", "auto_pick", "bool",
+            help="A bare ccswap run in an unmapped directory picks the account with the fewest live sessions and room left",
         ),
         SettingSpec(
             "updates", "check", "check", "bool",
@@ -692,7 +700,12 @@ def load_credential_settings(backup_root: Path) -> CredentialSettings:
 def load_run_settings(backup_root: Path) -> RunSettings:
     """Load the run section; missing/corrupt file or non-bool value → default."""
     chosen = explicit_share_history(backup_root)
-    return RunSettings() if chosen is None else RunSettings(share_history=chosen)
+    section = _read_raw(settings_path(backup_root)).get("run")
+    pick = section.get("autoPick") if isinstance(section, dict) else None
+    return RunSettings(
+        share_history=RunSettings().share_history if chosen is None else chosen,
+        auto_pick=pick if isinstance(pick, bool) else RunSettings().auto_pick,
+    )
 
 
 def explicit_share_history(backup_root: Path) -> bool | None:

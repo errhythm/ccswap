@@ -61,7 +61,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
-from claude_swap import macos_keychain, spawn
+from claude_swap import macos_keychain, oauth, spawn
 from claude_swap.claude_locks import proper_lockfile
 from claude_swap.exceptions import (
     ClaudeCodeLockTimeout,
@@ -83,12 +83,17 @@ from claude_swap.locking import FileLock
 from claude_swap.models import Platform
 from claude_swap.paths import get_default_global_config_path
 from claude_swap.printer import accent, dimmed, muted, warning
-from claude_swap.process_detection import ClaudeSession, scan_sessions
+from claude_swap.process_detection import ClaudeSession, list_sessions, scan_sessions
 from claude_swap.settings import (
+    GateThresholds,
     RunSettings,
     atomic_write_json,
+    effective_model_names,
     explicit_share_history,
+    gate_thresholds,
     load_run_settings,
+    load_settings,
+    parse_window_selection,
 )
 
 if TYPE_CHECKING:
@@ -583,6 +588,73 @@ def scan_live_sessions(session_dir: Path) -> tuple[list[ClaudeSession], int]:
     tuple as unconditionally truthy.
     """
     return scan_sessions(claude_dir=session_dir)
+
+
+def pick_least_busy(
+    candidates: list[str],
+    usage: dict,
+    sessions: dict[str, int],
+    gates: GateThresholds,
+    models: tuple[str, ...] = (),
+    account_windows: tuple[str, ...] = ("5h", "7d"),
+) -> tuple[str, int, float | None] | None:
+    """The account a new session should start on, or None when none has room.
+
+    Drops an account any of whose gated windows is at or over its own
+    threshold. Then the fewest live sessions wins, known usage ranks before
+    unknown, and ties go to the most headroom, then to the earlier slot.
+    Returns ``(slot, live sessions, pct used or None)``.
+    """
+    ranked = []
+    for order, num in enumerate(candidates):
+        windows = oauth.relevant_windows(usage.get(num), models, account_windows)
+        if any(pct >= gates.for_label(label) for label, pct, _ in windows):
+            continue
+        used = max((pct for _, pct, _ in windows), default=None)
+        ranked.append((
+            sessions.get(num, 0),
+            used is None,
+            used if used is not None else 0.0,
+            order,
+            num,
+            used,
+        ))
+    if not ranked:
+        return None
+    count, _, _, _, num, used = min(ranked, key=lambda r: r[:4])
+    return num, count, used
+
+
+def auto_pick_slot(switcher: ClaudeAccountSwitcher) -> tuple[str, str, int, float | None] | None:
+    """``pick_least_busy`` over stored accounts, from cached usage only.
+
+    Session-mode claudes count per account. Plain claudes on the default login
+    (``~/.claude/sessions``) count against the active account too.
+    """
+    settings = load_settings(switcher.backup_dir)
+    candidates = switcher.switchable_account_numbers()
+    if not candidates:
+        return None
+    emails = {n: switcher.account_identity(n)["email"] for n in candidates}
+    sessions = {n: len(switcher.live_session_pids_for(n, emails[n])) for n in candidates}
+    current = switcher._get_current_account()
+    if current is not None:
+        seq = switcher._get_sequence_data_migrated() or {}
+        active = switcher._find_account_slot(seq, *current)
+        if active in sessions:
+            sessions[active] += len(list_sessions())
+    usage = {
+        n: e.decision_value()
+        for n, e in switcher.usage_entries_by_account(fetch=set()).items()
+    }
+    picked = pick_least_busy(
+        candidates, usage, sessions, gate_thresholds(settings),
+        effective_model_names(settings), parse_window_selection(settings.windows),
+    )
+    if picked is None:
+        return None
+    num, count, used = picked
+    return num, emails[num], count, used
 
 
 def profile_is_quiescent(session_dir: Path) -> bool:

@@ -55,7 +55,7 @@ from claude_swap.session import (
     slugify_email,
     stale_marker_for,
 )
-from claude_swap.settings import RunSettings, set_setting
+from claude_swap.settings import GateThresholds, RunSettings, set_setting
 from claude_swap.switcher import ClaudeAccountSwitcher
 
 ACCOUNT_EMAIL = "account2@example.com"
@@ -5573,3 +5573,79 @@ class TestDefaultLoginSignedOut:
         monkeypatch.setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
 
         assert manager._default_login_signed_out() is True
+
+
+# ---------------------------------------------------------------------------
+# run.autoPick: pick_least_busy / auto_pick_slot
+# ---------------------------------------------------------------------------
+
+
+def _u(five=None, seven=None):
+    out = {}
+    if five is not None:
+        out["five_hour"] = {"pct": five, "resets_at": None}
+    if seven is not None:
+        out["seven_day"] = {"pct": seven, "resets_at": None}
+    return out
+
+
+class TestPickLeastBusy:
+    GATES = GateThresholds(90.0, {})
+
+    def pick(self, candidates, usage, sessions):
+        from claude_swap.session import pick_least_busy
+
+        return pick_least_busy(candidates, usage, sessions, self.GATES)
+
+    def test_fewest_sessions_wins_over_headroom(self):
+        usage = {"1": _u(five=5), "2": _u(five=60)}
+        assert self.pick(["1", "2"], usage, {"1": 2, "2": 0}) == ("2", 0, 60.0)
+
+    def test_over_threshold_dropped_in_any_window(self):
+        usage = {"1": _u(five=10, seven=95), "2": _u(five=50, seven=50)}
+        assert self.pick(["1", "2"], usage, {"1": 0, "2": 3})[0] == "2"
+
+    def test_per_window_gate_is_honoured(self):
+        from claude_swap.session import pick_least_busy
+
+        gates = GateThresholds(90.0, {"5h": 40.0})
+        usage = {"1": _u(five=50), "2": _u(five=45)}
+        assert pick_least_busy(["1", "2"], usage, {}, gates) is None
+
+    def test_unknown_usage_ranks_after_known_on_equal_sessions(self):
+        usage = {"1": None, "2": _u(five=70)}
+        assert self.pick(["1", "2"], usage, {}) == ("2", 0, 70.0)
+
+    def test_unknown_usage_still_wins_on_fewer_sessions(self):
+        usage = {"1": None, "2": _u(five=20)}
+        assert self.pick(["1", "2"], usage, {"1": 0, "2": 1}) == ("1", 0, None)
+
+    def test_tie_goes_to_headroom_then_order(self):
+        usage = {"1": _u(five=40), "2": _u(five=20), "3": _u(five=20)}
+        assert self.pick(["1", "2", "3"], usage, {})[0] == "2"
+
+    def test_none_eligible(self):
+        assert self.pick(["1"], {"1": _u(five=99)}, {}) is None
+        assert self.pick([], {}, {}) is None
+
+
+def test_auto_pick_slot_counts_plain_sessions_on_active_account(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from claude_swap import session as session_mod
+
+    sw = MagicMock()
+    sw.backup_dir = Path("/nonexistent-ccswap-test")
+    sw.switchable_account_numbers.return_value = ["1", "2"]
+    sw.account_identity.side_effect = lambda n: {"email": f"{n}@x.com"}
+    sw.live_session_pids_for.return_value = []
+    sw._get_current_account.return_value = ("1@x.com", "")
+    sw._get_sequence_data_migrated.return_value = {}
+    sw._find_account_slot.return_value = "1"
+    sw.usage_entries_by_account.return_value = {
+        "1": MagicMock(decision_value=lambda: _u(five=10)),
+        "2": MagicMock(decision_value=lambda: _u(five=10)),
+    }
+    monkeypatch.setattr(session_mod, "list_sessions", lambda: [object()])
+    assert session_mod.auto_pick_slot(sw) == ("2", "2@x.com", 0, 10.0)
+    sw.usage_entries_by_account.assert_called_once_with(fetch=set())

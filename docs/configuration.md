@@ -15,6 +15,7 @@ ccswap config set ui.starPrompt off          # stop asking for a GitHub star aft
 ccswap config set credentials.backend file  # macOS headless/SSH: never use the Keychain
 ccswap config set updates.check off         # stop the daily PyPI check for a newer release
 ccswap config set run.shareHistory on       # make --share-history the default for ccswap run
+ccswap config set run.autoPick on           # bare ccswap run in an unmapped directory picks the least busy account
 ccswap config set autoswitch.model Fable   # per-model switching (see "auto"); Fable,Opus for several
 ccswap config set autoswitch.threshold5h 85 # 5h gate; unset inherits autoswitch.threshold
 ccswap config set autoswitch.threshold7d 70 # weekly gate, independent of the 5h one

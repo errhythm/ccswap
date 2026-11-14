@@ -1993,6 +1993,67 @@ class TestRunAutoResolve:
         assert ("exec_default", []) in calls
         assert "No account mapped" in capsys.readouterr().out
 
+    def _auto_pick_run(self, tmp_path, monkeypatch, *, setting, mapped, picked):
+        from claude_swap.mappings import MappingStore
+        from claude_swap.settings import set_setting
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        backup = tmp_path / "backup"
+        backup.mkdir()
+        if setting:
+            set_setting(backup, "run.autoPick", "true")
+        seq = {"accounts": {}, "sequence": []}
+        if mapped:
+            MappingStore(backup).set(repo, "work@co.com", "")
+            seq = {
+                "accounts": {"2": {"email": "work@co.com", "organizationUuid": "",
+                                    "organizationName": ""}},
+                "sequence": [2],
+            }
+        calls = []
+        monkeypatch.chdir(repo)
+        with patch("claude_swap.session.SessionManager", self._fake_manager(calls)), \
+             patch("claude_swap.session.auto_pick_slot", return_value=picked) as pick, \
+             patch("claude_swap.cli.ClaudeAccountSwitcher",
+                   return_value=self._fake_switcher(backup, seq)), \
+             patch("os.geteuid", return_value=1000, create=True), \
+             patch.object(sys, "argv", ["claude-swap", "run"]):
+            cli.main()
+        return calls, pick
+
+    def test_auto_pick_launches_picked_account(self, tmp_path, monkeypatch, capsys):
+        calls, _ = self._auto_pick_run(
+            tmp_path, monkeypatch, setting=True, mapped=False,
+            picked=("3", "x@y.com", 0, 31.0),
+        )
+        assert ("run", "3", [], True, None) in calls
+        assert "picked account 3 (x@y.com), 0 live sessions, 31% used" in capsys.readouterr().out
+
+    def test_auto_pick_nothing_eligible_launches_default(self, tmp_path, monkeypatch, capsys):
+        calls, _ = self._auto_pick_run(
+            tmp_path, monkeypatch, setting=True, mapped=False, picked=None,
+        )
+        assert ("exec_default", []) in calls
+        assert "no account has room" in capsys.readouterr().out
+
+    def test_auto_pick_off_is_unchanged(self, tmp_path, monkeypatch, capsys):
+        calls, pick = self._auto_pick_run(
+            tmp_path, monkeypatch, setting=False, mapped=False,
+            picked=("3", "x@y.com", 0, 31.0),
+        )
+        assert ("exec_default", []) in calls
+        pick.assert_not_called()
+        assert "No account mapped" in capsys.readouterr().out
+
+    def test_mapping_wins_over_auto_pick(self, tmp_path, monkeypatch):
+        calls, pick = self._auto_pick_run(
+            tmp_path, monkeypatch, setting=True, mapped=True,
+            picked=("3", "x@y.com", 0, 31.0),
+        )
+        assert ("run", "2", [], True, None) in calls
+        pick.assert_not_called()
+
     def test_removed_account_falls_back_with_warning(self, tmp_path, monkeypatch, capsys):
         from claude_swap.mappings import MappingStore
 
