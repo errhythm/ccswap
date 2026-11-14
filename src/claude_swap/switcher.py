@@ -4728,7 +4728,7 @@ class ClaudeAccountSwitcher:
                 data = self._get_sequence_data()
                 matches = [
                     num for num, acc in (data or {}).get("accounts", {}).items()
-                    if acc.get("email") == identifier
+                    if (acc.get("email") or "").lower() == identifier.lower()
                 ]
                 if len(matches) > 1:
                     print(f"Multiple accounts found for '{identifier}':")
@@ -7321,7 +7321,7 @@ class ClaudeAccountSwitcher:
                 data = self._get_sequence_data()
                 matches = [
                     num for num, acc in (data or {}).get("accounts", {}).items()
-                    if acc.get("email") == identifier
+                    if (acc.get("email") or "").lower() == identifier.lower()
                 ]
                 if len(matches) > 1:
                     print(f"Multiple accounts found for '{identifier}':")

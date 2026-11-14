@@ -134,6 +134,18 @@ def test_shared_email_returns_to_the_stored_org_slot(temp_home):
     assert h.active_number() == 3
 
 
+def test_personal_home_is_not_confused_with_an_org_seat(temp_home):
+    # "email|" pins a personal account; slot 3 is an org seat on the same email.
+    h = _harness(temp_home, home_account=f"{HOME}|")
+    h.seed(3, HOME)
+    data = h.switcher._get_sequence_data()
+    data["accounts"]["3"]["organizationUuid"] = "org-b"
+    h.switcher._write_json(h.switcher.sequence_file, data)
+    outcome = h.tick_with_usage({"1": _usage(10), "2": _usage(30), "3": _usage(10)})
+    assert outcome is TickOutcome.SWITCHED
+    assert h.active_number() == 1
+
+
 def test_ambiguous_plain_email_reads_as_unset(temp_home):
     h = _harness(temp_home)
     h.seed(3, HOME)

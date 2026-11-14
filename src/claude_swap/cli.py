@@ -1337,7 +1337,9 @@ Examples:
                 # Stored as email|organizationUuid: slot numbers shift when
                 # accounts are removed, and one email can own several slots.
                 _num, _email, _org = switcher.resolve_account(raw_value.strip())
-                raw_value = f"{_email}|{_org}" if _org else _email
+                # The trailing "|" on a personal account pins "no org", so it
+                # never matches an org seat that shares the email.
+                raw_value = f"{_email}|{_org or ''}"
             value = set_setting(root, args.key, raw_value)
             print(f"{args.key} = {format_setting_value(value)}")
             if args.key == "credentials.backend":

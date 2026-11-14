@@ -1621,14 +1621,15 @@ class AutoSwitchEngine:
     def _home_number(self, settings: AutoSwitchSettings) -> str | None:
         """Slot of ``autoswitch.homeAccount`` among the accounts auto may use.
 
-        The value is ``email|organizationUuid`` (plain email without an org).
-        A hand-edited plain email only counts when it names one slot; an
+        The value is ``email|organizationUuid``; ``email|`` means a personal
+        account. A hand-edited plain email (no ``|``) matches any org and only
+        counts when it names one slot; an
         unknown, ambiguous, removed or disabled home reads as unset.
         """
         raw = (settings.home_account or "").strip().lower()
         if not raw:
             return None
-        email, _, org = raw.partition("|")
+        email, pinned, org = raw.partition("|")
         data = self.switcher._get_sequence_data() or {}
         accounts = data.get("accounts", {})
         matches = [
@@ -1638,7 +1639,7 @@ class AutoSwitchEngine:
             or (
                 self.switcher.account_email(num).lower() == email
                 and (
-                    not org
+                    not pinned
                     or (accounts.get(num, {}).get("organizationUuid") or "").lower()
                     == org
                 )
