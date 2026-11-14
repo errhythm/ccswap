@@ -70,7 +70,7 @@ ccswap config set usage.wasteWarningHours 6   # default: warn within 6 hours of 
 ccswap config set usage.wasteWarningPct 40    # default: only if 40% or more is unused
 ```
 
-While `ccswap auto` or the menu bar runs, each saved Claude account whose weekly window resets within that many hours with at least that much unused produces one `waste-warning` event, for example `Account 2 (x@y) resets in 3h with 58% unused`. The menu bar shows it as a notification. Each account is warned once per weekly reset, and the record is kept in `autoswitch_state.json`, so a restart does not repeat it. The check reads usage the loop already polled and never adds requests. It does not change which account is active.
+While `ccswap auto` runs, or the menu bar with auto-switch enabled, each saved Claude account whose weekly window resets within that many hours with at least that much unused produces one `waste-warning` event, for example `Account 2 (x@y) resets in 3h with 58% unused`. The menu bar shows it as a notification. Each account is warned once per weekly reset, and the record is kept in `autoswitch_state.json`, so a restart does not repeat it. The check reads usage the loop already polled and never adds requests. It does not change which account is active.
 
 ## How it behaves & advanced usage
 

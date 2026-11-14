@@ -684,6 +684,20 @@ def _every_account_above_threshold(
     return all((100.0 - h) >= threshold for h in measured)
 
 
+def _waste_claimed(book: dict, key: str, reset: float) -> bool:
+    """True when ``key`` was already warned for this reset.
+
+    ``resets_at`` drifts by about a second between polls, so a stored reset
+    within an hour counts as the same one.
+    """
+    prev = book.get(key)
+    return (
+        isinstance(prev, (int, float))
+        and not isinstance(prev, bool)
+        and abs(prev - reset) < 3600
+    )
+
+
 def _ref(number: str, email: str) -> dict:
     return {"number": int(number), "email": email}
 
@@ -1002,10 +1016,7 @@ class AutoSwitchEngine:
             if not cfg.waste_warning:
                 return
             now = self.clock()
-            warned = self._read_state().get("wasteWarned")
-            warned = dict(warned) if isinstance(warned, dict) else {}
-            warned.update(self._waste_seen)
-            fresh: dict[str, float] = {}
+            candidates: dict[str, tuple[float, WasteWarningEvent]] = {}
             for num, value in usage.items():
                 if not isinstance(value, dict):
                     continue
@@ -1020,30 +1031,38 @@ class AutoSwitchEngine:
                     continue
                 hours_left = (reset - now) / 3600
                 unused = 100.0 - pct
-                email = self.switcher.account_email(num) or ""
-                key = f"{num}:{email}"
-                if (
-                    hours_left > cfg.waste_warning_hours
-                    or unused < cfg.waste_warning_pct
-                    or warned.get(key) == reset
-                ):
+                if hours_left > cfg.waste_warning_hours or unused < cfg.waste_warning_pct:
                     continue
-                fresh[key] = reset
-                self._emit(
+                email = self.switcher.account_email(num) or ""
+                # Email, not slot number, so renumbering does not re-warn.
+                key = email.lower() or str(num)
+                if _waste_claimed(self._waste_seen, key, reset):
+                    continue
+                candidates[key] = (
+                    reset,
                     WasteWarningEvent(
                         account=_ref(num, email),
                         hours_left=hours_left,
                         unused_pct=unused,
-                    )
+                    ),
                 )
-            if not fresh:
+            if not candidates:
                 return
-            self._waste_seen.update(fresh)
-            if not self.dry_run:
+            claimed: set[str] = set()
+
+            def claim(book: dict) -> None:
+                for key, (reset, _ev) in candidates.items():
+                    if not _waste_claimed(book, key, reset):
+                        book[key] = reset
+                        claimed.add(key)
+
+            if self.dry_run:
+                claim(self._waste_seen)
+            else:
                 def store(state: dict) -> None:
                     saved = state.get("wasteWarned")
                     saved = saved if isinstance(saved, dict) else {}
-                    saved.update(fresh)
+                    claim(saved)
                     # Drop resets long past so the map does not grow forever.
                     state["wasteWarned"] = {
                         k: v for k, v in saved.items()
@@ -1051,6 +1070,12 @@ class AutoSwitchEngine:
                     }
 
                 self._mutate_state(store)
+                for key in claimed:
+                    self._waste_seen[key] = candidates[key][0]
+            # Only the engine that claimed a key notifies, so two engines
+            # ticking together do not both warn.
+            for key in claimed:
+                self._emit(candidates[key][1])
         except Exception as e:  # a warning must never break a tick
             _logger.debug("waste warning check failed: %r", e)
 

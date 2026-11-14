@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -90,3 +91,61 @@ def test_once_per_reset_across_restart_then_again_next_reset(h):
     h.clock.advance(8 * 24 * 3600)  # next weekly window
     _tick(h)
     assert len(_warnings(h)) == 2
+
+
+def _tick_at(h, reset_epoch, pct7=40, usage_one=None):
+    iso = datetime.fromtimestamp(reset_epoch, timezone.utc).isoformat()
+    h.tick_with_usage({
+        "1": usage_one if usage_one is not None else _usage7(10, pct7, iso),
+        "2": _usage7(10, 10, None),
+    })
+
+
+def test_reset_drift_between_polls_is_one_warning(h):
+    _enable(h)
+    base = h.clock.now + 3 * 3600
+    for drift in (0.0, 0.7, -0.8):
+        _tick_at(h, base + drift)
+    assert len(_warnings(h)) == 1
+    h.clock.advance(8 * 24 * 3600)
+    _tick_at(h, h.clock.now + 3 * 3600)
+    assert len(_warnings(h)) == 2
+
+
+def test_renumbered_account_is_not_warned_again(h):
+    _enable(h)
+    _tick(h)
+    data = h.switcher._get_sequence_data()
+    data["accounts"]["3"] = data["accounts"].pop("1")
+    data["sequence"] = [2, 3]
+    h.switcher._write_json(h.switcher.sequence_file, data)
+    reset = _iso_at(h.clock.now + 3 * 3600)
+    h.tick_with_usage({"3": _usage7(10, 40, reset), "2": _usage7(10, 10, None)})
+    assert len(_warnings(h)) == 1
+
+
+def test_second_engine_with_empty_memory_does_not_double_notify(h):
+    _enable(h)
+    _tick(h)
+    other = h._make_engine()  # fresh memory, but the claim is in the state file
+    h.engine = other
+    _tick(h)
+    assert len(_warnings(h)) == 1
+
+
+def test_dry_run_dedupes_in_memory_without_writing_state(h):
+    _enable(h)
+    h.engine.dry_run = True
+    _tick(h)
+    _tick(h)
+    assert len(_warnings(h)) == 1
+    assert "wasteWarned" not in h.state()
+
+
+def test_ignored_usage_shapes(h):
+    _enable(h)
+    soon = h.clock.now + 3 * 3600
+    _tick_at(h, soon, usage_one="token-expired")
+    _tick_at(h, soon, usage_one={"five_hour": {"pct": 1.0}})
+    _tick_at(h, h.clock.now - 60)  # reset already past
+    assert _warnings(h) == []
