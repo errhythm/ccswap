@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { errorMessage, parseList, switchArgs } from "./ccswap.ts";
+import { errorMessage, parseList, switchArgs } from "../raycast/src/ccswap.ts";
 
 // Trimmed from real `ccswap list --json` output, with fake emails.
 const LIST = JSON.stringify({

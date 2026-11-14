@@ -100,6 +100,19 @@ export default function Command() {
 
   return (
     <List isLoading={isLoading} searchBarPlaceholder="Search accounts…">
+      {data && !data.claude.length && !data.codex.length && (
+        <List.EmptyView
+          icon={Icon.PersonCircle}
+          title="No Accounts Yet"
+          description="Log in to Claude Code, then run `ccswap add` in a terminal to save the account."
+          actions={
+            <ActionPanel>
+              <Action.CopyToClipboard title="Copy Command" content="ccswap add" />
+              <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={revalidate} />
+            </ActionPanel>
+          }
+        />
+      )}
       {(["claude", "codex"] as const).map((provider) => (
         <List.Section key={provider} title={TITLES[provider]}>
           {(data?.[provider] ?? []).map((account) => (

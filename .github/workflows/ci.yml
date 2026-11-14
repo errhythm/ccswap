@@ -61,7 +61,7 @@ jobs:
           cache-dependency-path: raycast/package-lock.json
 
       - name: Build, lint and test
-        run: npm ci && npm run build && npm run lint && npm test
+        run: npm ci && npm run build && npm run lint && node --test --experimental-strip-types ../raycast-tests/ccswap.test.ts
 
   # The id stays `macos-keychain` although the job now runs everything: it is
   # the name branch protection matches on, and renaming it silently drops the
