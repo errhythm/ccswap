@@ -389,7 +389,7 @@ class PollEvent(AutoSwitchEvent):
 @dataclass(frozen=True)
 class SwitchEvent(AutoSwitchEvent):
     kind: ClassVar[str] = "switch"
-    trigger: str  # "proactive" | "at-limit" | "failover" | "consume-first"
+    trigger: str  # "proactive" | "at-limit" | "failover" | "consume-first" | "home"
     from_ref: dict | None
     to_ref: dict | None
     warnings: list[str] = field(default_factory=list)
@@ -1137,6 +1137,14 @@ class AutoSwitchEngine:
             )
             return TickOutcome.NO_ACTION
 
+        home_num = self._home_number(settings)
+        if home_num is not None and home_num != current and home_num not in quarantined:
+            returned = self._try_return_home(
+                home_num, current, settings, state, usage, headroom, policy,
+            )
+            if returned is not None:
+                return returned
+
         active_headroom = headroom.get(current)
         active_policy = policy.get(current)
         if active_is_api_key:
@@ -1186,7 +1194,9 @@ class AutoSwitchEngine:
             else:
                 utilization_over = (100.0 - active_headroom) >= settings.threshold
             if not utilization_over:
-                if settings.strategy != "consume-first":
+                # Home below its gates: consume-first must not nudge off it,
+                # or it would flap with the return-home rule.
+                if settings.strategy != "consume-first" or current == home_num:
                     self._emit(
                         NoSwitchEvent(
                             reason="below-threshold",
@@ -1601,6 +1611,70 @@ class AutoSwitchEngine:
             return TickOutcome.ERROR
         self._emit(NoSwitchEvent(reason="no-viable-target"))
         return TickOutcome.BLOCKED
+
+    def _home_number(self, settings: AutoSwitchSettings) -> str | None:
+        """Slot of ``autoswitch.homeAccount`` among the accounts auto may use.
+
+        An unknown, removed or disabled home reads as unset.
+        """
+        want = (settings.home_account or "").strip().lower()
+        if not want:
+            return None
+        for num in self.switcher.switchable_account_numbers():
+            if num == want or self.switcher.account_email(num).lower() == want:
+                return num
+        return None
+
+    def _try_return_home(
+        self,
+        home: str,
+        current: str,
+        settings: AutoSwitchSettings,
+        state: dict,
+        usage: dict,
+        headroom: dict,
+        policy: dict,
+    ) -> TickOutcome | None:
+        """Switch back to the home account once it is below every gate by the
+        hysteresis margin. None means no return this tick; the normal flow
+        runs."""
+        if self.switcher.account_kind_for(home) == "api_key":
+            return None
+        bar = settings.threshold - settings.hysteresis_pct
+
+        def recovered(h: float | None, p: float | None) -> bool:
+            return h is not None and p is not None and (100.0 - p) < bar
+
+        if not recovered(headroom.get(home), policy.get(home)):
+            return None
+        now = self.clock()
+        if self._in_cooldown(state, now=now):
+            return None
+        # The stored snapshot may be old; decide on a fresh read of home.
+        entry = self.switcher.usage_entries_by_account(fetch={home}).get(home)
+        if entry is None or not entry.fresh(self.clock()):
+            return None
+        fresh_usage = {home: entry.decision_value()}
+        fresh_headroom = _headroom_by_account(fresh_usage, self._models, self._windows)
+        fresh_policy = self._policy_headroom_map(fresh_usage, fresh_headroom)
+        if not recovered(fresh_headroom.get(home), fresh_policy.get(home)):
+            return None
+        email = self.switcher.account_email(home)
+        left = (
+            headroom.get(current),
+            _binding_recovery_ts(
+                usage.get(current), self._models, now, self._windows,
+                self._active_gates(),
+            ),
+        )
+        if not self.dry_run:
+            status = self._freshen_target(home, email)
+            if status == "identity-conflict" or status == "invalid_grant":
+                self._quarantine(home, email, status)
+                return None
+            if status != "ok":
+                return None
+        return self._perform(home, email, "home", left)
 
     def _no_return_account(
         self,
@@ -2402,7 +2476,7 @@ class AutoSwitchEngine:
         # state lock.
         with self._state_lock():
             state = self._read_state()
-            if trigger in ("proactive", "consume-first") and self._in_cooldown(state):
+            if trigger in ("proactive", "consume-first", "home") and self._in_cooldown(state):
                 self._emit(NoSwitchEvent(reason="cooldown"))
                 return TickOutcome.NO_ACTION
 

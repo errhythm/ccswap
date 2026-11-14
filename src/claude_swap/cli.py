@@ -1332,7 +1332,12 @@ Examples:
                     switcher._refuse_incomplete_file_backend()
                 else:
                     switcher._refuse_leaving_file_backend()
-            value = set_setting(root, args.key, args.value)
+            raw_value = args.value
+            if args.key == "autoswitch.homeAccount":
+                # Stored as the email: slot numbers shift when accounts are
+                # removed, an email keeps naming the same login.
+                _num, raw_value, _org = switcher.resolve_account(raw_value.strip())
+            value = set_setting(root, args.key, raw_value)
             print(f"{args.key} = {format_setting_value(value)}")
             if args.key == "credentials.backend":
                 # Switchers intentionally pin this setting at construction. For

@@ -62,6 +62,7 @@ class TestConfigList:
             "autoswitch.threshold5h",
             "autoswitch.threshold7d",
             "autoswitch.modelThresholds",
+            "autoswitch.homeAccount",
             "ui.language",
             "ui.theme",
             "ui.view",
@@ -75,7 +76,7 @@ class TestConfigList:
             "usage.headerProbe",
         ):
             assert key in out
-        assert out.count("(default)") == 25
+        assert out.count("(default)") == 26
 
     def test_set_key_not_marked_default(self, temp_home, capsys):
         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
@@ -102,7 +103,7 @@ class TestConfigList:
         assert payload["schemaVersion"] == 1
         assert payload["path"].endswith("settings.json")
         by_key = {entry["key"]: entry for entry in payload["settings"]}
-        assert len(by_key) == 25
+        assert len(by_key) == 26
         assert by_key["autoswitch.warmupFiveHour"]["value"] is False
         assert by_key["ui.starPrompt"]["value"] is True
         assert by_key["ui.starPrompt"]["isSet"] is False
@@ -368,3 +369,11 @@ class TestWeeklyThresholdConfig:
                 cli.main()
         assert captured["settings"].threshold == 85.0
         assert captured["settings"].weekly_threshold == 97.0
+
+
+class TestHomeAccount:
+    def test_unknown_account_is_rejected_and_not_stored(self, temp_home, capsys):
+        code, _, _ = _run(["set", "autoswitch.homeAccount", "nobody@example.com"], capsys)
+        assert code != 0
+        code, out, _ = _run(["get", "autoswitch.homeAccount"], capsys)
+        assert out.strip() == "(none)"
