@@ -83,6 +83,10 @@ class AutoSwitchSettings:
     model_thresholds: str | None = None
     # Real, quota-consuming Haiku requests; deliberately opt-in.
     warmup_five_hour: bool = False
+    # Email of the preferred account. Auto-switch returns to it once it is
+    # below every gate by ``hysteresis_pct`` and never proactively leaves it
+    # while it is below its gates. None = no preferred account.
+    home_account: str | None = None
 
 
 @dataclass(frozen=True)
@@ -261,6 +265,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "autoswitch", "modelThresholds", "model_thresholds", "model_thresholds",
             help="Per-model gates, e.g. Fable=40 or Fable=40,Opus=70 (each 1-99.9)",
+        ),
+        SettingSpec(
+            "autoswitch", "homeAccount", "home_account", "string",
+            help="Account to return to once it recovers (email; 'config set' accepts a number or email)",
         ),
         SettingSpec(
             "ui", "language", "language", "choice", choices=tuple(LANGUAGES),

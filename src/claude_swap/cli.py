@@ -1366,7 +1366,15 @@ Examples:
                     switcher._refuse_incomplete_file_backend()
                 else:
                     switcher._refuse_leaving_file_backend()
-            value = set_setting(root, args.key, args.value)
+            raw_value = args.value
+            if args.key == "autoswitch.homeAccount":
+                # Stored as email|organizationUuid: slot numbers shift when
+                # accounts are removed, and one email can own several slots.
+                _num, _email, _org = switcher.resolve_account(raw_value.strip())
+                # The trailing "|" on a personal account pins "no org", so it
+                # never matches an org seat that shares the email.
+                raw_value = f"{_email}|{_org or ''}"
+            value = set_setting(root, args.key, raw_value)
             print(f"{args.key} = {format_setting_value(value)}")
             if args.key == "credentials.backend":
                 # Switchers intentionally pin this setting at construction. For

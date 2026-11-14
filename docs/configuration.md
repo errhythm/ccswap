@@ -21,6 +21,7 @@ ccswap config set autoswitch.threshold5h 85 # 5h gate; unset inherits autoswitch
 ccswap config set autoswitch.threshold7d 70 # weekly gate, independent of the 5h one
 ccswap config set autoswitch.modelThresholds Fable=40  # Fable gate; Fable=40,Opus=60 for several
 ccswap config set autoswitch.weeklyThreshold 97  # 7d/model gate when threshold7d/modelThresholds are unset
+ccswap config set autoswitch.homeAccount you@work.com  # auto-switch returns here once it recovers (number or email)
 ccswap config set autoswitch.windows 5h    # switch on the session window only; 7d for weekly-only, both to reset
 ccswap config set autoswitch.warmupFiveHour true  # opt-in Claude warming; uses quota
 ccswap config set usage.wasteWarning true   # opt-in: warn before a weekly window resets with quota unused
