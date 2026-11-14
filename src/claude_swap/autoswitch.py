@@ -61,6 +61,7 @@ from claude_swap.settings import (
     atomic_write_json,
     effective_model_names,
     gate_thresholds,
+    load_usage_settings,
     parse_window_selection,
 )
 from claude_swap.switcher import ClaudeAccountSwitcher
@@ -323,6 +324,30 @@ class WarmupEvent(AutoSwitchEvent):
 
     def human(self) -> str:
         return self.message
+
+
+@dataclass(frozen=True)
+class WasteWarningEvent(AutoSwitchEvent):
+    """A weekly window is about to reset with much of it still unused."""
+
+    kind: ClassVar[str] = "waste-warning"
+    account: dict  # account_ref shape
+    hours_left: float
+    unused_pct: float
+
+    def _fields(self) -> dict:
+        return {
+            "account": self.account,
+            "hoursLeft": round(self.hours_left, 1),
+            "unusedPct": round(self.unused_pct),
+        }
+
+    def human(self) -> str:
+        who = f"Account {self.account.get('number')}"
+        if self.account.get("email"):
+            who += f" ({self.account['email']})"
+        hours = max(1, round(self.hours_left))
+        return f"{who} resets in {hours}h with {round(self.unused_pct)}% unused"
 
 
 @dataclass(frozen=True)
@@ -721,6 +746,9 @@ class AutoSwitchEngine:
         self.state_path = state_path or (switcher.backup_dir / STATE_FILENAME)
         self.clock = clock
         self._warmup = None
+        # Resets already warned about this run; covers dry-run, which never
+        # writes the state file.
+        self._waste_seen: dict[str, float] = {}
         self._stop = threading.Event()
         # Cuts the current inter-tick sleep short (a session threshold change
         # from the TUI should show a fresh decision now, not next interval).
@@ -963,6 +991,69 @@ class AutoSwitchEngine:
             )
             return TickOutcome.ERROR
 
+    def _check_waste(self, usage: dict) -> None:
+        """Warn once per account per weekly reset when much of it is unused.
+
+        Reads only the usage already polled this tick. The warned reset is
+        kept in the state file so a restarted loop does not repeat it.
+        """
+        try:
+            cfg = load_usage_settings(self.switcher.backup_dir)
+            if not cfg.waste_warning:
+                return
+            now = self.clock()
+            warned = self._read_state().get("wasteWarned")
+            warned = dict(warned) if isinstance(warned, dict) else {}
+            warned.update(self._waste_seen)
+            fresh: dict[str, float] = {}
+            for num, value in usage.items():
+                if not isinstance(value, dict):
+                    continue
+                window = value.get("seven_day")
+                pct = window.get("pct") if isinstance(window, dict) else None
+                reset = _seven_day_reset_ts(value, now)
+                if (
+                    isinstance(pct, bool)
+                    or not isinstance(pct, (int, float))
+                    or reset is None
+                ):
+                    continue
+                hours_left = (reset - now) / 3600
+                unused = 100.0 - pct
+                email = self.switcher.account_email(num) or ""
+                key = f"{num}:{email}"
+                if (
+                    hours_left > cfg.waste_warning_hours
+                    or unused < cfg.waste_warning_pct
+                    or warned.get(key) == reset
+                ):
+                    continue
+                fresh[key] = reset
+                self._emit(
+                    WasteWarningEvent(
+                        account=_ref(num, email),
+                        hours_left=hours_left,
+                        unused_pct=unused,
+                    )
+                )
+            if not fresh:
+                return
+            self._waste_seen.update(fresh)
+            if not self.dry_run:
+                def store(state: dict) -> None:
+                    saved = state.get("wasteWarned")
+                    saved = saved if isinstance(saved, dict) else {}
+                    saved.update(fresh)
+                    # Drop resets long past so the map does not grow forever.
+                    state["wasteWarned"] = {
+                        k: v for k, v in saved.items()
+                        if isinstance(v, (int, float)) and v > now - 86400
+                    }
+
+                self._mutate_state(store)
+        except Exception as e:  # a warning must never break a tick
+            _logger.debug("waste warning check failed: %r", e)
+
     def _load_health_counters(self, state: dict, current: str) -> None:
         """Seed the unreadable-active counters from the state file.
 
@@ -1123,6 +1214,8 @@ class AutoSwitchEngine:
                 },
             )
         )
+
+        self._check_waste(usage)
 
         if not self._model_check_done:
             self._check_model_names(quarantined, usage)

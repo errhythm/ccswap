@@ -1139,7 +1139,7 @@ Defaults live in settings.json in the backup root; flags override them.
         line = event.human()
         if event.kind == "switch":
             line = accent(line)
-        elif event.kind in ("error", "account-quarantined"):
+        elif event.kind in ("error", "account-quarantined", "waste-warning"):
             line = yellowed(line)
         elif event.kind in ("poll", "no-switch", "sleep"):
             line = dimmed(line)

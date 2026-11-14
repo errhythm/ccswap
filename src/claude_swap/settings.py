@@ -150,6 +150,11 @@ class UsageSettings:
     """
 
     header_probe: bool = False
+    # Waste warning: an opt-in notice when a weekly window is about to reset
+    # with much of it unused (see autoswitch.AutoSwitchEngine).
+    waste_warning: bool = False
+    waste_warning_hours: int = 6
+    waste_warning_pct: int = 40
 
 
 _SECTION_DEFAULT_SOURCES = {
@@ -301,6 +306,18 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "usage", "headerProbe", "header_probe", "bool",
             help="Read setup-token usage from a 1-token Haiku request's rate-limit headers (opt-in: uses quota)",
+        ),
+        SettingSpec(
+            "usage", "wasteWarning", "waste_warning", "bool",
+            help="Warn shortly before a weekly window resets with much of it unused",
+        ),
+        SettingSpec(
+            "usage", "wasteWarningHours", "waste_warning_hours", "int", 1, 168,
+            help="Warn when the weekly window resets within this many hours",
+        ),
+        SettingSpec(
+            "usage", "wasteWarningPct", "waste_warning_pct", "int", 1, 100,
+            help="Warn only when at least this pct of the weekly window is unused",
         ),
     )
 }
@@ -733,14 +750,24 @@ def load_usage_settings(backup_root: Path) -> UsageSettings:
     default = UsageSettings()
     if not isinstance(section, dict):
         return default
-    header_probe = section.get("headerProbe", default.header_probe)
-    if not isinstance(header_probe, bool):
-        _logger.warning(
-            "settings.json: usage.headerProbe must be true or false, got %r; "
-            "using %r", header_probe, default.header_probe,
+    values = {}
+    for spec in SETTING_SPECS.values():
+        if spec.section != "usage":
+            continue
+        value = section.get(spec.json_key, spec.default)
+        ok = isinstance(value, bool) if spec.kind == "bool" else (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and spec.lo <= value <= spec.hi
         )
-        return default
-    return UsageSettings(header_probe=header_probe)
+        if not ok:
+            _logger.warning(
+                "settings.json: usage.%s %r is invalid; using %r",
+                spec.json_key, value, spec.default,
+            )
+            value = spec.default
+        values[spec.field] = value
+    return UsageSettings(**values)
 
 
 def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:

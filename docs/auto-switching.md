@@ -60,6 +60,18 @@ request a one-minute timeout, delaying the next auto-switch check. CLI wrappers
 may have child processes that outlive that timeout and delay cleanup further;
 the persistent guard still prevents retries.
 
+## Warning before unused quota is lost
+
+Quota left in a weekly window is lost when it resets. To get a heads-up, turn on the opt-in warning:
+
+```bash
+ccswap config set usage.wasteWarning true
+ccswap config set usage.wasteWarningHours 6   # default: warn within 6 hours of the reset
+ccswap config set usage.wasteWarningPct 40    # default: only if 40% or more is unused
+```
+
+While `ccswap auto` or the menu bar runs, each saved Claude account whose weekly window resets within that many hours with at least that much unused produces one `waste-warning` event, for example `Account 2 (x@y) resets in 3h with 58% unused`. The menu bar shows it as a notification. Each account is warned once per weekly reset, and the record is kept in `autoswitch_state.json`, so a restart does not repeat it. The check reads usage the loop already polled and never adds requests. It does not change which account is active.
+
 ## How it behaves & advanced usage
 
 - Runs safely alongside Claude Code: switches take the same credential locks Claude Code uses, so a swap never collides with a token refresh.
