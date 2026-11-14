@@ -656,6 +656,58 @@ class _ForcedTakeoverRace:
         return os.rmdir(path, *args, **kwargs)
 
 
+class _AccessDeniedOnce:
+    """Stand-in for ``claude_locks.os`` that answers access denied the first
+    time ``op`` touches the lock directory, as Windows does for a directory a
+    peer has removed while a handle to it is still open."""
+
+    def __init__(self, lock_dir: Path, op: str, name: str) -> None:
+        self._lock_dir = str(lock_dir)
+        self._op = op
+        self.name = name
+        self.denied = 0
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+    def _maybe_deny(self, op: str, path) -> None:
+        if op == self._op and str(path) == self._lock_dir and not self.denied:
+            self.denied += 1
+            raise PermissionError(13, "Access is denied")
+
+    def mkdir(self, path, *args, **kwargs):
+        self._maybe_deny("mkdir", path)
+        return os.mkdir(path, *args, **kwargs)
+
+    def stat(self, path, *args, **kwargs):
+        self._maybe_deny("stat", path)
+        return os.stat(path, *args, **kwargs)
+
+
+class TestWindowsDeletePending:
+    @pytest.mark.parametrize("op", ["mkdir", "stat"])
+    def test_access_denied_is_retried_on_windows(self, lock_dir, monkeypatch, op):
+        if op == "stat":
+            lock_dir.mkdir()  # held, so the loop stats it
+        fake = _AccessDeniedOnce(lock_dir, op, "nt")
+        monkeypatch.setattr(claude_locks, "os", fake)
+        if op == "stat":
+            past = time.time() - 30
+            os.utime(lock_dir, (past, past))
+        with proper_lockfile(lock_dir, timeout=5.0):
+            assert lock_dir.is_dir()
+        assert fake.denied == 1
+
+    @pytest.mark.parametrize("op", ["mkdir", "stat"])
+    def test_access_denied_surfaces_on_posix(self, lock_dir, monkeypatch, op):
+        if op == "stat":
+            lock_dir.mkdir()
+        monkeypatch.setattr(claude_locks, "os", _AccessDeniedOnce(lock_dir, op, "posix"))
+        with pytest.raises(PermissionError):
+            with proper_lockfile(lock_dir, timeout=5.0):
+                pass
+
+
 class TestLockPaths:
     def test_default_paths(self, temp_home, monkeypatch):
         monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
