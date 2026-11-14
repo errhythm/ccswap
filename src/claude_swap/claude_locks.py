@@ -128,6 +128,18 @@ def _pin(lock_dir: Path) -> tuple[int | None, tuple[int, int]]:
     return fd, _identity(os.fstat(fd))
 
 
+def _access_denied_is_contention() -> bool:
+    """Whether access denied on the lock directory means a peer is removing it.
+
+    Windows keeps a removed directory in a delete-pending state while any
+    handle to it is still open (a peer's stat, the holder's mtime touch), and
+    answers ERROR_ACCESS_DENIED to mkdir and stat until it is gone. That is
+    contention, so retry. On POSIX the same error is a real permissions
+    problem and must surface.
+    """
+    return os.name == "nt"
+
+
 def _remove_if_still_stale(lock_dir: Path, staleness: float) -> bool:
     """Remove ``lock_dir`` if it is still stale, under the takeover directory.
 
@@ -195,6 +207,9 @@ def proper_lockfile(
             pass
         except FileNotFoundError:
             pass  # swept between mkdir and _pin; the stat arm below backs off
+        except PermissionError:
+            if not _access_denied_is_contention():
+                raise
         if time.monotonic() - start > timeout:
             raise ClaudeCodeLockTimeout(
                 f"Could not acquire {lock_dir.name} — Claude Code appears "
@@ -202,6 +217,11 @@ def proper_lockfile(
             )
         try:
             held_mtime = os.stat(lock_dir).st_mtime
+        except PermissionError:
+            if not _access_denied_is_contention():
+                raise
+            _nap(_DECLINE_BACKOFF_S, start, timeout)
+            continue
         except FileNotFoundError:
             # BACK OFF HERE TOO. A dangling symlink at the lock path answers
             # FileExistsError to mkdir and FileNotFoundError to stat, so this
