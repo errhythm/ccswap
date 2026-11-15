@@ -8080,3 +8080,113 @@ class TestManualSwitchCooldown:
         assert h.active_number() == 2
         expected = TickOutcome.NO_ACTION if previous == "recent" else TickOutcome.SWITCHED
         assert h.tick_with_usage(usage) is expected
+
+
+class TestConsumeFirstWhenEveryWeeklyWindowIsPastTheThreshold:
+    """consume-first keeps spending the sooner weekly reset when every account
+    is past the threshold and bound by its weekly window.
+
+    The reported shape: active resets in 33h with 8 points left, the peer
+    resets in 4.5h with 7 left. Both resets are past RECOVERY_HORIZON_S, so
+    the all-above escape ranked by headroom (7 < 8 x 2) and held the active
+    until it was spent, leaving the peer's quota to reset unused.
+    """
+
+    def _at(self, harness, hours: float) -> str:
+        from datetime import datetime, timezone
+
+        return (
+            datetime.fromtimestamp(
+                harness.clock.now + hours * 3600, tz=timezone.utc
+            )
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    def _harness(self, temp_home: Path, strategy: str) -> EngineHarness:
+        h = EngineHarness(temp_home, strategy=strategy)
+        h.seed(1, "a@example.com")
+        h.seed(2, "b@example.com")
+        h.make_live("a@example.com", 1)
+        return h
+
+    def test_moves_to_the_sooner_weekly_reset(self, temp_home):
+        h = self._harness(temp_home, "consume-first")
+        outcome = h.tick_with_usage({
+            "1": _usage7(20, 92, self._at(h, 33)),    # active, 8 left, 33h
+            "2": _usage7(20, 93, self._at(h, 4.5)),   # 7 left, 4.5h
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
+    def test_does_not_move_back_to_the_later_reset(self, temp_home):
+        """The reverse leg: from the sooner account, a later-resetting peer
+        with more than twice the headroom must not pull the engine back, or
+        the two legs ping-pong."""
+        h = EngineHarness(temp_home, strategy="consume-first")
+        h.seed(1, "a@example.com")
+        h.seed(2, "b@example.com")
+        h.make_live("b@example.com", 2)
+        outcome = h.tick_with_usage({
+            "2": _usage7(20, 96, self._at(h, 4.5)),   # active, 4 left, sooner
+            "1": _usage7(20, 91, self._at(h, 33)),    # 9 left, later
+        })
+        assert outcome is not TickOutcome.SWITCHED
+        assert not [e for e in h.events if isinstance(e, SwitchEvent)]
+
+    def test_a_nearly_spent_sooner_peer_is_not_worth_the_move(self, temp_home):
+        h = self._harness(temp_home, "consume-first")
+        outcome = h.tick_with_usage({
+            "1": _usage7(20, 92, self._at(h, 33)),
+            "2": _usage7(20, 98.5, self._at(h, 4.5)),  # 1.5 left
+        })
+        assert outcome is not TickOutcome.SWITCHED
+        assert h.active_number() == 1
+
+    def test_best_keeps_ranking_by_headroom(self, temp_home):
+        h = self._harness(temp_home, "best")
+        outcome = h.tick_with_usage({
+            "1": _usage7(20, 92, self._at(h, 33)),
+            "2": _usage7(20, 93, self._at(h, 4.5)),
+        })
+        assert outcome is not TickOutcome.SWITCHED
+        assert h.active_number() == 1
+
+    def test_five_hour_bound_accounts_keep_the_recovery_ranking(self, temp_home):
+        """The weekly-pair axis needs both accounts held back by a weekly
+        window. With 5h windows binding, consume-first still goes wherever
+        work resumes first."""
+        h = self._harness(temp_home, "consume-first")
+        outcome = h.tick_with_usage({
+            "1": {"five_hour": {"pct": 97.0, "resets_at": self._at(h, 2)},
+                  "seven_day": {"pct": 30.0, "resets_at": self._at(h, 20)}},
+            "2": {"five_hour": {"pct": 95.0, "resets_at": self._at(h, 0.15)},
+                  "seven_day": {"pct": 30.0, "resets_at": self._at(h, 100)}},
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
+    def test_a_per_model_weekly_window_counts_as_weekly(self, temp_home):
+        """With ``autoswitch.model`` set, a Fable-bound pair is the same
+        trade: the Fable weekly window that resets first is the one to spend."""
+        h = EngineHarness(temp_home, strategy="consume-first", model="Fable")
+        h.seed(1, "a@example.com")
+        h.seed(2, "b@example.com")
+        h.make_live("a@example.com", 1)
+
+        def usage(fable: float, hours: float) -> dict:
+            return {
+                "five_hour": {"pct": 20.0},
+                "seven_day": {"pct": 50.0},
+                "scoped": [{
+                    "name": "Fable", "pct": fable,
+                    "resets_at": self._at(h, hours),
+                }],
+            }
+
+        outcome = h.tick_with_usage({
+            "1": usage(92, 33),    # active, Fable 8 left, 33h
+            "2": usage(93, 4.5),   # Fable 7 left, 4.5h
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
