@@ -656,22 +656,55 @@ def _binding_recovery_ts(
     # at 40% resetting in an hour returned "back in an hour", which is the
     # opposite of what binds. An account whose binding window has no usable
     # reset is one we cannot schedule around, and inf sorts it last.
+    window = _binding_window(usage, models, account_windows, gates)
+    if window is None:
+        return float("inf")
+    ts = _parse_reset_ts(window[2])
+    return ts if ts is not None and ts > now else float("inf")
+
+
+def _binding_window(
+    usage: dict | str | None,
+    models: Sequence[str],
+    account_windows: Sequence[str] = ("5h", "7d"),
+    gates: GateThresholds | None = None,
+) -> tuple[str, float, str | None] | None:
+    """The ``(label, pct, resets_at)`` window holding this account back, or
+    None when no gating window is readable.
+
+    Shared by ``_binding_recovery_ts`` and ``_binding_is_weekly`` so the
+    reset the ranking sorts on and the window kind it reasons about are
+    always the same window.
+    """
     windows = list(oauth.relevant_windows(usage, models, account_windows))
     if not windows:
-        return float("inf")
+        return None
     # Per-gate thresholds: the window holding the account back is the one
     # closest to (or furthest past) its own wall, not the raw highest pct.
     # With no overrides every gate shares one threshold, so that window is
     # still the max-pct one and this branch is the historical selector.
     if gates is not None and gates.overrides:
-        _label, _pct, resets_at = min(
+        return min(
             windows,
             key=lambda w: (gates.for_label(w[0]) - w[1], -w[1]),
         )
-    else:
-        _label, _pct, resets_at = max(windows, key=lambda w: w[1])
-    ts = _parse_reset_ts(resets_at)
-    return ts if ts is not None and ts > now else float("inf")
+    return max(windows, key=lambda w: w[1])
+
+
+def _binding_is_weekly(
+    usage: dict | str | None,
+    models: Sequence[str],
+    account_windows: Sequence[str] = ("5h", "7d"),
+    gates: GateThresholds | None = None,
+) -> bool:
+    """Whether the window holding this account back is a weekly one: the
+    account-wide 7-day window or a per-model weekly window. Not the rolling
+    5-hour window, and not a refused-probe ``rejected`` window."""
+    window = _binding_window(usage, models, account_windows, gates)
+    return window is not None and window[0] not in (
+        oauth.FIVE_HOUR_LABEL,
+        oauth.REJECTED_LABEL,
+    )
 
 
 def _every_account_above_threshold(
@@ -2326,6 +2359,19 @@ class AutoSwitchEngine:
             if all_above
             else 0.0  # unread unless all_above; never a live sentinel
         )
+        # consume-first, every account past the threshold, the active held back
+        # by its WEEKLY window: whichever weekly-bound account resets first is
+        # the perishable quota, however far out both resets are. See the
+        # weekly-pair branch in the loop below.
+        active_weekly = (
+            consume_first
+            and all_above
+            and active_recovery_ts != float("inf")
+            and _binding_is_weekly(
+                usage.get(current), self._models, self._windows,
+                self._active_gates(),
+            )
+        )
 
         qualifying: list[tuple[tuple, str]] = []
         fallback: list[tuple[tuple, str]] = []
@@ -2363,12 +2409,13 @@ class AutoSwitchEngine:
                     continue
                 if all_above:
                     # Checked before the strategies, because with nothing below
-                    # the threshold the strategy question is moot: consume-first
-                    # exists to spend perishable WEEKLY quota, and every account
-                    # here is blocked on a window that returns in minutes. Both
-                    # strategies want the same thing — the account that can work
-                    # again first — so both take this gate and the matching key
-                    # below. (Ordering matters: `if consume_first` catching
+                    # the threshold, and accounts blocked on windows that return
+                    # in minutes, both strategies want the same thing — the
+                    # account that can work again first — so both take this
+                    # gate and the matching key below. The one exception is the
+                    # weekly-pair axis just below, where consume-first's own
+                    # question (which weekly quota expires first) still has an
+                    # answer. (Ordering matters: `if consume_first` catching
                     # first filtered on weekly ordering while the key sorted on
                     # binding recovery, two different axes, and left
                     # consume-first users with no anti-flap guard at all.)
@@ -2378,35 +2425,66 @@ class AutoSwitchEngine:
                     # deciding it once, globally, from four scattered gates.
                     # Set and read under the same `all_above and trigger`
                     # condition, so it is always assigned before the key below.
-                    by_recovery = _recovery_is_useful(
-                        recovery_ts,
-                        active_recovery_ts,
-                        active_headroom or 0.0,
-                        best_candidate_headroom,
-                        now,
+                    # The weekly-pair axis. consume-first exists to spend the
+                    # weekly quota that resets first, and that does not change
+                    # because every account is past the threshold: with the
+                    # active and this candidate both bound by their weekly
+                    # windows, in different reset hours, the reset ORDER
+                    # decides both directions. A later-resetting candidate is
+                    # never a target, whatever its headroom; a sooner one is,
+                    # once it holds at least SPENT_HEADROOM_PCT. The order is
+                    # fixed rather than measured, so the leg back can never
+                    # qualify and the pair cannot ping-pong; the active's own
+                    # limit hands off through the at-limit trigger. Without
+                    # this, both resets past RECOVERY_HORIZON_S put the pair on
+                    # the headroom ratio, which held a 33h account until it was
+                    # spent while a 4.5h peer's quota reset unused, and pulled
+                    # the engine back off the sooner account whenever the later
+                    # one had twice its headroom.
+                    weekly_pair = (
+                        active_weekly
+                        and recovery_ts != float("inf")
+                        and _reset_hour(recovery_ts)
+                        != _reset_hour(active_recovery_ts)
+                        and _binding_is_weekly(
+                            usage.get(num), self._models, self._windows,
+                            self._active_gates(),
+                        )
                     )
-                    if by_recovery:
-                        # Hysteresis on the axis we actually rank by. It bounds
-                        # the flap RATE rather than making a reverse move
-                        # impossible: the target must come back meaningfully
-                        # sooner than where we are.
-                        if recovery_ts >= active_recovery_ts - RECOVERY_HYSTERESIS_S:
-                            continue
+                    if weekly_pair and recovery_ts > active_recovery_ts:
+                        continue
+                    if weekly_pair and h >= SPENT_HEADROOM_PCT:
+                        by_recovery = True  # ranked on the soonest reset
                     else:
-                        # Headroom axis, with a RATIO margin. Also a rate bound,
-                        # not impossibility — headroom moves, so a target that
-                        # burns down to a quarter of what it beat can qualify
-                        # in reverse. That takes a 4x relative burn instead of
-                        # the one point a strictly-greater test would need.
-                        if h < (active_headroom or 0.0) * HORIZON_HEADROOM_RATIO:
-                            if (
-                                (active_headroom or 0.0) <= SPENT_HEADROOM_PCT
-                                and h >= (active_headroom or 0.0)
-                                and recovery_ts
-                                < active_recovery_ts - RECOVERY_HYSTERESIS_S
-                            ):
-                                fallback.append(((0, recovery_ts, -h), num))
-                            continue
+                        by_recovery = _recovery_is_useful(
+                            recovery_ts,
+                            active_recovery_ts,
+                            active_headroom or 0.0,
+                            best_candidate_headroom,
+                            now,
+                        )
+                        if by_recovery:
+                            # Hysteresis on the axis we actually rank by. It bounds
+                            # the flap RATE rather than making a reverse move
+                            # impossible: the target must come back meaningfully
+                            # sooner than where we are.
+                            if recovery_ts >= active_recovery_ts - RECOVERY_HYSTERESIS_S:
+                                continue
+                        else:
+                            # Headroom axis, with a RATIO margin. Also a rate bound,
+                            # not impossibility — headroom moves, so a target that
+                            # burns down to a quarter of what it beat can qualify
+                            # in reverse. That takes a 4x relative burn instead of
+                            # the one point a strictly-greater test would need.
+                            if h < (active_headroom or 0.0) * HORIZON_HEADROOM_RATIO:
+                                if (
+                                    (active_headroom or 0.0) <= SPENT_HEADROOM_PCT
+                                    and h >= (active_headroom or 0.0)
+                                    and recovery_ts
+                                    < active_recovery_ts - RECOVERY_HYSTERESIS_S
+                                ):
+                                    fallback.append(((0, recovery_ts, -h), num))
+                                continue
                 elif consume_first:
                     # Purely proactive on reset ordering: below the threshold,
                     # only move to accounts whose weekly window resets sooner
