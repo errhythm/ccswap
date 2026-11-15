@@ -8152,6 +8152,20 @@ class TestConsumeFirstWhenEveryWeeklyWindowIsPastTheThreshold:
         assert outcome is not TickOutcome.SWITCHED
         assert h.active_number() == 1
 
+    def test_five_hour_bound_accounts_keep_the_recovery_ranking(self, temp_home):
+        """The weekly-pair axis needs both accounts held back by a weekly
+        window. With 5h windows binding, consume-first still goes wherever
+        work resumes first."""
+        h = self._harness(temp_home, "consume-first")
+        outcome = h.tick_with_usage({
+            "1": {"five_hour": {"pct": 97.0, "resets_at": self._at(h, 2)},
+                  "seven_day": {"pct": 30.0, "resets_at": self._at(h, 20)}},
+            "2": {"five_hour": {"pct": 95.0, "resets_at": self._at(h, 0.15)},
+                  "seven_day": {"pct": 30.0, "resets_at": self._at(h, 100)}},
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
     def test_a_per_model_weekly_window_counts_as_weekly(self, temp_home):
         """With ``autoswitch.model`` set, a Fable-bound pair is the same
         trade: the Fable weekly window that resets first is the one to spend."""
