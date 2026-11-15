@@ -5,6 +5,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/ccswap.svg)](https://pypi.org/project/ccswap/)
 [![Downloads](https://img.shields.io/pypi/dm/ccswap.svg)](https://pypi.org/project/ccswap/)
 [![License](https://img.shields.io/pypi/l/ccswap.svg)](https://github.com/errhythm/ccswap/blob/main/LICENSE)
+[![Raycast Store](https://img.shields.io/badge/Raycast-Store-FF6363?logo=raycast&logoColor=white)](https://www.raycast.com/errhythm/ccswap)
 [![GitHub stars](https://img.shields.io/github/stars/errhythm/ccswap?style=social)](https://github.com/errhythm/ccswap)
 
 Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. Save multiple logins, check their quota windows, and manage them from one dashboard. Claude Code and Codex also support automatic switching.
@@ -18,7 +19,7 @@ Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. S
 - `ccswap auto` switches to the account with the most quota left once the active one crosses 90%, before the rate limit hits.
 - `ccswap run 2` starts Claude Code as account 2 in one terminal only, so two accounts work in parallel.
 - A full-screen dashboard (`ccswap`) on macOS, Linux and Windows, and an optional macOS menu bar app.
-- A Raycast extension that lists accounts with their usage and switches with one keystroke.
+- A [Raycast extension](https://www.raycast.com/errhythm/ccswap) that lists accounts with their usage and switches with one keystroke.
 - `--json` output and exit codes for scripts and cron.
 
 ## Quick start
@@ -88,7 +89,11 @@ npx skills add errhythm/ccswap --skill ccswap-orchestration
 
 The extension in `raycast/` adds two commands. **Show Accounts** lists every Claude Code and Codex account with its 5-hour and 7-day usage. Enter switches to the selected account and ⌘B switches to the one with the most quota left. **Switch to Best Account** does the same for Claude Code without opening a window.
 
-It runs this CLI, so install ccswap first. Until it is in the Raycast Store, load it from a clone:
+It runs this CLI, so install ccswap first, then install the extension from the Raycast Store:
+
+<a title="Install ccswap Raycast Extension" href="https://www.raycast.com/errhythm/ccswap"><img src="https://www.raycast.com/errhythm/ccswap/install_button@2x.png?v=1.1" height="64" alt="Install ccswap from the Raycast Store" style="height: 64px;"></a>
+
+Or open Raycast, run **Store**, and search for `ccswap`. To run an unreleased build from a clone instead:
 
 ```bash
 git clone https://github.com/errhythm/ccswap && cd ccswap/raycast
