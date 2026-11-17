@@ -7,9 +7,9 @@ import json
 
 import pytest
 
-from claude_swap import codex
-from claude_swap.codex_usage import CodexUsageError
-from claude_swap.exceptions import ConfigError, SwitchError
+from ccswap import codex
+from ccswap.codex_usage import CodexUsageError
+from ccswap.exceptions import ConfigError, SwitchError
 
 
 def _jwt(email: str, account_id: str) -> str:
@@ -577,8 +577,8 @@ def test_usage_text_output_credit_state_precedence(
 def strategy_accounts(switcher, monkeypatch):
     from dataclasses import replace
 
-    from claude_swap.models import AccountsSnapshot
-    from claude_swap.usage_store import UsageEntry
+    from ccswap.models import AccountsSnapshot
+    from ccswap.usage_store import UsageEntry
 
     instance, home = switcher
     for number in range(1, 5):
@@ -1010,7 +1010,7 @@ def test_redeem_without_card_details_never_posts(redemption, monkeypatch, json_o
 def test_redeem_prompt_names_expiry_and_posts_exact_selected_card(
     redemption, monkeypatch
 ):
-    from claude_swap.exceptions import LockError
+    from ccswap.exceptions import LockError
 
     instance, _, _ = redemption
     monkeypatch.setattr(codex.sys.stdin, "isatty", lambda: True)
@@ -1050,7 +1050,7 @@ def test_redeem_inactive_post_safety(redemption, monkeypatch, failure):
     import io
     import urllib.error
 
-    from claude_swap import codex_usage
+    from ccswap import codex_usage
 
     instance, home, _ = redemption
     _write_live(home, _auth("two@example.com", "two"))
@@ -1112,7 +1112,7 @@ def test_redeem_inactive_post_safety(redemption, monkeypatch, failure):
 def test_redeem_accepted_survives_confirmation_storage_errors(
     redemption, monkeypatch, capsys, failure
 ):
-    from claude_swap.exceptions import LockError
+    from ccswap.exceptions import LockError
 
     instance, _, usage = redemption
     reads = []
@@ -1138,7 +1138,7 @@ def test_redeem_accepted_survives_confirmation_storage_errors(
 @pytest.mark.parametrize("status", [None, "token_expired"])
 def test_usage_expiry_warning_preserves_json_and_survives_status(switcher, monkeypatch, capsys, status):
     from types import SimpleNamespace
-    from claude_swap.usage_store import UsageEntry
+    from ccswap.usage_store import UsageEntry
     instance, _ = switcher
     now = 1_700_000_000.0
     usage = {"reset_credits": {"available": 1, "expires_at": "2023-11-14T22:43:20Z"}}

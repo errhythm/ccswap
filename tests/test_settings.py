@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.exceptions import ConfigError
-from claude_swap.settings import (
+from ccswap.exceptions import ConfigError
+from ccswap.settings import (
     ClaudeIntegrationSettings,
     CredentialSettings,
     SETTING_SPECS,
@@ -366,7 +366,7 @@ class TestUsageSettings:
         settings_path(tmp_path).write_text(
             json.dumps({"usage": {"headerProbe": True, "fableProbe": "yes"}})
         )
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             loaded = load_usage_settings(tmp_path)
         assert loaded == UsageSettings(header_probe=True, fable_probe=False)
         assert "usage.fableProbe must be true or false" in caplog.text
@@ -495,7 +495,7 @@ class TestEffectiveSettings:
     @pytest.fixture(autouse=True)
     def _no_claude_cli(self):
         # The mod row's live state comes from `claude plugin list`.
-        with patch("claude_swap.claude_integration.mod_installed", return_value=False):
+        with patch("ccswap.claude_integration.mod_installed", return_value=False):
             yield
 
     def test_missing_file_reports_all_defaults(self, tmp_path: Path):
@@ -633,7 +633,7 @@ class TestUnrecognizedKeys:
         settings_path(tmp_path).write_text(json.dumps({
             "autoswitch": {"hysteresisPCT": 5, "futureKnob": True},
         }))
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             log_unrecognized_keys(tmp_path)
         assert _settings_warnings(caplog) == [
             "settings.json: 'autoswitch.hysteresisPCT' is not a key this version "
@@ -647,7 +647,7 @@ class TestUnrecognizedKeys:
         settings_path(tmp_path).write_text(
             json.dumps({"autoswitch": {"hysteresisPCT": 5}, "ui": {"them": "dark"}})
         )
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             load_settings(tmp_path)
             load_ui_settings(tmp_path)
             load_run_settings(tmp_path)

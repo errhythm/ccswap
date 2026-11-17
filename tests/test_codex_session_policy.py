@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import codex_session as session
-from claude_swap.exceptions import SessionError
+from ccswap import codex_session as session
+from ccswap.exceptions import SessionError
 
 
 @pytest.fixture

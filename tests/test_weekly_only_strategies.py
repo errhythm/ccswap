@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import poll_policy
-from claude_swap.autoswitch import NoSwitchEvent, SwitchEvent, TickOutcome
+from ccswap import poll_policy
+from ccswap.autoswitch import NoSwitchEvent, SwitchEvent, TickOutcome
 from tests.test_autoswitch import EngineHarness, _iso_at
 
 

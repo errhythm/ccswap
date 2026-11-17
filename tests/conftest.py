@@ -19,8 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import macos_keychain as _macos_keychain
-from claude_swap import paths as _paths
+from ccswap import macos_keychain as _macos_keychain
+from ccswap import paths as _paths
 
 
 class RealStoreWriteBlocked(BaseException):
@@ -67,7 +67,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
     ``$HOME``/``CLAUDE_CONFIG_DIR``/``XDG_DATA_HOME``.
 
     This snapshot, not a live re-resolution, is what the audit hook always
-    compares candidate write targets against. Re-resolving ``claude_swap.
+    compares candidate write targets against. Re-resolving ``ccswap.
     paths`` at CHECK time (this guard's first draft) is tautological and
     wrong: during an isolated test those functions correctly resolve to the
     test's OWN tmp directory, so "does this write's target match what
@@ -93,7 +93,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
       claude-swap``) protected — the same three vars that fixture neutralizes
       for every test, regardless of ``temp_home``.
     * The AMBIENT-OVERRIDE roots: resolved WITHOUT clearing those vars, i.e.
-      exactly what ``claude_swap.paths`` resolves to under the environment as
+      exactly what ``ccswap.paths`` resolves to under the environment as
       it actually is at conftest import time. A developer with
       ``XDG_DATA_HOME`` exported outside ``$HOME`` in their normal shell has
       their REAL account store at that override path, not at the
@@ -112,7 +112,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
     OWN job/worktree/project state (this worktree itself lives under
     ``~/.claude/jobs/...``, several directories deep) and can contain a
     ``.pytest_cache``. Only DIRECT children are protected — exactly the
-    files ``claude_swap.paths``/``claude_locks`` ever place directly inside
+    files ``ccswap.paths``/``claude_locks`` ever place directly inside
     these dirs (``.credentials.json``, ``.config.json``,
     ``.oauth_refresh.lock``, sibling atomic-write tempfiles, and — via
     ``get_global_config_path().parent``, i.e. ``$HOME`` itself when no
@@ -221,7 +221,7 @@ def _derive_real_store_hints(
     overwhelming majority of audit events (Python's own imports, pytest's
     internals, unrelated stdlib file activity — the guard fires on EVERY
     "open" system-wide for the whole test run) are rejected with a plain
-    substring scan, not a function call into claude_swap.paths.
+    substring scan, not a function call into ccswap.paths.
 
     C2: this used to be a hardcoded guess, ``(".claude", "claude-swap")`` —
     correct for the two DEFAULT roots (the XDG backup root always ends in
@@ -499,12 +499,12 @@ def _isolate_real_home(request, tmp_path_factory, monkeypatch):
     # launch_agent.uninstall() deletes it: on a developer's Mac the real one
     # may be the very app drawing the menu bar while the suite runs.
     monkeypatch.setattr(
-        "claude_swap.app_bundle.APPLICATIONS_DIR",
+        "ccswap.app_bundle.APPLICATIONS_DIR",
         tmp_path_factory.mktemp("isolated_applications"),
     )
     # Frozen at import from the real backup root, so no $HOME redirect reaches it.
     monkeypatch.setattr(
-        "claude_swap.update_check.CACHE_PATH",
+        "ccswap.update_check.CACHE_PATH",
         tmp_path_factory.mktemp("isolated_update_check") / "update_check.json",
     )
     if "temp_home" in request.fixturenames:
@@ -522,7 +522,7 @@ def _isolate_real_home(request, tmp_path_factory, monkeypatch):
 def block_real_keychain(request, monkeypatch):
     """Safety net: no test may touch the real macOS Keychain.
 
-    Replaces the ``security``-CLI wrapper (``claude_swap.macos_keychain``) with an
+    Replaces the ``security``-CLI wrapper (``ccswap.macos_keychain``) with an
     in-memory fake. Tests marked
     ``@pytest.mark.no_keychain_fake`` opt out — either because they mock
     ``subprocess`` themselves (the wrapper's own unit tests) or because they run
@@ -559,11 +559,11 @@ def block_real_oauth_profile_fetch(request, monkeypatch):
     if request.node.get_closest_marker("no_oauth_profile_fake"):
         yield
         return
-    monkeypatch.setattr("claude_swap.oauth.fetch_oauth_profile", lambda token: None)
+    monkeypatch.setattr("ccswap.oauth.fetch_oauth_profile", lambda token: None)
     # Same endpoint, same rule: the plan collector runs on every `list` and
     # TUI snapshot, and test credentials carry an access token with no
     # `expiresAt`, which reads as valid — so it would otherwise go live too.
-    from claude_swap import subscription
+    from ccswap import subscription
 
     monkeypatch.setattr(
         subscription, "fetch_plan", lambda token, *a, **k: subscription.PlanFetch()
@@ -718,7 +718,7 @@ def sample_sequence_data_with_org():
 def _deterministic_poll_jitter(monkeypatch):
     """Zero the poll-plan jitter so cadence tests are clock-exact; the jitter
     itself is exercised in test_poll_policy via an injected rng."""
-    monkeypatch.setattr("claude_swap.poll_policy.JITTER_FRAC", 0.0)
+    monkeypatch.setattr("ccswap.poll_policy.JITTER_FRAC", 0.0)
 
 
 _real_getaddrinfo = socket.getaddrinfo
@@ -818,8 +818,8 @@ def _deterministic_colour(monkeypatch):
     # before a module-level autouse fixture of the same scope). That is
     # exactly the shape of the two module-local fixtures this branch
     # deletes, so the fix is to not have them.
-    from claude_swap import appearance as _appearance
-    from claude_swap import printer as _printer
+    from ccswap import appearance as _appearance
+    from ccswap import printer as _printer
 
     # SNAPSHOT FIRST, ASSERT ON THE SNAPSHOT. The obvious form — asserting the
     # globals directly — depends on sitting ABOVE the resets, and nothing in
@@ -847,7 +847,7 @@ def _deterministic_colour(monkeypatch):
     # was already happening. Drop either one now and its own test dies.
     monkeypatch.delenv("FORCE_COLOR", raising=False)
     monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.setattr("claude_swap.printer._colors_enabled", None)
+    monkeypatch.setattr("ccswap.printer._colors_enabled", None)
     # The OTHER latched global in the same module. `tui/app.py` calls
     # `printer.set_theme("light")`, a plain assignment with nothing restoring
     # it, so with this line removed the tests after it enter with the light
@@ -855,7 +855,7 @@ def _deterministic_colour(monkeypatch):
     # Green today only because none of them asserts a palette code, which is
     # exactly what was true of `_colors_enabled` until a developer exported
     # FORCE_COLOR.
-    monkeypatch.setattr("claude_swap.printer._theme", "dark")
+    monkeypatch.setattr("ccswap.printer._theme", "dark")
     # The third `global`-rebound name in the package. Inert under the TERM pin
     # below, which makes `detect_terminal_background` return before ever
     # writing it — but the pin is a guarantee about the tty QUERY, not about
@@ -863,7 +863,7 @@ def _deterministic_colour(monkeypatch):
     # stubs `_query_terminal_background`. `tests/test_appearance.py` carries
     # a module-local reset for exactly this reason, which is the layer this
     # fixture exists to replace.
-    monkeypatch.setattr("claude_swap.appearance._cache", _appearance._UNSET)
+    monkeypatch.setattr("ccswap.appearance._cache", _appearance._UNSET)
     # And the OTHER thing a terminal decides: `appearance.detect_terminal_background`
     # puts the tty into cbreak, writes an OSC-11 query, and BLOCKS reading stdin
     # for up to a second. Under `pytest -s` stdin is the developer's real

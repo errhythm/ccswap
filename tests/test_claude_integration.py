@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import claude_integration as ci
-from claude_swap import cli
-from claude_swap.exceptions import ConfigError
-from claude_swap.settings import ACTION_KEYS, effective_settings, set_setting
+from ccswap import claude_integration as ci
+from ccswap import cli
+from ccswap.exceptions import ConfigError
+from ccswap.settings import ACTION_KEYS, effective_settings, set_setting
 
 OURS = {"type": "command", "command": "ccswap statusline"}
 CUSTOM = {"type": "command", "command": "~/.claude/statusline.sh", "padding": 2}
@@ -278,7 +278,7 @@ class TestTuiToggle:
     async def test_settings_rows_toggle_off_thread(self, tmp_path):
         from textual.widgets import ListView, Static
 
-        from claude_swap.tui.widgets import MenuItem
+        from ccswap.tui.widgets import MenuItem
         from tests.test_tui import (
             FakeSwitcher, make_account, make_app, menu_select, settle,
         )

@@ -11,11 +11,11 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from claude_swap import hub
-from claude_swap.codex_usage import _convert_payload
-from claude_swap.models import AccountSnapshot, AccountsSnapshot
-from claude_swap.oauth import build_usage_result
-from claude_swap.usage_store import STALE_OK_S, UsageEntry
+from ccswap import hub
+from ccswap.codex_usage import _convert_payload
+from ccswap.models import AccountSnapshot, AccountsSnapshot
+from ccswap.oauth import build_usage_result
+from ccswap.usage_store import STALE_OK_S, UsageEntry
 
 CLAUDE_RAW = {
     "five_hour": {"utilization": 42.0, "resets_at": "2026-11-12T15:00:00+00:00"},

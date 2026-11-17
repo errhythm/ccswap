@@ -1,4 +1,4 @@
-"""Tests for claude_swap.paths resolver helpers.
+"""Tests for ccswap.paths resolver helpers.
 
 These tests verify that cswap resolves Claude Code config/credential paths the
 same way claude-code itself does. If these drift from claude-code's behavior,
@@ -13,9 +13,9 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.exceptions import MigrationError
-from claude_swap.models import Platform
-from claude_swap.paths import (
+from ccswap.exceptions import MigrationError
+from ccswap.models import Platform
+from ccswap.paths import (
     LEGACY_BACKUP_DIRNAME,
     get_backup_root,
     get_claude_config_home,
@@ -342,7 +342,7 @@ class TestMigrateLegacyBackupDir:
         def exploding_move(*args, **kwargs):
             raise PermissionError("simulated EACCES")
 
-        monkeypatch.setattr("claude_swap.paths.shutil.move", exploding_move)
+        monkeypatch.setattr("ccswap.paths.shutil.move", exploding_move)
 
         with pytest.raises(MigrationError, match="failed"):
             migrate_legacy_backup_dir(target)

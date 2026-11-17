@@ -10,8 +10,8 @@ from uuid import uuid4
 
 import pytest
 
-from claude_swap import codex_session
-from claude_swap.exceptions import SessionError
+from ccswap import codex_session
+from ccswap.exceptions import SessionError
 
 
 def auth(**changes):
@@ -608,7 +608,7 @@ def test_bootstrap_parent_link_and_alias(bootstrap, tmp_path):
 
 
 def test_bootstrap_atomic_writer_failure(bootstrap, monkeypatch):
-    from claude_swap import fsutil
+    from ccswap import fsutil
 
     root, source, home, stage = bootstrap
     replace = fsutil.replace_with_retry
@@ -814,9 +814,9 @@ def test_bootstrap_imports_without_cycle(tmp_path):
     result = subprocess.run([
         sys.executable, "-c",
         "import sys; sys.path.insert(0, sys.argv[1]); "
-        "from claude_swap import codex_session as c; "
-        "from claude_swap.fsutil import atomic_write_text; "
-        "from claude_swap.session import slugify_email; "
+        "from ccswap import codex_session as c; "
+        "from ccswap.fsutil import atomic_write_text; "
+        "from ccswap.session import slugify_email; "
         "assert c.atomic_write_text is atomic_write_text; "
         "assert c.slugify_email is slugify_email; assert c.ctypes and c.sys",
         source,

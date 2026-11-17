@@ -7,13 +7,13 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap.process_detection import list_sessions, scan_sessions
-from claude_swap import process_detection
-from claude_swap.session import profile_is_quiescent, scan_live_sessions
-from claude_swap.exceptions import SessionError
-from claude_swap.switcher import ClaudeAccountSwitcher
-from claude_swap import oauth, session as session_mod
-from claude_swap.models import Platform
+from ccswap.process_detection import list_sessions, scan_sessions
+from ccswap import process_detection
+from ccswap.session import profile_is_quiescent, scan_live_sessions
+from ccswap.exceptions import SessionError
+from ccswap.switcher import ClaudeAccountSwitcher
+from ccswap import oauth, session as session_mod
+from ccswap.models import Platform
 
 
 def fail_enumeration(monkeypatch, directory, error):

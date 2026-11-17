@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from claude_swap import reset_credit_display as display
+from ccswap import reset_credit_display as display
 
 NOW = 1_700_000_000.0
 

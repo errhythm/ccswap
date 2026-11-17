@@ -10,11 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import warmup
-from claude_swap.locking import FileLock
-from claude_swap.models import AccountSnapshot, AccountsSnapshot
-from claude_swap.settings import AutoSwitchSettings, load_settings, set_setting
-from claude_swap.usage_store import UsageEntry
+from ccswap import warmup
+from ccswap.locking import FileLock
+from ccswap.models import AccountSnapshot, AccountsSnapshot
+from ccswap.settings import AutoSwitchSettings, load_settings, set_setting
+from ccswap.usage_store import UsageEntry
 
 NOW = 1_800_000_000.0
 IDENTITY = {"email": "test@example.org", "organizationUuid": "org", "uuid": "user"}

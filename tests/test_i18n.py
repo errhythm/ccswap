@@ -7,8 +7,8 @@ from string import Formatter
 from babel.messages.mofile import write_mo
 from babel.messages.pofile import read_po
 
-from claude_swap import i18n
-from claude_swap.settings import load_ui_settings, set_setting
+from ccswap import i18n
+from ccswap.settings import load_ui_settings, set_setting
 
 
 def fields(message):

@@ -1,6 +1,6 @@
 # ccswap CLI reference
 
-ccswap (package `claude_swap`) tracks subscription quota across Claude Code and Codex CLI accounts and switches between them. This file has the full command surface, JSON schema, error envelope, and gotchas that SKILL.md's tables leave out.
+ccswap (package `ccswap`) tracks subscription quota across Claude Code and Codex CLI accounts and switches between them. This file has the full command surface, JSON schema, error envelope, and gotchas that SKILL.md's tables leave out.
 
 Nothing here assumes a fixed account count or any local config, an installation can have any number of Claude and Codex accounts configured.
 

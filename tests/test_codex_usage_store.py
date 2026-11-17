@@ -13,11 +13,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import codex, codex_usage, codex_usage_store, fsutil
-from claude_swap.codex_usage import CodexUsageError
-from claude_swap.exceptions import LockError
-from claude_swap.locking import FileLock
-from claude_swap.usage_store import SERVE_TTL_S, UsageEntry
+from ccswap import codex, codex_usage, codex_usage_store, fsutil
+from ccswap.codex_usage import CodexUsageError
+from ccswap.exceptions import LockError
+from ccswap.locking import FileLock
+from ccswap.usage_store import SERVE_TTL_S, UsageEntry
 from tests.test_codex import _auth_with_plan, _write_live, switcher
 
 

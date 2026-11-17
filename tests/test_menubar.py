@@ -2,7 +2,7 @@
 
 These tests never import or run rumps/AppKit. They exercise the pure helpers
 (settings store, title/label formatting, usage/snapshot adapters, log parsing)
-only — the auto-switch engine itself lives in ``claude_swap.autoswitch`` and is
+only — the auto-switch engine itself lives in ``ccswap.autoswitch`` and is
 tested there.
 """
 
@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import menubar, oauth
-from claude_swap.autoswitch import ErrorEvent
-from claude_swap.exceptions import ClaudeSwitchError
-from claude_swap.menubar import ENGINE_ERROR_REPEAT_S, should_surface_engine_error
-from claude_swap.switcher import USAGE_API_KEY, USAGE_RELOGIN_REQUIRED
+from ccswap import menubar, oauth
+from ccswap.autoswitch import ErrorEvent
+from ccswap.exceptions import ClaudeSwitchError
+from ccswap.menubar import ENGINE_ERROR_REPEAT_S, should_surface_engine_error
+from ccswap.switcher import USAGE_API_KEY, USAGE_RELOGIN_REQUIRED
 
 
 # --- notification identity -----------------------------------------------------
@@ -718,7 +718,7 @@ def test_run_without_rumps_raises_clean_error(monkeypatch):
     """A missing menubar extra surfaces as ClaudeSwitchError, not a traceback.
 
     The module is import-safe without rumps, so the CLI's ImportError guard
-    around ``from claude_swap.menubar import run`` can never fire — the import
+    around ``from ccswap.menubar import run`` can never fire — the import
     failure happens inside ``run()``. Blocking the import (a ``None`` entry in
     ``sys.modules`` makes ``import rumps`` raise) checks that ``run()`` turns
     it into the error type the CLI renders with the install hint.
@@ -850,7 +850,7 @@ def test_engine_error_table_is_pruned():
 
 
 def test_menu_note_keeps_the_state_and_drops_the_remedy():
-    from claude_swap.switcher import USAGE_RELOGIN_REQUIRED
+    from ccswap.switcher import USAGE_RELOGIN_REQUIRED
 
     note = menubar.SENTINEL_NOTES[USAGE_RELOGIN_REQUIRED]
     assert "cswap add" in note, "premise: the note carries a remedy"
@@ -878,7 +878,7 @@ def test_menu_note_leaves_a_short_note_alone():
 
 
 def test_account_row_shows_the_sentinel_state_not_the_remedy():
-    from claude_swap.switcher import USAGE_RELOGIN_REQUIRED
+    from ccswap.switcher import USAGE_RELOGIN_REQUIRED
 
     label = menubar.format_account_label(
         2, "b@x.com", menubar.SENTINEL_NOTES[USAGE_RELOGIN_REQUIRED]

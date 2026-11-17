@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import agy, cli, macos_keychain
+from ccswap import agy, cli, macos_keychain
 
 
 def auth(email="one@example.com", **extra):
@@ -495,7 +495,7 @@ def test_cli_subprocess_file_backend_round_trip(tmp_path):
            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
 
     def command(*args):
-        result = subprocess.run([sys.executable, "-m", "claude_swap", "agy", *args],
+        result = subprocess.run([sys.executable, "-m", "ccswap", "agy", *args],
                                 cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15)
         assert result.returncode == 0, result.stderr
         return result.stdout
@@ -536,9 +536,9 @@ def test_malformed_usage_cache_fails_closed(provider, cached):
 
 
 def test_five_hour_scoped_quota_has_no_weekly_pace_and_healthy_compact_rows(provider):
-    from claude_swap.models import AccountSnapshot
-    from claude_swap.tui.widgets import mini_account_text, usage_rows
-    from claude_swap.usage_store import UsageEntry
+    from ccswap.models import AccountSnapshot
+    from ccswap.tui.widgets import mini_account_text, usage_rows
+    from ccswap.usage_store import UsageEntry
 
     usage = agy.parse_usage(quota())
     usage["scoped"] = [dict(usage["scoped"][1], pct=80, resets_at="2030-01-01T00:00:00Z")]
@@ -556,12 +556,12 @@ def test_five_hour_scoped_quota_has_no_weekly_pace_and_healthy_compact_rows(prov
 @pytest.mark.parametrize("terminal_size", [(110, 48), (80, 32)])
 async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider, tmp_path, monkeypatch, terminal_size):
     from textual.widgets import ListView
-    from claude_swap.tui.app import CswapApp
-    from claude_swap.tui.widgets import AccountItem, AccountsPanel
+    from ccswap.tui.app import CswapApp
+    from ccswap.tui.widgets import AccountItem, AccountsPanel
     from tests.test_tui import FakeSwitcher, settle
 
     two_accounts(provider)
-    monkeypatch.setattr("claude_swap.claude_integration.mod_installed", lambda: False)
+    monkeypatch.setattr("ccswap.claude_integration.mod_installed", lambda: False)
     app = CswapApp(FakeSwitcher([], tmp_path), codex_switcher=FakeSwitcher([], tmp_path),
                    agy_switcher=provider)
     app.title = "ccswap · synthetic test data"
@@ -617,7 +617,7 @@ async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider
 
 
 def test_inactive_scoped_quota_keeps_each_group_when_one_is_exhausted(provider):
-    from claude_swap.tui.widgets import mini_account_text
+    from ccswap.tui.widgets import mini_account_text
 
     two_accounts(provider)
     account = provider.accounts_snapshot().accounts[0]
@@ -898,7 +898,7 @@ def test_success_saves_then_clears_intent_before_temp_cleanup(provider, monkeypa
 def test_queued_manual_switch_succeeds_after_bounded_refresh(provider, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
-    from claude_swap.locking import FileLock
+    from ccswap.locking import FileLock
 
     two_accounts(provider)
     for email in ("three@example.com", "four@example.com"):
@@ -1028,7 +1028,7 @@ def test_malformed_recovery_metadata_fails_without_leaking(provider, metadata):
 
 
 def test_full_and_compact_cards_show_recovery_with_cached_quota(provider, monkeypatch):
-    from claude_swap.tui.widgets import account_card_text, mini_account_text
+    from ccswap.tui.widgets import account_card_text, mini_account_text
 
     account = induce_recovery(provider, monkeypatch)
     assert account.usage.last_good is not None
@@ -1042,14 +1042,14 @@ def test_full_and_compact_cards_show_recovery_with_cached_quota(provider, monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize("active", [False, True])
 async def test_dashboard_shows_pending_recovery_with_cached_quota(provider, monkeypatch, tmp_path, active):
-    from claude_swap.tui.app import CswapApp
-    from claude_swap.tui.widgets import AccountsPanel
+    from ccswap.tui.app import CswapApp
+    from ccswap.tui.widgets import AccountsPanel
     from tests.test_tui import FakeSwitcher, settle
 
     account = induce_recovery(provider, monkeypatch)
     if active:
         native(auth())
-    monkeypatch.setattr("claude_swap.claude_integration.mod_installed", lambda: False)
+    monkeypatch.setattr("ccswap.claude_integration.mod_installed", lambda: False)
     app = CswapApp(FakeSwitcher([], tmp_path), codex_switcher=FakeSwitcher([], tmp_path),
                    agy_switcher=provider)
     app.title = "ccswap · synthetic recovery test data"

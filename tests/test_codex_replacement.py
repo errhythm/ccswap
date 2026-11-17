@@ -2,9 +2,9 @@
 
 import pytest
 
-from claude_swap import codex_session as cs, process_detection as pd
-from claude_swap.exceptions import SwitchError
-from claude_swap.locking import FileLock
+from ccswap import codex_session as cs, process_detection as pd
+from ccswap.exceptions import SwitchError
+from ccswap.locking import FileLock
 from tests.test_codex_guards import home_for, slots, snapshot, write
 from tests.test_codex_session import auth
 
@@ -239,7 +239,7 @@ def test_uncommitted_intent_runs_ordinary_d6(slots):
 
 @pytest.mark.parametrize("change", ["user", "workspace", "incomplete"])
 def test_replacement_rejects_invalid_identity_before_intent(slots, change):
-    from claude_swap.exceptions import SessionError
+    from ccswap.exceptions import SessionError
 
     switcher, _ = slots
     home_for(slots)
@@ -408,7 +408,7 @@ def test_recovery_retains_foreign_rotation_after_backup_commit(slots):
 
 @pytest.mark.parametrize("moved", ["home", "backup", "baseline"])
 def test_replacement_checks_cas_itself(slots, moved):
-    from claude_swap.exceptions import SessionError
+    from ccswap.exceptions import SessionError
 
     switcher, credentials = slots
     home = home_for(slots)

@@ -8,18 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import macos_keychain
-from claude_swap.credentials import CredentialStore
-from claude_swap.exceptions import (
+from ccswap import macos_keychain
+from ccswap.credentials import CredentialStore
+from ccswap.exceptions import (
     AccountNotFoundError,
     ConfigError,
     CredentialError,
     SessionError,
     ValidationError,
 )
-from claude_swap.models import Platform
-from claude_swap.session import keychain_service_name
-from claude_swap.switcher import ClaudeAccountSwitcher
+from ccswap.models import Platform
+from ccswap.session import keychain_service_name
+from ccswap.switcher import ClaudeAccountSwitcher
 
 
 class TestSwapAccounts:
@@ -290,7 +290,7 @@ class TestSwapAccounts:
 
         # Scoped context: see H-1 comment above.
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("claude_swap.fsutil.os.fchmod", failing_fchmod)
+            mp.setattr("ccswap.fsutil.os.fchmod", failing_fchmod)
             with pytest.raises(OSError):
                 switcher._write_json(switcher.sequence_file, {"x": 1})
 
@@ -310,7 +310,7 @@ class TestSwapAccounts:
             raise FileExistsError(f"cannot rename onto existing {dst}")
 
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("claude_swap.switcher.os.rename", windows_rename)
+            mp.setattr("ccswap.switcher.os.rename", windows_rename)
             switcher._write_json(switcher.sequence_file, {"x": 1})
 
         assert json.loads(switcher.sequence_file.read_text(encoding="utf-8")) == {"x": 1}
@@ -333,7 +333,7 @@ class TestSwapAccounts:
         old_umask = os.umask(0o022)
         try:
             with pytest.MonkeyPatch.context() as mp:
-                mp.setattr("claude_swap.fsutil.os.fchmod", lambda *a, **k: None)
+                mp.setattr("ccswap.fsutil.os.fchmod", lambda *a, **k: None)
                 switcher._write_json(target, {"primaryApiKey": "sk-test"})
         finally:
             os.umask(old_umask)
@@ -376,7 +376,7 @@ class TestSwapAccounts:
         def refuse(src, dst, **kwargs):
             raise OSError(errno.EBUSY, "Device or resource busy")
 
-        monkeypatch.setattr("claude_swap.fsutil.replace_with_retry", refuse)
+        monkeypatch.setattr("ccswap.fsutil.replace_with_retry", refuse)
         with pytest.raises(OSError):
             switcher._write_json(switcher.sequence_file, {"x": 1})
 
@@ -527,7 +527,7 @@ class TestSwapAccounts:
             def __exit__(self, *exc):
                 return False
 
-        monkeypatch.setattr("claude_swap.switcher.FileLock", SpyLock)
+        monkeypatch.setattr("ccswap.switcher.FileLock", SpyLock)
         switcher.swap_accounts("1", "2")
 
         assert entered == [switcher.lock_file]
@@ -676,8 +676,8 @@ def test_staging_interrupted_mid_write_leaves_no_files(
         closed.append(fd)
         real_close(fd)
 
-    monkeypatch.setattr("claude_swap.switcher.os.fdopen", fdopen_then_interrupt)
-    monkeypatch.setattr("claude_swap.switcher.os.close", spying_close)
+    monkeypatch.setattr("ccswap.switcher.os.fdopen", fdopen_then_interrupt)
+    monkeypatch.setattr("ccswap.switcher.os.close", spying_close)
     with pytest.raises(KeyboardInterrupt):
         switcher._stage_overlap_material(
             {"1": ("creds-one", "config-one"), "2": ("creds-two", "")}
@@ -718,7 +718,7 @@ def test_staging_interrupted_after_fdopen_leaves_no_files(
         owned.append(fh)
         return InterruptingWriter(fh) if len(owned) == 2 else fh
 
-    monkeypatch.setattr("claude_swap.switcher.os.fdopen", fdopen_interrupting_the_second)
+    monkeypatch.setattr("ccswap.switcher.os.fdopen", fdopen_interrupting_the_second)
     with pytest.raises(KeyboardInterrupt):
         switcher._stage_overlap_material(
             {"1": ("creds-one", "config-one"), "2": ("creds-two", "")}

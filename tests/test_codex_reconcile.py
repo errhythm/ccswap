@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import codex_session as cs
-from claude_swap.codex import CodexAccountSwitcher
-from claude_swap.locking import FileLock
+from ccswap import codex_session as cs
+from ccswap.codex import CodexAccountSwitcher
+from ccswap.locking import FileLock
 from tests.test_codex_session import auth
 
 
@@ -55,7 +55,7 @@ def snapshot(custody):
 def test_session_home_case_uses_native_path_semantics(custody, monkeypatch):
     import os
     from types import SimpleNamespace
-    from claude_swap import process_detection
+    from ccswap import process_detection
 
     switcher, home, _ = custody
     manifest_path = home / ".ccswap-session.json"

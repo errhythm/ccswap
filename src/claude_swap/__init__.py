@@ -1,9 +1,5 @@
-"""Multi-account and usage manager for Claude Code and Codex."""
+"""Old import name, kept so launchd services and app bundles made by ccswap < 0.54 still start.
 
-from importlib.metadata import version
-
-__version__ = version("ccswap")
-
-from claude_swap.switcher import ClaudeAccountSwitcher
-
-__all__ = ["ClaudeAccountSwitcher", "__version__"]
+They run ``python -m claude_swap``. Re-running ``ccswap <service> --install-service``
+writes the new form; this shim can go once those installs have had time to upgrade.
+"""

@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap import cli, codex_session
-from claude_swap.appearance import cli_should_probe
+from ccswap import cli, codex_session
+from ccswap.appearance import cli_should_probe
 from tests.test_codex_reconcile import custody
 
 

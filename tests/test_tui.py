@@ -20,18 +20,18 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.autoswitch import NoSwitchEvent, SwitchEvent
-from claude_swap.json_output import USAGE_API_KEY, USAGE_TOKEN_EXPIRED
-from claude_swap.models import AccountSnapshot, AccountsSnapshot
-from claude_swap.switcher import ClaudeAccountSwitcher
-from claude_swap.tui import data as tui_data
-from claude_swap.usage_store import UsageEntry
+from ccswap.autoswitch import NoSwitchEvent, SwitchEvent
+from ccswap.json_output import USAGE_API_KEY, USAGE_TOKEN_EXPIRED
+from ccswap.models import AccountSnapshot, AccountsSnapshot
+from ccswap.switcher import ClaudeAccountSwitcher
+from ccswap.tui import data as tui_data
+from ccswap.usage_store import UsageEntry
 
 
 @pytest.fixture(autouse=True)
 def _no_claude_plugin_list():
     # The Settings menu reads the mod's state through the real `claude` CLI.
-    with patch("claude_swap.claude_integration.mod_installed", return_value=False):
+    with patch("ccswap.claude_integration.mod_installed", return_value=False):
         yield
 
 
@@ -257,7 +257,7 @@ class BlockingSnapshotSwitcher(FakeSwitcher):
 
 class ErrorSnapshotSwitcher(FakeSwitcher):
     def accounts_snapshot(self, fetch: set[str] | None = None) -> AccountsSnapshot:
-        from claude_swap.exceptions import ConfigError
+        from ccswap.exceptions import ConfigError
 
         raise ConfigError("malformed Codex sequence.json")
 
@@ -295,7 +295,7 @@ def make_app(
     start: str = "dashboard",
     detected: str | None = None,
 ):
-    from claude_swap.tui.app import CswapApp
+    from ccswap.tui.app import CswapApp
 
     # Existing Claude-focused Pilot tests should not instantiate the real
     # Codex switcher (and thereby consult real credentials). Combined-view
@@ -350,7 +350,7 @@ async def menu_select(pilot, action_id: str) -> None:
     """Drive the dashboard menu: highlight the entry by id, press Enter."""
     from textual.widgets import ListView
 
-    from claude_swap.tui.widgets import MenuItem
+    from ccswap.tui.widgets import MenuItem
 
     menu = pilot.app.screen.query_one("#menu", ListView)
     items = list(menu.query(MenuItem))
@@ -390,7 +390,7 @@ class TestFormatting:
             tui_data.sentinel_label(USAGE_TOKEN_EXPIRED)
             == "token expired — refresh deferred this pass; retries automatically"
         )
-        from claude_swap.switcher import SENTINEL_NOTES
+        from ccswap.switcher import SENTINEL_NOTES
 
         for sentinel, note in SENTINEL_NOTES.items():
             assert tui_data.sentinel_label(sentinel) == note
@@ -400,7 +400,7 @@ class TestFormatting:
         # A sentinel is a live overlay — the entry can still carry the last
         # good measurement, and `cswap list` prints it as a "last seen" line.
         # The card must too (except for API-key accounts, which have no quota).
-        from claude_swap.tui.widgets import account_card_text
+        from ccswap.tui.widgets import account_card_text
 
         entry = UsageEntry(
             sentinel=USAGE_TOKEN_EXPIRED,
@@ -428,8 +428,8 @@ class TestFormatting:
         assert "last seen" not in api_key
 
     def test_account_card_uses_light_palette_when_passed(self):
-        from claude_swap.tui.theme import ACCENT_LIGHT, CSWAP_LIGHT, Palette
-        from claude_swap.tui.widgets import account_card_text
+        from ccswap.tui.theme import ACCENT_LIGHT, CSWAP_LIGHT, Palette
+        from ccswap.tui.widgets import account_card_text
 
         acc = make_account(1, active=True, entry=make_entry(pct5=95.0))
         text = account_card_text(acc, 100, palette=Palette.from_theme(CSWAP_LIGHT))
@@ -455,7 +455,7 @@ class TestFormatting:
         assert tui_data.present_alias("me@work.com", mask=True) == "m•@w•••.com"
 
     def test_account_card_masks_email_and_org_but_keeps_alias(self):
-        from claude_swap.tui.widgets import account_card_text, mini_account_text
+        from ccswap.tui.widgets import account_card_text, mini_account_text
 
         acc = dataclasses.replace(
             make_account(1, active=True, alias="dev", email="alice@acme.com"),
@@ -619,14 +619,14 @@ class TestUsageRows:
     """The card's rows must mirror the CLI's _format_usage_lines semantics."""
 
     def test_absent_window_produces_no_row(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         entry = make_entry(pct5=47.0, pct7=None)  # annual plan: no 7d window
         labels = [label for label, *_ in usage_rows(entry.last_good, time.time())]
         assert labels == ["5h"]
 
     def test_scoped_models_and_over_limit_marker(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         entry = make_entry(scoped=[("Fable", 100.0), ("Opus", 12.0)])
         rows = usage_rows(entry.last_good, time.time())
@@ -638,7 +638,7 @@ class TestUsageRows:
         assert fable[3].endswith("(!)") and " · " in fable[3]
 
     def test_spend_row_first_with_amounts(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         entry = make_entry(spend={"used": 12.5, "limit": 50.0, "pct": 25.0, "currency": "USD"})
         rows = usage_rows(entry.last_good, time.time())
@@ -646,7 +646,7 @@ class TestUsageRows:
         assert "$12.50 / $50.00" in rows[0][2]
 
     def test_suffix_full_extends_countdown_with_clock(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         entry = make_entry(pct5=47.0)
         row5 = usage_rows(entry.last_good, time.time())[0]
@@ -654,7 +654,7 @@ class TestUsageRows:
         assert row5[3].startswith(row5[2] + " · ")
 
     def test_spend_clock_sits_with_reset_not_after_amounts(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         entry = make_entry(
             spend={
@@ -671,7 +671,7 @@ class TestUsageRows:
         assert spend[3].index(" · ") < spend[3].index("$12.50")
 
     def test_codex_weekly_row_and_banked_reset_text(self):
-        from claude_swap.tui.widgets import (
+        from ccswap.tui.widgets import (
             credit_allowance_text,
             credits_text,
             reset_credits_text,
@@ -718,8 +718,8 @@ class TestUsageRows:
         skipped by every Claude-only fixture — a bad style reference there
         raises NameError at paint time and no other test notices.
         """
-        from claude_swap.tui.theme import CSWAP_LIGHT, Palette
-        from claude_swap.tui.widgets import account_card_text, mini_account_text
+        from ccswap.tui.theme import CSWAP_LIGHT, Palette
+        from ccswap.tui.widgets import account_card_text, mini_account_text
 
         now = 1_700_000_000.0
         entry = UsageEntry(
@@ -753,7 +753,7 @@ class TestUsageRows:
             ).plain
 
     def test_no_credits_with_zero_balance_renders_as_none(self):
-        from claude_swap.tui.widgets import account_card_text, credits_text
+        from ccswap.tui.widgets import account_card_text, credits_text
 
         now = 1_700_000_000.0
         usage = {"credits": {"has_credits": False, "balance": 0.0}}
@@ -775,7 +775,7 @@ class TestUsageRows:
         assert "usage unavailable" not in rendered
 
     def test_no_data_no_rows(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         assert usage_rows(None, time.time()) == []
         assert usage_rows({}, time.time()) == []
@@ -783,7 +783,7 @@ class TestUsageRows:
     def test_window_without_a_figure_is_a_row_drawn_as_unknown(self):
         # ``utilization: null`` keeps its row with no pct; the card draws it as
         # "usage unknown".
-        from claude_swap.tui.widgets import account_card_text, mini_account_text, usage_rows
+        from ccswap.tui.widgets import account_card_text, mini_account_text, usage_rows
 
         entry = make_entry(pct5=47.0, pct7=12.0)
         entry.last_good["five_hour"]["pct"] = None
@@ -801,7 +801,7 @@ class TestUsageRows:
     def test_unknown_row_stays_within_the_card_width(self, key, width):
         # "usage unknown" is wider than " NNN%": the row must budget for it
         # when deciding whether the clock-extended reset suffix fits.
-        from claude_swap.tui.widgets import account_card_text
+        from ccswap.tui.widgets import account_card_text
 
         entry = make_entry(pct5=47.0, pct7=12.0)
         entry.last_good[key]["pct"] = None
@@ -810,7 +810,7 @@ class TestUsageRows:
 
     def test_seven_day_ahead_of_pace_marker(self):
         # 1 day elapsed of the week, 50% used -> far ahead of the ~14% expected.
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         now = time.time()
         last_good = {"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}}
@@ -819,7 +819,7 @@ class TestUsageRows:
         assert "(ahead of pace)" in row[3]
 
     def test_five_hour_never_shows_pace_marker(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         now = time.time()
         last_good = {"five_hour": {"pct": 90.0, "resets_at": _iso_in(3600 * 4)}}
@@ -827,7 +827,7 @@ class TestUsageRows:
         assert "pace" not in row[2]
 
     def test_scoped_ahead_of_pace_marker(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         now = time.time()
         last_good = {"scoped": [{"name": "Fable", "pct": 50.0, "resets_at": _iso_in(86400 * 6)}]}
@@ -835,7 +835,7 @@ class TestUsageRows:
         assert "(ahead of pace)" in row[2]
 
     def test_maxed_scoped_marker_wins_over_pace(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         now = time.time()
         last_good = {"scoped": [{"name": "Fable", "pct": 100.0, "resets_at": _iso_in(86400 * 6)}]}
@@ -845,7 +845,7 @@ class TestUsageRows:
 
 
     def test_no_pace_marker_without_fetched_at(self):
-        from claude_swap.tui.widgets import usage_rows
+        from ccswap.tui.widgets import usage_rows
 
         now = time.time()
         last_good = {"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}}
@@ -856,7 +856,7 @@ class TestUsageRows:
         # Per-row degradation: the wide card shows every clock, a mid width
         # keeps 5h/7d clocks while the longer spend row falls back to its
         # countdown, and a narrow card is exactly the old countdown-only look.
-        from claude_swap.tui.widgets import account_card_text
+        from ccswap.tui.widgets import account_card_text
 
         entry = make_entry(
             spend={
@@ -886,7 +886,7 @@ class TestUsageRows:
 class TestMiniAccountText:
 
     def test_seven_day_ahead_of_pace_marker(self):
-        from claude_swap.tui.widgets import mini_account_text
+        from ccswap.tui.widgets import mini_account_text
 
         now = time.time()
         entry = UsageEntry(
@@ -898,7 +898,7 @@ class TestMiniAccountText:
         assert "(ahead)" in mini_account_text(acc, now).plain
 
     def test_five_hour_never_shows_pace_marker(self):
-        from claude_swap.tui.widgets import mini_account_text
+        from ccswap.tui.widgets import mini_account_text
 
         now = time.time()
         entry = UsageEntry(
@@ -910,7 +910,7 @@ class TestMiniAccountText:
         assert "pace" not in mini_account_text(acc, now).plain
 
     def test_no_pace_marker_without_fetched_at(self):
-        from claude_swap.tui.widgets import mini_account_text
+        from ccswap.tui.widgets import mini_account_text
 
         now = time.time()
         entry = UsageEntry(
@@ -923,7 +923,7 @@ class TestMiniAccountText:
 
     @pytest.mark.parametrize("show", [True, False])
     def test_org_tag_follows_show_tag(self, show):
-        from claude_swap.tui.widgets import account_card_text, mini_account_text
+        from ccswap.tui.widgets import account_card_text, mini_account_text
 
         acc = dataclasses.replace(make_account(1, active=True), org_name="acme")
         card = account_card_text(acc, 80, show_tag=show).plain
@@ -960,7 +960,7 @@ class TestRunAction:
         assert "hello" in result.output
 
     def test_switch_error_is_captured_not_raised(self):
-        from claude_swap.exceptions import ClaudeSwitchError
+        from ccswap.exceptions import ClaudeSwitchError
 
         def fn():
             raise ClaudeSwitchError("boom")
@@ -1002,7 +1002,7 @@ class TestDashboard:
         app = make_app(fake)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "user1@example.com" in panel and "● active" in panel
@@ -1026,7 +1026,7 @@ class TestDashboard:
         app = make_app(fake)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "● active" in panel  # still the active card
@@ -1047,7 +1047,7 @@ class TestDashboard:
         app = make_app(fake)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "5h" in panel
@@ -1066,7 +1066,7 @@ class TestDashboard:
         app = make_app(fake)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             mini_part = panel.split("user2@example.com", 1)[1]
@@ -1080,7 +1080,7 @@ class TestDashboard:
             await settle(pilot)
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             menu = app.screen.query_one("#menu", ListView)
             root_items = list(menu.query(MenuItem))
@@ -1116,7 +1116,7 @@ class TestDashboard:
         app = make_app(claude, codex)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "Codex" in panel
@@ -1129,8 +1129,8 @@ class TestDashboard:
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
             await menu_select(pilot, "switch")
-            from claude_swap.tui.dashboard import SwitchScreen
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.dashboard import SwitchScreen
+            from ccswap.tui.widgets import AccountItem
 
             assert isinstance(app.screen, SwitchScreen)
             assert {item.provider for item in app.screen.query(AccountItem)} == {"claude", "codex"}
@@ -1148,7 +1148,7 @@ class TestDashboard:
             await settle(pilot)
             await menu_select(pilot, "switch")
             from textual.widgets import ListView
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.widgets import AccountItem
 
             highlighted = app.screen.query_one("#accounts", ListView).highlighted_child
             assert isinstance(highlighted, AccountItem)
@@ -1176,7 +1176,7 @@ class TestDashboard:
             await settle(pilot)
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "remove-menu")
             from textual.widgets import Static
@@ -1204,7 +1204,7 @@ class TestDashboard:
             await settle(pilot)
             from textual.widgets import ListView, Static
 
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "remove-menu")
             menu = app.screen.query_one("#menu", ListView)
@@ -1216,7 +1216,7 @@ class TestDashboard:
     async def test_org_tag_auto_tags_only_shared_email_on_every_view(self, tmp_path):
         from textual.widgets import ListView, Static
 
-        from claude_swap.tui.widgets import AccountCard, AccountsPanel, MenuItem
+        from ccswap.tui.widgets import AccountCard, AccountsPanel, MenuItem
 
         accounts = [
             dataclasses.replace(
@@ -1259,7 +1259,7 @@ class TestDashboard:
             await settle(pilot)
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "add-menu")
             await menu_select(pilot, "back")
@@ -1285,7 +1285,7 @@ class TestDashboard:
         app = make_app(claude, codex)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert panel.index("Claude Code") < panel.index("Codex")
@@ -1341,7 +1341,7 @@ class TestDashboard:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.widgets import AccountItem
 
             listview = app.screen.query_one("#accounts", ListView)
             items = list(listview.query(AccountItem))
@@ -1372,7 +1372,7 @@ class TestDashboard:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import AccountItem, ProviderDivider
+            from ccswap.tui.widgets import AccountItem, ProviderDivider
 
             listview = app.screen.query_one("#accounts", ListView)
             children = list(listview.children)
@@ -1404,7 +1404,7 @@ class TestDashboard:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.widgets import AccountItem
 
             listview = app.screen.query_one("#accounts", ListView)
             listview.index = next(
@@ -1427,7 +1427,7 @@ class TestDashboard:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.widgets import AccountItem
 
             listview = app.screen.query_one("#accounts", ListView)
             item = listview.children[listview.index]
@@ -1442,7 +1442,7 @@ class TestDashboard:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import ProviderDivider
+            from ccswap.tui.widgets import ProviderDivider
 
             listview = app.screen.query_one("#accounts", ListView)
             assert [
@@ -1519,7 +1519,7 @@ class TestDashboard:
                 codex_row.alias,
                 codex_row.usage.last_good["five_hour"]["pct"],
             ) == ("", "Codex Org", "codex-alias", 77.0)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             claude_section, codex_section = panel.split("Codex", 1)
@@ -1547,12 +1547,12 @@ class TestDashboard:
         async with app.run_test(size=(100, 32)) as pilot:
             await wait_event(codex.started)
             await pilot.pause()
-            from claude_swap.tui.dashboard import DashboardScreen
+            from ccswap.tui.dashboard import DashboardScreen
             for _ in range(20):
                 if snap_of(app, "claude") is not None:
                     break
                 await pilot.pause()
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             widget = app.screen.query_one(AccountsPanel)
             refresh_errors: list[str] = []
@@ -1589,7 +1589,7 @@ class TestDashboard:
         )
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "only-claude@example.com" in panel
@@ -1660,8 +1660,8 @@ class TestDashboard:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.dashboard import DashboardScreen, SwitchScreen
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.dashboard import DashboardScreen, SwitchScreen
+            from ccswap.tui.widgets import AccountItem
 
             assert isinstance(app.screen, SwitchScreen)
             listview = app.screen.query_one("#accounts", ListView)
@@ -1684,7 +1684,7 @@ class TestDashboard:
             await settle(pilot)
             await pilot.press("enter")  # menu: Switch account…
             await pilot.pause()
-            from claude_swap.tui.dashboard import DashboardScreen, SwitchScreen
+            from ccswap.tui.dashboard import DashboardScreen, SwitchScreen
 
             assert isinstance(app.screen, SwitchScreen)
             await pilot.press("escape")
@@ -1701,7 +1701,7 @@ class TestDashboard:
             await settle(pilot)
             await menu_select(pilot, "remove-menu")
             await menu_select(pilot, "remove:claude:2")
-            from claude_swap.tui.modals import ConfirmModal
+            from ccswap.tui.modals import ConfirmModal
 
             assert isinstance(app.screen, ConfirmModal)
             await pilot.press("y")
@@ -1735,7 +1735,7 @@ class TestDashboard:
             # the submenu pops back to root after the toggle
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             menu = app.screen.query_one("#menu", ListView)
             ids = [item.action_id for item in menu.query(MenuItem)]
@@ -1752,7 +1752,7 @@ class TestDashboard:
             await menu_select(pilot, "disable-menu")
             from textual.widgets import ListView, Static
 
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             menu = app.screen.query_one("#menu", ListView)
             labels = [
@@ -1825,7 +1825,7 @@ class TestDashboard:
             app.screen.query_one("#slot", Input).value = "2"
             await pilot.click("#add")
             await pilot.pause()
-            from claude_swap.tui.modals import ConfirmModal
+            from ccswap.tui.modals import ConfirmModal
 
             assert isinstance(app.screen, ConfirmModal)  # overwrite confirm
             await pilot.press("n")
@@ -1837,13 +1837,13 @@ class TestDashboard:
         app = make_app(fake)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "No managed accounts yet" in panel
 
     async def test_palette_is_disabled(self, tmp_path):
-        from claude_swap.tui.app import CswapApp
+        from ccswap.tui.app import CswapApp
 
         assert CswapApp.ENABLE_COMMAND_PALETTE is False
 
@@ -1863,8 +1863,8 @@ class TestWatchScreen:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.dashboard import WatchScreen
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.dashboard import WatchScreen
+            from ccswap.tui.widgets import AccountItem
 
             assert isinstance(app.screen, WatchScreen)
             listview = app.screen.query_one("#accounts", ListView)
@@ -1884,7 +1884,7 @@ class TestWatchScreen:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import AccountItem, ProviderDivider
+            from ccswap.tui.widgets import AccountItem, ProviderDivider
 
             listview = app.screen.query_one("#accounts", ListView)
             children = list(listview.children)
@@ -1921,7 +1921,7 @@ class TestWatchScreen:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.widgets import AccountItem
 
             highlighted = app.screen.query_one("#accounts", ListView).highlighted_child
             assert isinstance(highlighted, AccountItem)
@@ -1938,8 +1938,8 @@ class TestWatchScreen:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.dashboard import WatchScreen
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.dashboard import WatchScreen
+            from ccswap.tui.widgets import AccountItem
 
             listview = app.screen.query_one("#accounts", ListView)
             assert isinstance(listview.children[listview.index], AccountItem)
@@ -1964,7 +1964,7 @@ class TestWatchScreen:
             await pilot.pause()
             from textual.widgets import ListView
 
-            from claude_swap.tui.dashboard import DashboardScreen, WatchScreen
+            from ccswap.tui.dashboard import DashboardScreen, WatchScreen
 
             assert isinstance(app.screen, WatchScreen)
             assert app.screen.query_one("#accounts", ListView).index is None
@@ -1978,7 +1978,7 @@ class TestWatchScreen:
         async with app.run_test(size=(100, 40)) as pilot:
             await settle(pilot)
             await menu_select(pilot, "watch")
-            from claude_swap.tui.dashboard import WatchScreen
+            from ccswap.tui.dashboard import WatchScreen
 
             assert isinstance(app.screen, WatchScreen)
 
@@ -1986,7 +1986,7 @@ class TestWatchScreen:
         app = make_app(self._fake(tmp_path), start="watch")
         async with app.run_test(size=(100, 40)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.dashboard import DashboardScreen, WatchScreen
+            from ccswap.tui.dashboard import DashboardScreen, WatchScreen
 
             assert isinstance(app.screen, WatchScreen)
             await pilot.press("escape")
@@ -2112,7 +2112,7 @@ class TestWatchScreen:
                 advanced,
             )
             await pilot.pause()
-            from claude_swap.tui.widgets import AccountItem
+            from ccswap.tui.widgets import AccountItem
 
             flashed = {
                 (item.provider, item.number): item.has_class("flash")
@@ -2241,10 +2241,10 @@ class _FakeEngine:
 def fake_engine(monkeypatch):
     _FakeEngine.instances = []
     monkeypatch.setattr(
-        "claude_swap.tui.autoview.AutoSwitchEngine", _FakeEngine
+        "ccswap.tui.autoview.AutoSwitchEngine", _FakeEngine
     )
     monkeypatch.setattr(
-        "claude_swap.tui.autoview.CodexAutoSwitchEngine", _FakeEngine
+        "ccswap.tui.autoview.CodexAutoSwitchEngine", _FakeEngine
     )
     return _FakeEngine
 
@@ -2263,7 +2263,7 @@ class TestAutoScreen:
         app = make_app(fake)
         async with app.run_test(size=(100, 40)) as pilot:
             await self._open(pilot)
-            from claude_swap.tui.autoview import AutoScreen
+            from ccswap.tui.autoview import AutoScreen
 
             assert isinstance(app.screen, AutoScreen)
             assert len(fake_engine.instances) == 1
@@ -2305,7 +2305,7 @@ class TestAutoScreen:
             await menu_select(pilot, "auto:codex")
             await pilot.pause()
 
-            from claude_swap.tui.autoview import AutoScreen
+            from ccswap.tui.autoview import AutoScreen
 
             assert isinstance(app.screen, AutoScreen)
             assert fake_engine.instances[-1].switcher is codex
@@ -2319,7 +2319,7 @@ class TestAutoScreen:
             await self._open(pilot)
             await pilot.press("l")
             await pilot.pause()
-            from claude_swap.tui.modals import ConfirmModal
+            from ccswap.tui.modals import ConfirmModal
 
             assert isinstance(app.screen, ConfirmModal)
             await pilot.press("y")
@@ -2339,7 +2339,7 @@ class TestAutoScreen:
             await self._open(pilot)
             await pilot.press("escape")
             await settle(pilot)
-            from claude_swap.tui.dashboard import DashboardScreen
+            from ccswap.tui.dashboard import DashboardScreen
 
             assert isinstance(app.screen, DashboardScreen)
             assert fake_engine.instances[0].stopped is True
@@ -2393,7 +2393,7 @@ class TestAutoScreen:
         app = make_app(fake)
         async with app.run_test(size=(100, 40)) as pilot:
             await self._open(pilot)
-            from claude_swap.tui.autoview import AutoScreen
+            from ccswap.tui.autoview import AutoScreen
 
             await pilot.press("t")
             await pilot.pause()
@@ -2404,7 +2404,7 @@ class TestAutoScreen:
             assert fake_engine.instances[0].wakes == 0
             await pilot.press("escape")
             await settle(pilot)
-            from claude_swap.tui.dashboard import DashboardScreen
+            from ccswap.tui.dashboard import DashboardScreen
 
             assert isinstance(app.screen, DashboardScreen)
 
@@ -2453,7 +2453,7 @@ class TestAutoScreen:
             await pilot.pause()
             from textual.widgets import Static
 
-            from claude_swap.tui.autoview import ThresholdAdjustModal
+            from ccswap.tui.autoview import ThresholdAdjustModal
 
             assert isinstance(app.screen, ThresholdAdjustModal)
             body = app.screen.query_one("#adjust-body", Static).render().plain
@@ -2481,7 +2481,7 @@ class TestAutoScreen:
             assert "inherit (90%)" in body
             await pilot.press("enter")
             await pilot.pause()
-            from claude_swap.tui.autoview import AutoScreen
+            from ccswap.tui.autoview import AutoScreen
 
             assert isinstance(app.screen, AutoScreen)
             assert fake_engine.instances[0].wakes == 1
@@ -2611,13 +2611,13 @@ class TestEventText:
             from_ref={"number": 1, "email": "a@x.com"},
             to_ref={"number": 2, "email": "b@x.com"},
         )
-        from claude_swap.tui.autoview import event_text
+        from ccswap.tui.autoview import event_text
 
         assert event.human() in event_text(event).plain
 
     def test_event_text_uses_light_accent_for_switch(self):
-        from claude_swap.tui.autoview import event_text
-        from claude_swap.tui.theme import ACCENT_LIGHT, CSWAP_LIGHT, Palette
+        from ccswap.tui.autoview import event_text
+        from ccswap.tui.theme import ACCENT_LIGHT, CSWAP_LIGHT, Palette
 
         event = SwitchEvent(
             trigger="proactive",
@@ -2628,8 +2628,8 @@ class TestEventText:
         assert any(ACCENT_LIGHT in str(s.style) for s in text.spans)
 
     def test_event_text_masks_mailboxes(self):
-        from claude_swap.autoswitch import QuarantineEvent
-        from claude_swap.tui.autoview import event_text
+        from ccswap.autoswitch import QuarantineEvent
+        from ccswap.tui.autoview import event_text
 
         event = QuarantineEvent(
             number="2", email="secret@example.com", reason="invalid_grant"
@@ -2651,7 +2651,7 @@ class TestMaskToggle:
         )
         async with app.run_test(size=(120, 36)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             assert "Mask off" in footer_labels(app.screen)
             assert "alice@acme.com" in app.screen.query_one(AccountsPanel).render().plain
@@ -2682,7 +2682,7 @@ class TestMaskToggle:
         )
         async with app.run_test(size=(120, 36)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountCard
+            from ccswap.tui.widgets import AccountCard
 
             assert app.mask_accounts is True
             assert "Mask on" in footer_labels(app.screen)
@@ -2707,7 +2707,7 @@ class TestMaskToggle:
             await settle(pilot)
             from textual.widgets import ListView, Static
 
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "remove-menu")
             await pilot.press("m")
@@ -2737,7 +2737,7 @@ class TestMaskToggle:
             await settle(pilot)
             from textual.widgets import RichLog, Static
 
-            from claude_swap.autoswitch import QuarantineEvent
+            from ccswap.autoswitch import QuarantineEvent
 
             await pilot.press("m")
             await pilot.pause()
@@ -2803,8 +2803,8 @@ class TestAccountsSnapshot:
 
 class TestBareInvocation:
     def test_bare_tty_launches_tui(self, monkeypatch, temp_home):
-        import claude_swap.cli as cli
-        import claude_swap.tui as tui
+        import ccswap.cli as cli
+        import ccswap.tui as tui
 
         launched = {}
 
@@ -2822,7 +2822,7 @@ class TestBareInvocation:
         assert "switcher" in launched
 
     def test_bare_non_tty_keeps_usage_error(self, monkeypatch, temp_home):
-        import claude_swap.cli as cli
+        import ccswap.cli as cli
 
         monkeypatch.setattr(sys, "argv", ["cswap"])
         monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
@@ -2832,8 +2832,8 @@ class TestBareInvocation:
         assert excinfo.value.code == 2  # argparse usage error
 
     def test_cswap_watch_opens_tui_on_watch_page(self, monkeypatch, temp_home):
-        import claude_swap.cli as cli
-        import claude_swap.tui as tui
+        import ccswap.cli as cli
+        import ccswap.tui as tui
 
         launched = {}
 
@@ -2865,7 +2865,7 @@ class TestSettingsMenu:
         async with app.run_test() as pilot:
             await settle(pilot)
             from textual.widgets import ListView, Static
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "settings-menu")
             menu = app.screen.query_one("#menu", ListView)
@@ -2884,7 +2884,7 @@ class TestSettingsMenu:
         async with app.run_test() as pilot:
             await settle(pilot)
             from textual.widgets import ListView, Static
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "settings-menu")
             menu = app.screen.query_one("#menu", ListView)
@@ -2915,7 +2915,7 @@ class TestSettingsMenu:
         app = make_app(fake)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from claude_swap.tui.widgets import AccountsPanel
+            from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel)
             before = panel.render().plain
@@ -2931,7 +2931,7 @@ class TestSettingsMenu:
         async with app.run_test() as pilot:
             await settle(pilot)
             from textual.widgets import ListView, Static
-            from claude_swap.tui.widgets import MenuItem
+            from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "settings-menu")
             menu = app.screen.query_one("#menu", ListView)
@@ -3004,7 +3004,7 @@ class TestThemeWiring:
     async def test_theme_menu_marks_current_and_applies(self, tmp_path):
         from textual.widgets import ListView, Static
 
-        from claude_swap.tui.widgets import MenuItem
+        from ccswap.tui.widgets import MenuItem
 
         fake = FakeSwitcher([make_account("1", active=True)], tmp_path)
         app = make_app(fake)
@@ -3025,8 +3025,8 @@ class TestThemeWiring:
 @pytest.mark.asyncio
 async def test_menu_hover_and_keyboard_help_do_not_activate_option(tmp_path):
     from textual.widgets import ListView, Static, Tooltip
-    from claude_swap.tui.widgets import MenuItem
-    from claude_swap.tui.modals import OutputModal
+    from ccswap.tui.widgets import MenuItem
+    from ccswap.tui.modals import OutputModal
     fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
     app = make_app(fake)
     app.TOOLTIP_DELAY = 0.01
@@ -3055,8 +3055,8 @@ async def test_menu_hover_and_keyboard_help_do_not_activate_option(tmp_path):
 @pytest.mark.parametrize("sentinel", [None, USAGE_TOKEN_EXPIRED])
 def test_expiring_resets_stay_visible_in_both_themes_and_narrow_rows(sentinel):
     from rich.console import Console
-    from claude_swap.tui.theme import CSWAP_LIGHT, Palette
-    from claude_swap.tui.widgets import account_card_text, mini_account_text
+    from ccswap.tui.theme import CSWAP_LIGHT, Palette
+    from ccswap.tui.widgets import account_card_text, mini_account_text
     now = 1_700_000_000.0
     expiry = datetime.fromtimestamp(now + 1800, timezone.utc).isoformat()
     entry = UsageEntry(last_good={"reset_credits": {"available": 1, "expires_at": expiry}},
@@ -3079,7 +3079,7 @@ def test_expiring_resets_stay_visible_in_both_themes_and_narrow_rows(sentinel):
 
 @pytest.mark.asyncio
 async def test_two_expiring_minis_keep_local_times_in_narrow_panel(tmp_path):
-    from claude_swap.tui.widgets import AccountsPanel
+    from ccswap.tui.widgets import AccountsPanel
     now = time.time()
     expiry = datetime.fromtimestamp(now + 1800, timezone.utc)
     entry = UsageEntry(last_good={"reset_credits": {
@@ -3105,7 +3105,7 @@ async def test_two_expiring_minis_keep_local_times_in_narrow_panel(tmp_path):
 ])
 async def test_language_localizes_controls_but_keeps_actions_and_confirmation_safe(tmp_path, language, settings_label, remove_label):
     from textual.widgets import Static, Button
-    from claude_swap.tui.widgets import MenuItem
+    from ccswap.tui.widgets import MenuItem
     (tmp_path / 'settings.json').write_text(json.dumps({'ui': {'language': language}}))
     fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
     app = make_app(fake)
@@ -3148,7 +3148,7 @@ async def test_confirmation_translates_once_and_keeps_yes_no_keys(tmp_path, key,
 
 
 def test_translated_quota_labels_preserve_window_ids_and_spend_countdowns():
-    from claude_swap.tui.widgets import account_card_text, mini_account_text
+    from ccswap.tui.widgets import account_card_text, mini_account_text
     now = 1_700_000_000.0
     seen = []
     entry = UsageEntry(last_good={

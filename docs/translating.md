@@ -12,16 +12,16 @@ or unavailable catalogs fall back to English.
 
 ## Contribute a language
 
-The standard gettext source files live in `src/claude_swap/locale`. Babel is a
+The standard gettext source files live in `src/ccswap/locale`. Babel is a
 **development-only** dependency; installed ccswap uses Python's standard library.
 
 1. Add the language code and its native name to `LANGUAGES` in
-   `src/claude_swap/i18n.py`. Config validation and the Settings cycle use this
+   `src/ccswap/i18n.py`. Config validation and the Settings cycle use this
    same register.
 2. Create a catalog (replace `fr` with your language):
 
    ```bash
-   uv run pybabel init -D ccswap -i src/claude_swap/locale/ccswap.pot -d src/claude_swap/locale -l fr
+   uv run pybabel init -D ccswap -i src/ccswap/locale/ccswap.pot -d src/ccswap/locale -l fr
    ```
 
 3. Translate the `.po` file. Keep named placeholders, format specifications,
@@ -31,7 +31,7 @@ The standard gettext source files live in `src/claude_swap/locale`. Babel is a
 4. Compile and test, then commit both `.po` and `.mo` files:
 
    ```bash
-   uv run pybabel compile -D ccswap -d src/claude_swap/locale
+   uv run pybabel compile -D ccswap -d src/ccswap/locale
    uv run pytest tests/test_i18n.py
    ```
 
@@ -41,8 +41,8 @@ Pure display helpers receive a translator explicitly; `mark(...)` marks labels
 such as class-level key bindings for translation at mount time.
 
 ```bash
-uv run pybabel extract -k tr -k mark --project ccswap -o src/claude_swap/locale/ccswap.pot src/claude_swap/tui
-uv run pybabel update -D ccswap -i src/claude_swap/locale/ccswap.pot -d src/claude_swap/locale
+uv run pybabel extract -k tr -k mark --project ccswap -o src/ccswap/locale/ccswap.pot src/ccswap/tui
+uv run pybabel update -D ccswap -i src/ccswap/locale/ccswap.pot -d src/ccswap/locale
 ```
 
 The catalog tests reject missing/empty messages, changed placeholders, fuzzy

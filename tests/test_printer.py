@@ -7,7 +7,7 @@ from io import StringIO
 
 import pytest
 
-from claude_swap import printer
+from ccswap import printer
 from tests.conftest import _deterministic_colour
 
 
@@ -89,7 +89,7 @@ class TestWindowsVtEnable:
         class FakeWindll:
             kernel32 = FakeKernel32()
 
-        monkeypatch.setattr("claude_swap.printer.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.printer.sys.platform", "win32")
         monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
 
     def test_refused_mode_change_means_no_color(self, monkeypatch):
@@ -227,7 +227,7 @@ class TestLinePrinters:
 
 
 def test_force_color_overrides_and_restores():
-    from claude_swap import printer
+    from ccswap import printer
     saved = printer._colors_enabled
     try:
         printer._colors_enabled = False

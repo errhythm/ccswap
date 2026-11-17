@@ -1,8 +1,8 @@
 """Tests for the Palette value object and the light/dark themes."""
 from __future__ import annotations
 
-from claude_swap.tui import theme
-from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT, Palette
+from ccswap.tui import theme
+from ccswap.tui.theme import CSWAP_DARK, CSWAP_LIGHT, Palette
 
 
 def test_dark_palette_matches_constants():
@@ -52,7 +52,7 @@ def test_light_text_meets_AA_on_all_backgrounds():
     # Accent and severity colors render as PERCENTAGE TEXT on highlighted
     # ($surface) and flash ($panel) rows, not just the base background — so
     # every text color must clear the 4.5:1 text bar against all three.
-    from claude_swap.tui import theme
+    from ccswap.tui import theme
     text_colors = (
         theme.FOREGROUND_LIGHT,
         theme.MUTED_LIGHT,

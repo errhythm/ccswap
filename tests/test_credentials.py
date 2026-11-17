@@ -26,14 +26,14 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import macos_keychain
-from claude_swap.credentials import (
+from ccswap import macos_keychain
+from ccswap.credentials import (
     CLAUDE_CODE_KEYCHAIN_SERVICE,
     CLAUDE_CODE_MANAGED_KEYCHAIN_SERVICE,
     CredentialStore,
 )
-from claude_swap.models import Platform
-from claude_swap.session import keychain_service_name
+from ccswap.models import Platform
+from ccswap.session import keychain_service_name
 
 
 class _Host:
@@ -115,7 +115,7 @@ class TestActiveReadStaysOnOneProfile:
 
         seen: list[str] = []
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain(
                 {
                     CLAUDE_CODE_KEYCHAIN_SERVICE: DEFAULT_PROFILE_CREDS,
@@ -152,7 +152,7 @@ class TestActiveReadStaysOnOneProfile:
 
         seen: list[str] = []
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain(
                 {
                     keychain_service_name(str(custom)): CUSTOM_PROFILE_CREDS,
@@ -182,7 +182,7 @@ class TestActiveReadStaysOnOneProfile:
 
         seen: list[str] = []
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain({CLAUDE_CODE_KEYCHAIN_SERVICE: DEFAULT_PROFILE_CREDS}, seen),
         )
 
@@ -201,7 +201,7 @@ class TestActiveReadStaysOnOneProfile:
 
         seen: list[str] = []
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain({CLAUDE_CODE_KEYCHAIN_SERVICE: DEFAULT_PROFILE_CREDS}, seen),
         )
 
@@ -226,7 +226,7 @@ class TestActiveReadStaysOnOneProfile:
 
         seen: list[str] = []
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain({CLAUDE_CODE_KEYCHAIN_SERVICE: DEFAULT_PROFILE_CREDS}, seen),
         )
 
@@ -428,7 +428,7 @@ class TestActiveWriteStaysOnOneProfile:
         def locked(service: str, account: str) -> None:
             raise macos_keychain.KeychainError("keychain is locked")
 
-        monkeypatch.setattr("claude_swap.macos_keychain.delete_password", locked)
+        monkeypatch.setattr("ccswap.macos_keychain.delete_password", locked)
 
         store = CredentialStore(_Host(tmp_path / "backups"))
         store._write_credentials(TARGET_SLOT_CREDS)
@@ -593,7 +593,7 @@ class TestExplicitDefaultProfileKeepsTheOtherLogin:
             return answering(service, account)
 
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password", managed_item_times_out
+            "ccswap.macos_keychain.get_password", managed_item_times_out
         )
 
         active = CredentialStore(_Host(tmp_path / "backups"))._read_active_credentials()
@@ -626,7 +626,7 @@ class TestSecureStorageOverride:
 
         seen: list[str] = []
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain({CLAUDE_CODE_KEYCHAIN_SERVICE: DEFAULT_PROFILE_CREDS}, seen),
         )
 
@@ -647,7 +647,7 @@ class TestSecureStorageOverride:
 
         seen: list[str] = []
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain(
                 {
                     keychain_service_name(str(secure)): SECURE_PROFILE_CREDS,
@@ -684,13 +684,13 @@ class TestActiveWriteFollowsTheRead:
             writes.append((service, password))
             mapping[service] = password
 
-        monkeypatch.setattr("claude_swap.macos_keychain.set_password", set_password)
+        monkeypatch.setattr("ccswap.macos_keychain.set_password", set_password)
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.get_password",
+            "ccswap.macos_keychain.get_password",
             _keychain(mapping, []),
         )
         monkeypatch.setattr(
-            "claude_swap.macos_keychain.delete_password",
+            "ccswap.macos_keychain.delete_password",
             lambda service, account: mapping.pop(service, None),
         )
         return writes
@@ -745,7 +745,7 @@ class TestStrictDeleteKeepsRollbackStateOnFailure:
     def test_failed_clear_keeps_the_prev_generation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from claude_swap.exceptions import CredentialError
+        from ccswap.exceptions import CredentialError
 
         creds_dir = tmp_path / "backups"
         creds_dir.mkdir()

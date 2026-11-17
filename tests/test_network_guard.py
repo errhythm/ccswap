@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import oauth
+from ccswap import oauth
 from tests.test_cli import _subprocess_env
 
 

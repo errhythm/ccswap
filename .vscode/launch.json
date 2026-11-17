@@ -5,7 +5,7 @@
             "name": "cswap --list",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "ccswap.cli",
             "args": ["--list"],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -17,7 +17,7 @@
             "name": "cswap --switch",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "ccswap.cli",
             "args": ["--switch"],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -29,7 +29,7 @@
             "name": "cswap --purge",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "ccswap.cli",
             "args": ["--purge"],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -41,7 +41,7 @@
             "name": "cswap (custom args)",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "ccswap.cli",
             "args": ["${input:cliArgs}"],
             "cwd": "${workspaceFolder}",
             "env": {

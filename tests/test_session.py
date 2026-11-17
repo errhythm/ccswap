@@ -1,4 +1,4 @@
-"""Tests for session mode (claude_swap.session + the switcher guards)."""
+"""Tests for session mode (ccswap.session + the switcher guards)."""
 
 from __future__ import annotations
 
@@ -16,12 +16,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import fsutil
-from claude_swap import macos_keychain
-from claude_swap import oauth
-from claude_swap import session as session_mod
-from claude_swap.credentials import CLAUDE_CODE_MANAGED_KEYCHAIN_SERVICE
-from claude_swap.exceptions import (
+from ccswap import fsutil
+from ccswap import macos_keychain
+from ccswap import oauth
+from ccswap import session as session_mod
+from ccswap.credentials import CLAUDE_CODE_MANAGED_KEYCHAIN_SERVICE
+from ccswap.exceptions import (
     AccountNotFoundError,
     CredentialReadError,
     LockError,
@@ -29,17 +29,17 @@ from claude_swap.exceptions import (
     SwitchError,
     ValidationError,
 )
-from claude_swap.fsutil import (
+from ccswap.fsutil import (
     is_link,
     link_points_at,
     make_dir_link,
     replace_with_retry,
 )
-from claude_swap.locking import FileLock
-from claude_swap.models import Platform
-from claude_swap.paths import get_backup_root, get_global_config_path
-from claude_swap.process_detection import ClaudeSession
-from claude_swap.session import (
+from ccswap.locking import FileLock
+from ccswap.models import Platform
+from ccswap.paths import get_backup_root, get_global_config_path
+from ccswap.process_detection import ClaudeSession
+from ccswap.session import (
     AUTH_OVERRIDE_ENV_VARS,
     MCP_DISPLACED_STASH,
     MCP_MIRROR_MARKER,
@@ -55,8 +55,8 @@ from claude_swap.session import (
     slugify_email,
     stale_marker_for,
 )
-from claude_swap.settings import GateThresholds, RunSettings, set_setting
-from claude_swap.switcher import ClaudeAccountSwitcher
+from ccswap.settings import GateThresholds, RunSettings, set_setting
+from ccswap.switcher import ClaudeAccountSwitcher
 
 ACCOUNT_EMAIL = "account2@example.com"
 ACCOUNT_NUM = "2"
@@ -230,12 +230,12 @@ def refresh_rotates(monkeypatch):
     calls: list[str] = []
 
     def fake_gate(self, account_num: str, email: str, snapshot: str):
-        from claude_swap import oauth as oauth_mod
+        from ccswap import oauth as oauth_mod
         calls.append(snapshot)
         self._write_account_credentials(account_num, email, ROTATED_CREDS)
         return oauth_mod.RefreshOutcome(ROTATED_CREDS, None)
 
-    from claude_swap.switcher import ClaudeAccountSwitcher
+    from ccswap.switcher import ClaudeAccountSwitcher
     monkeypatch.setattr(
         ClaudeAccountSwitcher, "consume_backup_grant", fake_gate
     )
@@ -1474,7 +1474,7 @@ class TestMcpMirror:
         assert elsewhere.read_bytes() == before
 
     def test_held_lock_fails_open(self, mcp_setup, monkeypatch):
-        from claude_swap import claude_locks
+        from ccswap import claude_locks
 
         monkeypatch.setattr(claude_locks, "DEFAULT_TIMEOUT_S", 0.3)
         default_config, session_dir, mgr = mcp_setup
@@ -2117,7 +2117,7 @@ class TestGuards:
             denied_dir.chmod(0o500)
         import logging
 
-        with caplog.at_level(logging.DEBUG, logger="claude-swap"):
+        with caplog.at_level(logging.DEBUG, logger="ccswap"):
             try:
                 seeded_switcher._delete_session_profile(ACCOUNT_NUM, ACCOUNT_EMAIL)
             finally:
@@ -2167,7 +2167,7 @@ class TestGuards:
         if not marker_lands:
             session_dir.parent.chmod(0o500)
         try:
-            with caplog.at_level(logging.WARNING, logger="claude-swap"):
+            with caplog.at_level(logging.WARNING, logger="ccswap"):
                 seeded_switcher._write_account_credentials(
                     ACCOUNT_NUM, ACCOUNT_EMAIL, ROTATED_CREDS
                 )
@@ -2216,7 +2216,7 @@ class TestGuards:
             return oauth.UsageOutcome(None)
 
         monkeypatch.setattr(
-            "claude_swap.oauth.try_fetch_usage_for_account", fake_fetch
+            "ccswap.oauth.try_fetch_usage_for_account", fake_fetch
         )
         seeded_switcher.list_accounts()
 
@@ -5108,8 +5108,8 @@ class TestBootstrapRefreshRoutesThroughGate:
     the switcher's consume gate, not a direct POST of its own read."""
 
     def test_bootstrap_uses_gate(self, temp_home, monkeypatch):
-        from claude_swap import oauth as oauth_mod
-        from claude_swap.switcher import ClaudeAccountSwitcher
+        from ccswap import oauth as oauth_mod
+        from ccswap.switcher import ClaudeAccountSwitcher
         s = ClaudeAccountSwitcher()
         s._setup_directories()
         s._init_sequence_file()
@@ -5150,12 +5150,12 @@ class TestBootstrapRefreshRoutesThroughGate:
         # The bypass seam: session.py no longer imports any direct refresh
         # helper, so a regression would have to call oauth's POST directly.
         monkeypatch.setattr(
-            "claude_swap.oauth.try_refresh_oauth_credentials", direct_post
+            "ccswap.oauth.try_refresh_oauth_credentials", direct_post
         )
         monkeypatch.setattr(
-            "claude_swap.oauth.refresh_oauth_credentials", direct_post
+            "ccswap.oauth.refresh_oauth_credentials", direct_post
         )
-        from claude_swap.session import SessionManager
+        from ccswap.session import SessionManager
         mgr = SessionManager(s)
         # setup_session is the seam: it must call the gate BEFORE the
         # bootstrap lock (the gate takes the same non-reentrant FileLock).
@@ -5426,7 +5426,7 @@ def test_manifest_interrupted_mid_write_leaves_no_temp(tmp_path: Path, monkeypat
     Ctrl-C must still propagate and must not strand the temp."""
     from types import SimpleNamespace
 
-    from claude_swap.session import SessionManager
+    from ccswap.session import SessionManager
 
     mgr = SessionManager.__new__(SessionManager)
     mgr.switcher = SimpleNamespace(platform=object())  # anything but WINDOWS
@@ -5434,7 +5434,7 @@ def test_manifest_interrupted_mid_write_leaves_no_temp(tmp_path: Path, monkeypat
     def interrupt(fd):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("claude_swap.fsutil.os.fsync", interrupt)
+    monkeypatch.setattr("ccswap.fsutil.os.fsync", interrupt)
     with pytest.raises(KeyboardInterrupt):
         mgr._write_manifest(tmp_path / ".cswap-shared.json", ["a"])
     assert not list(tmp_path.glob("*.tmp"))
@@ -5543,7 +5543,7 @@ class TestDefaultLoginSignedOut:
     def test_an_unreadable_keychain_keeps_the_fast_path(
         self, manager, monkeypatch, real_default_login_check
     ):
-        from claude_swap.credentials import ActiveCredentials
+        from ccswap.credentials import ActiveCredentials
 
         monkeypatch.setattr(
             manager.switcher,
@@ -5593,7 +5593,7 @@ class TestPickLeastBusy:
     GATES = GateThresholds(90.0, {})
 
     def pick(self, candidates, usage, sessions):
-        from claude_swap.session import pick_least_busy
+        from ccswap.session import pick_least_busy
 
         return pick_least_busy(candidates, usage, sessions, self.GATES)
 
@@ -5606,7 +5606,7 @@ class TestPickLeastBusy:
         assert self.pick(["1", "2"], usage, {"1": 0, "2": 3})[0] == "2"
 
     def test_per_window_gate_is_honoured(self):
-        from claude_swap.session import pick_least_busy
+        from ccswap.session import pick_least_busy
 
         gates = GateThresholds(90.0, {"5h": 40.0})
         usage = {"1": _u(five=50), "2": _u(five=45)}
@@ -5635,7 +5635,7 @@ class _PickEnv:
     def __init__(self, monkeypatch, usage, kinds=None, active="1", plain=1):
         from unittest.mock import MagicMock
 
-        from claude_swap import session as session_mod
+        from ccswap import session as session_mod
 
         self.mod = session_mod
         self.plain_dirs = []
@@ -5680,7 +5680,7 @@ def test_auto_pick_skips_api_key_accounts(monkeypatch):
 
 
 def test_auto_pick_skips_relogin_sentinel_keeps_token_expired(monkeypatch):
-    from claude_swap.json_output import USAGE_RELOGIN_REQUIRED, USAGE_TOKEN_EXPIRED
+    from ccswap.json_output import USAGE_RELOGIN_REQUIRED, USAGE_TOKEN_EXPIRED
 
     env = _PickEnv(
         monkeypatch,
@@ -5698,7 +5698,7 @@ def test_auto_pick_reads_default_profile_even_inside_a_session(monkeypatch, tmp_
 
 
 def session_default_home():
-    from claude_swap.paths import get_default_claude_config_home
+    from ccswap.paths import get_default_claude_config_home
 
     return get_default_claude_config_home()
 

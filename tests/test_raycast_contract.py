@@ -4,7 +4,7 @@ A rename here breaks the extension silently, so change both together and bump
 SCHEMA_VERSION in the extension when the shape changes.
 """
 
-from claude_swap.json_output import SCHEMA_VERSION, account_row, usage_to_json
+from ccswap.json_output import SCHEMA_VERSION, account_row, usage_to_json
 
 
 def test_schema_version_matches_extension():

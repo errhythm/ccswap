@@ -15,15 +15,15 @@ import pytest
 
 from tests.conftest import _advancing_clock, _thread_scoped_sleep, _crossing_clock
 
-from claude_swap import claude_locks
-from claude_swap.claude_locks import (
+from ccswap import claude_locks
+from ccswap.claude_locks import (
     claude_config_lock,
     claude_credentials_lock,
     config_lock_dir,
     credentials_lock_dir,
     proper_lockfile,
 )
-from claude_swap.exceptions import ClaudeCodeLockTimeout
+from ccswap.exceptions import ClaudeCodeLockTimeout
 
 
 def _assert_backed_off(slept, budget, *, least=3, remainder=0.05, what="clamp"):
@@ -141,7 +141,7 @@ class TestProperLockfile:
         b = proper_lockfile(lock_dir, timeout=2.0)
         b.__enter__()
         b_ident = (lock_dir.stat().st_dev, lock_dir.stat().st_ino)
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             a.__exit__(None, None, None)
         assert lock_dir.is_dir()
         assert (lock_dir.stat().st_dev, lock_dir.stat().st_ino) == b_ident
@@ -219,7 +219,7 @@ class TestProperLockfile:
         monkeypatch.setattr(claude_locks, "TOUCH_INTERVAL_S", 0.005)
         touches, real = self._count_touches(
             monkeypatch, lock_dir, fail_first=OSError("transient"))
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             with proper_lockfile(lock_dir):
                 # REWOUND FIRST, like the sibling. Without it the mtime only
                 # ever moves FORWARD from the mkdir, so `age` is bounded by
@@ -286,7 +286,7 @@ class TestProperLockfile:
             return real(path, *a, **k)
 
         monkeypatch.setattr(claude_locks.os, "utime", fail_once_past_the_window)
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             # The hiccup lands on the third touch, 0.1s after the second one
             # succeeded: inside the 0.25s window with `last_ok` advancing,
             # outside it against acquisition time (0.3s) without.
@@ -326,7 +326,7 @@ class TestProperLockfile:
         def said():
             return [r for r in caplog.records if "refresh" in r.getMessage()]
 
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             with proper_lockfile(lock_dir, staleness=0.01):
                 # Held until it has warned AND kept failing five more ticks:
                 # a per-attempt warning would have repeated by then.
@@ -1098,7 +1098,7 @@ def test_a_second_freeze_after_a_recovery_is_reported_again(
         return [r.getMessage() for r in caplog.records if "stops advancing" in r.getMessage()]
 
     monkeypatch.setattr(claude_locks.os, "utime", flaky)
-    with caplog.at_level(logging.WARNING, logger="claude-swap"):
+    with caplog.at_level(logging.WARNING, logger="ccswap"):
         with proper_lockfile(lock, timeout=2.0, staleness=0.01):
             _wait_until(lambda: len(said()) == 1)  # episode one, outlives staleness
             failing["on"] = False

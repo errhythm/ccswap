@@ -7,11 +7,11 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from claude_swap.autoswitch import TickOutcome
-from claude_swap.codex_autoswitch import CodexAutoSwitchEngine
-from claude_swap.models import AccountSnapshot, AccountsSnapshot
-from claude_swap.settings import AutoSwitchSettings
-from claude_swap.usage_store import UsageEntry
+from ccswap.autoswitch import TickOutcome
+from ccswap.codex_autoswitch import CodexAutoSwitchEngine
+from ccswap.models import AccountSnapshot, AccountsSnapshot
+from ccswap.settings import AutoSwitchSettings
+from ccswap.usage_store import UsageEntry
 
 
 def _account(number: str, pct: float, *, active: bool = False) -> AccountSnapshot:
@@ -53,7 +53,7 @@ class FakeCodexSwitcher:
 def test_switches_to_the_healthiest_candidate_and_records_restart_warning(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: True)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: True)
     switcher = FakeCodexSwitcher(
         tmp_path, (_account("1", 95, active=True), _account("2", 20))
     )
@@ -74,7 +74,7 @@ def test_switches_to_the_healthiest_candidate_and_records_restart_warning(
 
 
 def test_records_next_launch_warning_when_codex_is_not_running(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: False)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: False)
     switcher = FakeCodexSwitcher(
         tmp_path, (_account("1", 95, active=True), _account("2", 20))
     )
@@ -143,7 +143,7 @@ def test_session_candidate_is_not_switchable(tmp_path):
 
 
 def test_final_custody_rejection_is_not_retried(tmp_path, monkeypatch):
-    from claude_swap.exceptions import SwitchError
+    from ccswap.exceptions import SwitchError
 
     switcher = FakeCodexSwitcher(tmp_path, (
         _account('1', 100, active=True), _account('2', 10), _account('3', 20),
@@ -179,7 +179,7 @@ def _weekly_account(number, pct, reset, *, active=False, weekly_pct=20):
 
 
 def test_per_window_gates_trigger_and_keep_absolute_poll_headroom(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: False)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: False)
     for window in ("5h", "7d"):
         switcher = FakeCodexSwitcher(tmp_path, (
             _weekly_account("1", 75 if window == "5h" else 20, 3000,
@@ -217,7 +217,7 @@ def test_proactive_candidate_must_clear_each_gate(tmp_path):
 
 
 def test_consume_first_below_threshold_switches_even_with_less_headroom(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: False)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: False)
     switcher = FakeCodexSwitcher(tmp_path, (
         _weekly_account("1", 20, 3000, active=True),
         _weekly_account("2", 60, 2000),
@@ -291,7 +291,7 @@ def test_consume_first_obeys_cooldown(tmp_path):
 
 
 def test_consume_first_ranks_future_weekly_resets_before_headroom(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: False)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: False)
     for active_pct in (95, 100):
         for unknown_reset in (None, 900):
             switcher = FakeCodexSwitcher(tmp_path, (
@@ -311,7 +311,7 @@ def test_consume_first_ranks_future_weekly_resets_before_headroom(tmp_path, monk
 
 
 def test_consume_first_dry_run_does_not_write_state(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: False)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: False)
     switcher = FakeCodexSwitcher(tmp_path, (
         _weekly_account("1", 20, 3000, active=True),
         _weekly_account("2", 30, 2000),
@@ -346,7 +346,7 @@ def test_consume_first_rechecks_cooldown_under_lock(tmp_path, monkeypatch):
 
 
 def test_consume_first_unknown_resets_fall_back_to_headroom(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: False)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: False)
     switcher = FakeCodexSwitcher(tmp_path, (
         _weekly_account("1", 100, 3000, active=True),
         _weekly_account("2", 60, None),
@@ -393,7 +393,7 @@ def test_below_threshold_detail_without_overrides_keeps_historical_text(tmp_path
 
 
 def test_best_ranks_candidates_by_distance_to_their_gates(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.codex.is_codex_running", lambda: False)
+    monkeypatch.setattr("ccswap.codex.is_codex_running", lambda: False)
     switcher = FakeCodexSwitcher(tmp_path, (
         _weekly_account("1", 95, 3000, active=True),
         _weekly_account("2", 10, 2000, weekly_pct=40),
