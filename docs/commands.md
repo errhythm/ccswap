@@ -55,6 +55,20 @@ ccswap add-token --email user@example.com     # optional label override
 `--email` is optional; omitted values use `setup-token-{slot}@token.local`
 (or `api-key-{slot}@token.local` for API keys). No Anthropic API calls are made.
 
+**Setup-token usage.** Setup-tokens show `usage unavailable` by default, because the
+usage endpoint does not answer them (their scope is inference-only). With
+`ccswap config set usage.headerProbe true`, ccswap reads their 5h/7d utilization from
+the rate-limit headers of a 1-output-token Haiku request, sent at the normal poll
+cadence. `ccswap config set usage.fableProbe true` adds Fable's weekly window from a
+second 1-output-token Fable request per poll (the headers report a model's own weekly
+limit only on that model's responses; an account without Fable access shows no Fable
+row). Once that window is used up, ccswap keeps the row and sends no Fable request
+until it resets. Each probe is a real (tiny) request on that account's subscription,
+which is why both are off by default. Other per-model windows and extra-usage spend
+are not in those headers; a reading missing the 5h or 7d window (or a window
+`autoswitch.model` names; Fable's needs `usage.fableProbe`) is shown but not used for
+auto-switching.
+
 **API-key accounts.** Any bare `sk-ant-...` value that is not an OAuth token
 (`sk-ant-oat...`) registers a managed API-key account (the kind Claude Code uses
 after `/login` with a key) rather than an OAuth setup-token. It switches like any

@@ -172,7 +172,7 @@ class DashboardScreen(Screen):
             (
                 f"{PROVIDER_LABELS[provider]} — {acc.number}  "
                 f"{self._account_label(acc)}"
-                f"  [{self._account_tag(acc)}]",
+                + (f"  [{self._account_tag(acc)}]" if self.app.tag_shown(acc) else ""),
                 f"remove:{provider}:{acc.number}",
             )
             for provider, acc in iter_accounts(self.app.snapshots)

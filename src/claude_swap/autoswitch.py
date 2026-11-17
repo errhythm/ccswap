@@ -62,6 +62,7 @@ from claude_swap.settings import (
     effective_model_names,
     gate_thresholds,
     load_usage_settings,
+    log_unrecognized_keys,
     parse_window_selection,
 )
 from claude_swap.switcher import ClaudeAccountSwitcher
@@ -3088,6 +3089,9 @@ class AutoSwitchEngine:
 
     def run_loop(self) -> int:
         """Tick forever (until :meth:`stop`); a failing tick never kills it."""
+        # Once per loop, not per tick: a settings key nothing reads would
+        # otherwise leave the loop running on a default with no trace of why.
+        log_unrecognized_keys(self.switcher.backup_dir)
         while True:
             # Clear at the top, not after the wait: a wake() racing a wait
             # timeout is then never lost — the tick right after this clear

@@ -21,7 +21,7 @@ from claude_swap import printer
 from claude_swap.codex import CodexAccountSwitcher
 from claude_swap.agy import AgyAccountSwitcher
 from claude_swap.i18n import LANGUAGES, localize_bindings, mark, translator
-from claude_swap.models import AccountsSnapshot
+from claude_swap.models import AccountSnapshot, AccountsSnapshot, org_tag_shown
 from claude_swap.settings import (
     load_settings,
     load_ui_settings,
@@ -145,11 +145,13 @@ class CswapApp(App):
             self._theme_name = ui_settings.theme
             self._view = ui_settings.view
             self.mask_accounts = ui_settings.mask
+            self.org_tag = ui_settings.org_tag
         except Exception:
             self._language_name = "en"
             self._theme_name = "auto"
             self._view = "combined"
             self.mask_accounts = False
+            self.org_tag = "auto"
 
         translation = translator(self._language_name)
         self.gettext = translation.gettext
@@ -633,6 +635,17 @@ class CswapApp(App):
         if isinstance(self.screen, WatchScreen):
             return
         self.push_screen(WatchScreen())
+
+    def tag_shown(self, acc: AccountSnapshot) -> bool:
+        """Whether ``ui.orgTag`` draws ``acc``'s org tag in any TUI account view."""
+        # Compared within acc's own provider: a Codex login sharing a Claude
+        # account's email is not an ambiguity the tag has to resolve.
+        accounts = next(
+            (snap.accounts for snap in self.snapshots.values()
+             if snap is not None and acc in snap.accounts),
+            (),
+        )
+        return org_tag_shown(self.org_tag, acc.email, [a.email for a in accounts])
 
     # -- theme --------------------------------------------------------------
 

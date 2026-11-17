@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from dataclasses import replace
@@ -43,7 +44,7 @@ from claude_swap.json_output import (
 from claude_swap.usage_store import AUTH_DEAD_STRIKES, FetchRecord, UsageEntry
 from claude_swap.models import Platform, SwitchTransaction
 from claude_swap.transfer import export_accounts, import_accounts
-from claude_swap.settings import AutoSwitchSettings
+from claude_swap.settings import AutoSwitchSettings, settings_path
 from claude_swap.switcher import ClaudeAccountSwitcher
 
 
@@ -2689,6 +2690,32 @@ class TestRunLoop:
              patch.object(harness.engine._wake, "wait", return_value=None):
             assert harness.engine.run_loop() == 0
         assert len(ticks) == 2
+
+    def test_loop_logs_settings_keys_nothing_reads_once(self, harness, caplog):
+        settings_path(harness.switcher.backup_dir).write_text(
+            json.dumps({"autoswitch": {"threshold": 98.0, "hysteresisPCT": 5}})
+        )
+        ticks = []
+
+        def fake_tick():
+            ticks.append(1)
+            if len(ticks) >= 3:
+                harness.engine.stop()
+            return TickOutcome.NO_ACTION
+
+        with patch.object(harness.engine, "tick", side_effect=fake_tick), \
+             patch.object(harness.engine._wake, "wait", return_value=None), \
+             caplog.at_level(logging.WARNING, logger="claude-swap"):
+            assert harness.engine.run_loop() == 0
+        assert len(ticks) == 3
+        assert [
+            message
+            for message in (r.getMessage() for r in caplog.records)
+            if message.startswith("settings.json:")
+        ] == [
+            "settings.json: 'autoswitch.hysteresisPCT' is not a key this version "
+            "reads, so it has no effect; did you mean autoswitch.hysteresisPct?"
+        ]
 
     def test_loop_survives_raising_tick(self, harness):
         calls = []

@@ -12,6 +12,7 @@ import math
 from datetime import datetime, timezone
 
 from claude_swap import oauth, pace, subscription
+from claude_swap.poll_policy import parse_reset_ts
 
 # Bump only on a breaking change to any payload shape. Scripts key off this.
 SCHEMA_VERSION = 1
@@ -96,7 +97,12 @@ def _weekly_window_to_json(entry: dict, fetched_at: float | None) -> dict:
 
 def _scoped_window_to_json(entry: dict, fetched_at: float | None) -> dict:
     """Project a scoped window, carrying its name and, for Antigravity, its
-    ``window`` ("5h" or "weekly"). A 5h bucket gets no weekly pace fields."""
+    ``window`` ("5h" or "weekly"). A 5h bucket gets no weekly pace fields.
+
+    ``probeAfter`` marks a row the header probe read as spent and keeps
+    until then instead of asking again (``oauth._add_scoped_limits``). It
+    survives export so a machine importing the reading keeps it too.
+    """
     if entry.get("window") == "5h":
         out = _window_to_json(entry)
     else:
@@ -104,6 +110,8 @@ def _scoped_window_to_json(entry: dict, fetched_at: float | None) -> dict:
     out["name"] = entry["name"]
     if "window" in entry:
         out["window"] = entry["window"]
+    if "probe_after" in entry:
+        out["probeAfter"] = entry["probe_after"]
     return out
 
 
@@ -272,6 +280,11 @@ def usage_from_json(usage: object) -> dict:
             name = window.get("name")
             if not isinstance(name, str) or not name:
                 raise ValueError(f"{label}.name must be a non-empty string")
+            probe_after = window.get("probeAfter")
+            if probe_after is not None:
+                if not isinstance(probe_after, str) or parse_reset_ts(probe_after) is None:
+                    raise ValueError(f"{label}.probeAfter must be an ISO-8601 time")
+                entry["probe_after"] = probe_after
             scoped.append({"name": name, **entry})
         out["scoped"] = scoped
     if "rejected" in usage:

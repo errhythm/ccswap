@@ -65,6 +65,7 @@ class TestConfigList:
             "autoswitch.homeAccount",
             "ui.language",
             "ui.theme",
+            "ui.orgTag",
             "ui.view",
             "ui.mask",
             "ui.starPrompt",
@@ -75,9 +76,10 @@ class TestConfigList:
             "run.autoPick",
             "updates.check",
             "usage.headerProbe",
+            "usage.fableProbe",
         ):
             assert key in out
-        assert out.count("(default)") == 30
+        assert out.count("(default)") == 32
 
     def test_set_key_not_marked_default(self, temp_home, capsys):
         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
@@ -104,7 +106,7 @@ class TestConfigList:
         assert payload["schemaVersion"] == 1
         assert payload["path"].endswith("settings.json")
         by_key = {entry["key"]: entry for entry in payload["settings"]}
-        assert len(by_key) == 30
+        assert len(by_key) == 32
         assert by_key["autoswitch.warmupFiveHour"]["value"] is False
         assert by_key["ui.starPrompt"]["value"] is True
         assert by_key["ui.starPrompt"]["isSet"] is False
@@ -119,6 +121,64 @@ class TestConfigList:
         assert by_key["autoswitch.weeklyThreshold"]["isSet"] is False
         assert by_key["autoswitch.includeApiKeyAccounts"]["value"] is False
         assert by_key["updates.check"]["value"] is True
+        assert payload["unrecognized"] == []
+
+    def test_list_warns_about_keys_nothing_reads(self, temp_home, capsys):
+        path = _settings_file(capsys)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "schemaVersion": 1,
+            "autoswitch": {"threshold": 98.0, "hysteresisPCT": 5, "futureKnob": True},
+        }))
+        code, out, err = _run([], capsys)
+        assert code == 0
+        # The table is unchanged: the setting the typo was meant for still
+        # shows its default, and the warning is what explains why.
+        hysteresis_line = next(
+            ln for ln in out.splitlines() if "hysteresisPct" in ln
+        )
+        assert "(default)" in hysteresis_line
+        assert "hysteresisPCT" not in out
+        assert (
+            "settings.json: 'autoswitch.hysteresisPCT' is not a key this version "
+            "reads, so it has no effect; did you mean autoswitch.hysteresisPct?"
+        ) in err
+        assert (
+            "settings.json: 'autoswitch.futureKnob' is not a key this version "
+            "reads, so it has no effect"
+        ) in err
+        assert "did you mean autoswitch.futureKnob" not in err
+
+    def test_list_is_quiet_when_every_key_is_read(self, temp_home, capsys):
+        _run(["set", "autoswitch.threshold", "80"], capsys)
+        code, _, err = _run([], capsys)
+        assert code == 0
+        assert "settings.json" not in err
+
+    def test_json_list_names_keys_nothing_reads(self, temp_home, capsys):
+        path = _settings_file(capsys)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "autoSwitch": {"threshold": 70},
+            "autoswitch": {"cooldownSecond": 600, "futureKnob": True},
+        }))
+        code, out, err = _run(["--json"], capsys)
+        assert code == 0
+        # The payload carries them; a second copy on stderr would be noise.
+        assert "settings.json" not in err
+        payload = json.loads(out)
+        assert payload["unrecognized"] == [
+            {"key": "autoSwitch", "suggestion": "autoswitch"},
+            {
+                "key": "autoswitch.cooldownSecond",
+                "suggestion": "autoswitch.cooldownSeconds",
+            },
+            {"key": "autoswitch.futureKnob", "suggestion": None},
+        ]
+        # Reported beside the settings, never as one of them.
+        assert "autoswitch.cooldownSecond" not in {
+            entry["key"] for entry in payload["settings"]
+        }
 
 
 class TestConfigSetGet:
@@ -156,6 +216,17 @@ class TestConfigSetGet:
         assert "= false" in out
         raw = json.loads(_settings_file(capsys).read_text())
         assert raw["autoswitch"]["includeApiKeyAccounts"] is False
+
+    def test_fable_probe_alone_says_it_needs_the_header_probe(
+        self, temp_home, capsys
+    ):
+        code, out, err = _run(["set", "usage.fableProbe", "true"], capsys)
+        assert code == 0
+        assert "usage.fableProbe = true" in out
+        assert "does nothing until usage.headerProbe is true" in err
+        code, _, err = _run(["set", "usage.headerProbe", "true"], capsys)
+        assert code == 0
+        assert err == ""
 
     def test_set_preserves_unknown_keys(self, temp_home, capsys):
         path = _settings_file(capsys)

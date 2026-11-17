@@ -12,6 +12,7 @@ ccswap config set ui.language de            # en/de/el; restart the dashboard
 ccswap config set ui.view codex             # combined (default), claude, or codex
 ccswap config set ui.mask on                # hide emails and org names in the TUI, mod and statusline
 ccswap config set ui.starPrompt off          # stop asking for a GitHub star after a switch
+ccswap config set ui.orgTag on              # [org] tag on every account; auto (default) only where emails repeat; off
 ccswap config set credentials.backend file  # macOS headless/SSH: never use the Keychain
 ccswap config set updates.check off         # stop the daily PyPI check for a newer release
 ccswap config set run.shareHistory on       # make --share-history the default for ccswap run
@@ -27,11 +28,13 @@ ccswap config set autoswitch.warmupFiveHour true  # opt-in Claude warming; uses 
 ccswap config set usage.wasteWarning true   # opt-in: warn before a weekly window resets with quota unused
 ccswap config set usage.wasteWarningHours 6 # warn within this many hours of the reset (1 to 168)
 ccswap config set usage.wasteWarningPct 40  # and only when at least this pct is unused (1 to 100)
+ccswap config set usage.headerProbe true    # opt-in: setup-token usage via a 1-token request (see add-token)
+ccswap config set usage.fableProbe true     # opt-in: also their Fable weekly limit, via a 1-token Fable request
 ccswap config unset autoswitch.threshold   # back to the default
 ccswap config path                         # where settings.json lives
 ```
 
-`ccswap config --help` lists every key with its valid range and default. Hand-editing the file still works — `ccswap config` is just a safer front door. `list` and `get` take `--json` for scripting.
+`ccswap config --help` lists every key with its valid range and default. Hand-editing the file still works — `ccswap config` is just a safer front door, and it points out any key in the file that nothing reads (a typo, say); `ccswap auto` logs the same keys when it starts. `list` and `get` take `--json` for scripting.
 
 ## Backup and migration
 

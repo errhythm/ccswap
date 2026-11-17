@@ -33,6 +33,8 @@ Codex saves sanitized quota snapshots in `codex/usage-N.json` beside its account
 
 On Linux/WSL, set `XDG_DATA_HOME` to override the default location.
 
+The log file, `claude-swap.log`, is in the backup directory too. Add `--debug` to a command (`ccswap list --debug`) to record debug detail and print it to the terminal.
+
 ## macOS over SSH / headless
 
 - On a Mac used only with the login Keychain locked, `ccswap config set credentials.backend file` makes Claude Code's plaintext credential file authoritative and keeps account backups under `credentials/`.
@@ -43,3 +45,7 @@ On Linux/WSL, set `XDG_DATA_HOME` to override the default location.
 - Restart any running `ccswap auto`, menu bar, or TUI instance after changing the backend.
 - Use file mode only when Claude Code will not run with the Keychain unlocked; `ccswap status` warns about residual items that would override the file and gives their removal commands.
 - `ccswap run` (session mode) refuses with the file backend, because session profiles keep their credentials in the Keychain.
+
+## Upstream sync
+
+ccswap began as a fork of [realiti4/claude-swap](https://github.com/realiti4/claude-swap). The last upstream merge took claude-swap through `7fecb86` (2026-11-15), merged on 2026-11-18. ccswap no longer merges upstream; later upstream credential and Keychain fixes are ported by hand, one commit each, crediting the original PR.

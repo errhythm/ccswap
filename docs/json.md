@@ -51,6 +51,8 @@ An account row also carries an additive `alias` field once one is set with `ccsw
 
 Weekly windows (`sevenDay` and per-model `scoped` entries — never `fiveHour`) additively carry pace fields once the week is ~a day old: `expectedPct` (where usage would sit if spread evenly across the week) and `aheadOfPace` (`true` when meaningfully above that — the same signal the human views show as an `(ahead)`/`(ahead of pace)` marker). `projectedExhaustionAt`/`willLastToReset` extrapolate the current rate into an ETA to 100% and a yes/no "will it last to the reset"; they stay `--json`-only since a linear projection is too rough to present as fact in the UI.
 
+A per-model `scoped` window carries `probeAfter` (ISO-8601) when a setup-token's Fable probe (`usage.fableProbe`) found it used up: the row is kept as read, and Fable is not asked again before that time.
+
 `ccswap auto --json` emits an event *stream* instead — one JSON object per line (`{"schemaVersion":1,"event":"switch","ts":…, …}` with kinds like `poll`, `switch`, `no-switch`, `account-quarantined`, `all-exhausted`, `error`). The contract is additive: new kinds and fields may appear, so scripts should ignore unknown ones.
 
 File-only quota consumers can read [`<backup>/codex/usage-N.json`](codex.md#usage-snapshots-on-disk), a separate, sanitized snapshot with its own `schemaVersion: 1`. It records last-good measurements and safe failure metadata without credentials. This does not change Codex command `--json` payloads or their in-memory cache behavior.

@@ -285,6 +285,7 @@ def account_card_text(
     palette: Palette = Palette.DARK,
     mask: bool = False,
     tr: Callable[[str], str] = str,
+    show_tag: bool = True,
 ) -> Text:
     """The full account card: header line + per-window bar rows."""
     now = now if now is not None else time.time()
@@ -297,7 +298,8 @@ def account_card_text(
         text.append(f" ({email})", style=palette.foreground)
     else:
         text.append(email, style=palette.foreground)
-    text.append(f"  [{org}]", style=palette.muted)
+    if show_tag:
+        text.append(f"  [{org}]", style=palette.muted)
     if tag:
         text.append(f"  {tag}", style=palette.muted)
     if acc.is_active:
@@ -401,6 +403,7 @@ def mini_account_text(
     palette: Palette = Palette.DARK,
     mask: bool = False,
     tr: Callable[[str], str] = str,
+    show_tag: bool = True,
 ) -> Text:
     """One minimized line for an inactive account.
 
@@ -424,7 +427,8 @@ def mini_account_text(
         text.append(f" ({email})", style=palette.foreground)
     else:
         text.append(email, style=palette.foreground)
-    text.append(f"  [{org}]", style=palette.muted)
+    if show_tag:
+        text.append(f"  [{org}]", style=palette.muted)
     if acc.disabled:
         text.append(tr("  (disabled)"), style=palette.muted)
     if acc.usage.recovery is not None:
@@ -596,6 +600,7 @@ class AccountsPanel(Static):
                             palette=palette,
                             mask=app.mask_accounts,
                             tr=app.gettext,
+                            show_tag=app.tag_shown(acc),
                         )
                     )
                 elif self._show_minis:
@@ -606,6 +611,7 @@ class AccountsPanel(Static):
                             palette=palette,
                             mask=app.mask_accounts,
                             tr=app.gettext,
+                            show_tag=app.tag_shown(acc),
                         )
                     )
             if not blocks:
@@ -655,6 +661,7 @@ class AccountCard(Static):
             palette=Palette.from_theme(self.app.current_theme),
             mask=bool(getattr(self.app, "mask_accounts", False)),
             tr=self.app.gettext,
+            show_tag=self.app.tag_shown(self._acc),
         )
 
 

@@ -236,6 +236,8 @@ async def _dashboard(tmp_path, accounts, size):
 
     from claude_swap.tui.widgets import AccountsPanel, MenuItem
 
+    # The widths below are calibrated with every org tag drawn.
+    (tmp_path / "settings.json").write_text('{"ui": {"orgTag": "on"}}')
     app = make_app(FakeSwitcher(accounts, tmp_path))
     async with app.run_test(size=size) as pilot:
         await _workers_done(pilot)

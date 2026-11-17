@@ -13,6 +13,8 @@ ccswap run 2 --require-session   # refuse rather than run plain claude if 2 is t
 Sessions use your normal `~/.claude` setup (settings, CLAUDE.md, skills, MCP servers, etc.), but each account keeps its own chat history — pass `--share-history` if you want your accounts to continue the same conversations, or `ccswap config set run.shareHistory on` to make that the default (`--no-share-history` overrides it; Windows warns and keeps per-account history).
 
 Running the account that is already your default login launches plain `claude` on that login instead of a session (a second copy of the active credential would go stale). Scripts that need the isolation guaranteed can pass `--require-session`, which refuses in that case instead.
+
+ccswap writes its own launch notices to stderr, so stdout carries only what claude prints: `ccswap run 2 -- -p "…" --output-format json | jq` works.
   
 A session refreshes its own copy of the account's token, so once it exits, the credential it rotated is captured back into the account's stored backup before a switch or usage check uses that backup. While a session is still running, `ccswap switch` refuses to move the default login onto its account if the stored backup has already fallen behind (activating it could only fail); exit the session first, or pick another account. While a session runs, its account's usage is read with the session's own credential and never refreshed by ccswap; a read the server refuses shows as token expired, and is not requested again, until the session renews the credential on its next call.
 
