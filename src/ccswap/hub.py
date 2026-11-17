@@ -29,6 +29,8 @@ from ccswap.models import AccountSnapshot, AccountsSnapshot
 from ccswap.paths import get_backup_root
 
 _logger = logging.getLogger(__name__)
+# Stay off the ccswap log handlers so hub errors keep reaching the service's stderr (the launchd log).
+_logger.propagate = False
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8317  # CLIProxyAPI's default, so T3's placeholder URL works.
