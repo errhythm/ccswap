@@ -248,12 +248,11 @@ def _make_shell_class():
     import objc
     from AppKit import (
         NSApplication, NSApplicationActivationPolicyAccessory, NSMakeRect,
-        NSPopover, NSStatusBar, NSVariableStatusItemLength, NSView,
-        NSViewController, NSVisualEffectView,
+        NSPopover, NSStatusBar, NSVariableStatusItemLength, NSViewController,
     )
     from Foundation import NSObject, NSRunLoop, NSRunLoopCommonModes, NSTimer, NSURL
     from WebKit import (
-        WKUserContentController, WKUserScript, WKWebView, WKWebViewConfiguration,
+        WKUserContentController, WKWebView, WKWebViewConfiguration,
     )
 
     class Shell(NSObject):
@@ -344,9 +343,6 @@ def _make_shell_class():
             cfg = WKWebViewConfiguration.alloc().init()
             self.ucc = WKUserContentController.alloc().init()
             self.ucc.addScriptMessageHandler_name_(self, "ccswap")
-            # Tells the page the glass view sits behind it, so the page drops its fallback fill.
-            self.ucc.addUserScript_(WKUserScript.alloc().initWithSource_injectionTime_forMainFrameOnly_(
-                "document.documentElement.classList.add('fx')", 0, True))  # 0 = at document start
             cfg.setUserContentController_(self.ucc)
             w, h = POPOVER_SIZE
             self.web = WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, w, h), cfg)
@@ -357,18 +353,8 @@ def _make_shell_class():
                 NSURL.fileURLWithPath_(str(WEB_DIR / "index.html")),
                 NSURL.fileURLWithPath_isDirectory_(str(WEB_DIR), True),
             )
-            fill = 2 | 16  # NSViewWidthSizable | NSViewHeightSizable
-            glass = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
-            glass.setMaterial_(6)  # NSVisualEffectMaterialPopover
-            glass.setBlendingMode_(0)  # NSVisualEffectBlendingModeBehindWindow
-            glass.setState_(1)  # NSVisualEffectStateActive
-            glass.setAutoresizingMask_(fill)
-            self.web.setAutoresizingMask_(fill)
-            box = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
-            box.addSubview_(glass)
-            box.addSubview_(self.web)
             self.vc = NSViewController.alloc().init()
-            self.vc.setView_(box)
+            self.vc.setView_(self.web)  # the page paints its own solid graphite background
             self.popover = NSPopover.alloc().init()
             self.popover.setContentViewController_(self.vc)
             self.popover.setContentSize_((w, h))

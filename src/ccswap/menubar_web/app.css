@@ -1,21 +1,20 @@
 :root {
-  --fallback: rgba(20,20,27,.58);
-  --card: rgba(255,255,255,.07); --card-line: rgba(255,255,255,.12); --glass: rgba(255,255,255,.09);
+  /* Graphite: solid surfaces, no translucency or tint; colour only in logos, rings and the card edge */
+  --bg: #17171A;
+  --card: #222226; --card-line: rgba(255,255,255,.07); --glass: rgba(255,255,255,.06);
   --text: #f5f5f7; --muted: rgba(235,235,245,.6); --track: rgba(255,255,255,.14);
   --ok: #3DDC74; --warn: #FFB020; --bad: #FF5A4F; --tipbg: rgba(18,18,24,.92);
   --claude: #E07A5F; --codex: #C9C6C1; --agy: #7FA8FF; --neutral: #9a9aa6;
-  --tint: 30%;
 }
 @media (prefers-color-scheme: light) {
-  :root { --fallback: rgba(255,255,255,.66); --card: rgba(255,255,255,.55); --card-line: rgba(0,0,0,.08);
-    --glass: rgba(255,255,255,.7); --text: #1c1c1e; --muted: rgba(60,60,67,.65); --track: rgba(0,0,0,.1);
-    --ok: #22a850; --warn: #d98a00; --bad: #e0372d; --tipbg: rgba(30,30,36,.94); --codex: #8a857c; --tint: 26%; }
+  :root { --bg: #F2F2F4; --card: #FFFFFF; --card-line: rgba(0,0,0,.07);
+    --glass: rgba(0,0,0,.04); --text: #1c1c1e; --muted: rgba(60,60,67,.65); --track: rgba(0,0,0,.1);
+    --ok: #22a850; --warn: #d98a00; --bad: #e0372d; --tipbg: rgba(30,30,36,.94); --codex: #8a857c; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { font: 13px -apple-system, BlinkMacSystemFont, sans-serif; color: var(--text); background: var(--fallback);
+body { font: 13px -apple-system, BlinkMacSystemFont, sans-serif; color: var(--text); background: var(--bg);
   display: flex; flex-direction: column; overflow: hidden; -webkit-user-select: none; }
-html.fx body { background: transparent; } /* the shell puts an NSVisualEffectView behind the page */
 button { font: inherit; color: inherit; background: var(--glass); border: 1px solid var(--card-line);
   border-radius: 8px; padding: 4px 11px; cursor: pointer; }
 button:hover { filter: brightness(1.15); }
@@ -57,8 +56,11 @@ footer { display: flex; gap: 6px; align-items: center; padding: 8px 12px 10px; c
 footer span { flex: 1; }
 .card { background: var(--card); border: 1px solid var(--card-line); border-radius: 14px; padding: 12px;
   margin-bottom: 10px; }
-.pcard { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) var(--tint), transparent), rgba(255,255,255,.05));
-  border: 1px solid var(--card-line); border-radius: 14px; padding: 12px; margin-bottom: 10px; cursor: pointer; }
+.pcard { position: relative; background: var(--card); border: 1px solid var(--card-line); border-radius: 14px;
+  padding: 12px 12px 12px 14px; margin-bottom: 10px; cursor: pointer; }
+/* the provider's colour, as a thin edge on the left of its card */
+.pcard::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2.5px;
+  border-radius: 2px; background: var(--accent, var(--neutral)); }
 .head { display: flex; align-items: center; gap: 10px; }
 .head .meta { flex: 1; min-width: 0; }
 .head .name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
