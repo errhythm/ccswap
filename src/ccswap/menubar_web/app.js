@@ -18,6 +18,7 @@
   let data = null;
   let tab = "overview"; // "overview" | "settings" | provider id
   let pending = null; // {key}: switch awaiting a second click
+  let tokenOpen = false; // the add-token form, opened from the actions list
   let note = null; // {text, until}: reply note (restart hint, errors)
   let dirty = false;
 
@@ -336,7 +337,7 @@
     }
     const others = (prov.accounts || []).filter((a) => !a.active);
     if (others.length) wrap.append(h("section", { class: "card" }, h("div", { class: "sect", text: "Other accounts" }), ...others.map((a) => otherRow(prov, a))));
-    if (prov.addToken) wrap.append(h("section", { class: "card" }, tokenForm(prov)));
+    if (prov.addToken && tokenOpen) wrap.append(h("section", { class: "card" }, tokenForm(prov)));
 
     const list = h("section", { class: "card list" });
     const strategies = caps.strategies || [];
@@ -346,7 +347,8 @@
       list.append(item("✦", s === "best" ? "Switch to best" : `Switch: ${s}`, () => post({ action: "rotate", provider: prov.id, strategy: s })));
     }
     if (prov.id === "claude") list.append(item("↻", "Refresh credentials", () => post({ action: "refreshCreds" })));
-    list.append(item("+", "Add account…", () => post({ action: "addLogin", provider: prov.id })));
+    list.append(item("+", "Add current login", () => post({ action: "addLogin", provider: prov.id })));
+    if (prov.addToken) list.append(item("+", "Add setup token or API key…", () => { tokenOpen = !tokenOpen; draw(); }));
     if (caps.autoSwitch && prov.autoSwitch) list.append(item("⟳", "Restart engine", () => post({ action: "restartEngine", provider: prov.id })));
     if (active && caps.disable) {
       list.append(item("⏸", active.disabled ? "Enable account" : "Disable account",
@@ -357,14 +359,22 @@
     return wrap;
   }
 
+  // Same as `ccswap add-token [TOKEN] [--email]`: the token is required, the email only labels it.
   function tokenForm(prov) {
-    const email = h("input", { type: "email", placeholder: "email", autocomplete: "off" });
-    const token = h("input", { type: "password", placeholder: "token", autocomplete: "off" });
-    return h("div", { class: "actions" }, email, token, h("button", { class: "btn", text: "Add token", onclick: () => {
-      if (!email.value || !token.value) return;
-      post({ action: "addToken", provider: prov.id, email: email.value, token: token.value });
-      token.value = "";
-    } }));
+    const token = h("input", { type: "password", autocomplete: "off", id: "tok", spellcheck: "false" });
+    const email = h("input", { type: "email", autocomplete: "off", id: "tokmail", placeholder: "Detected from the token" });
+    const add = h("button", { class: "btn on", text: "Add", disabled: true, onclick: () => {
+      post({ action: "addToken", provider: prov.id, email: email.value.trim(), token: token.value.trim() });
+      token.value = ""; tokenOpen = false; draw();
+    } });
+    token.addEventListener("input", () => { add.disabled = !token.value.trim(); });
+    return h("div", { class: "tokform" },
+      h("div", { class: "sect", text: "Add a setup token or API key" }),
+      h("label", { for: "tok", text: "Setup token or API key" }), token,
+      h("div", { class: "muted", text: "Get a setup token with claude setup-token in Terminal." }),
+      h("label", { for: "tokmail", text: "Email (optional)" }), email,
+      h("div", { class: "actions" }, h("span", { class: "spacer" }),
+        h("button", { class: "btn", text: "Cancel", onclick: () => { tokenOpen = false; draw(); } }), add));
   }
 
   // --- settings ---

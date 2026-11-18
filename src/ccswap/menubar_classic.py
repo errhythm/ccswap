@@ -277,10 +277,10 @@ def _paint_glyph(app, controller, has_text: bool) -> bool:
 
         button = app._nsapp.nsstatusitem.button()
         pct = tightest_used_pct(controller.payload())
-        key = None if pct is None else round(pct)
-        cache = app.__dict__.setdefault("_glyphs", {})  # one image per whole percent
+        key = (None if pct is None else round(pct), controller.title_provider())
+        cache = app.__dict__.setdefault("_glyphs", {})  # one image per whole percent and provider
         if key not in cache:
-            cache[key] = brand.glyph_image(key)
+            cache[key] = brand.status_image(*key)
         button.setImage_(cache[key])
         button.setImagePosition_(2 if has_text else 1)  # NSImageLeft / NSImageOnly
         return True

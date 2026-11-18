@@ -187,10 +187,10 @@ def test_format_title_uses_scoped_maxima_for_antigravity():
     assert menubar.format_title("a@x.io", _AGY_USAGE, s, now=0) == f"{menubar.ICON} 30% · 40%"
 
 
-def test_format_title_tag_and_no_icon():
+def test_format_title_without_icon_has_no_provider_tag():
     s = menubar.MenuBarSettings(show_account_name=False, title_pct="5h")
-    title = menubar.format_title("a@x.io", {"five_hour": {"pct": 42.0}}, s, now=0, icon=False, tag="CX")
-    assert title == "CX · 42%"
+    title = menubar.format_title("a@x.io", {"five_hour": {"pct": 42.0}}, s, now=0, icon=False)
+    assert title == "42%"
 
 
 def test_five_hour_scoped_window_is_not_rolled_weekly():

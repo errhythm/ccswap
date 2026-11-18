@@ -35,3 +35,22 @@ def test_glyph_image_is_a_template_of_the_requested_size(pct):
     img = brand.glyph_image(pct, size=22.0)
     assert img.isTemplate()
     assert (img.size().width, img.size().height) == (22.0, 22.0)
+
+
+@pytest.mark.parametrize("pid", ["claude", "codex", "agy"])
+def test_status_image_adds_the_provider_logo_in_colour(pid):
+    pytest.importorskip("AppKit")
+    plain = brand.glyph_image(40, 18)
+    img = brand.status_image(40, pid, 18)
+    assert not img.isTemplate() and img.size()[0] > plain.size()[0]  # glyph plus the logo beside it
+    assert all(brand.provider_logo(pid, dark) is not None for dark in (False, True))
+
+
+def test_codex_logo_follows_the_menu_bar_appearance():
+    assert brand._PROVIDER_LOGOS["codex"] == ("codex_light.png", "codex_dark.png")
+
+
+def test_status_image_without_a_known_provider_is_the_glyph():
+    pytest.importorskip("AppKit")
+    assert brand.status_image(40, None, 18).size()[0] == 18 and brand.status_image(40, None, 18).isTemplate()
+    assert brand.status_image(40, "unknown", 18).size()[0] == 18

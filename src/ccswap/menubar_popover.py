@@ -122,9 +122,10 @@ def dispatch(controller, body, confirm=None) -> dict | None:
             email, token = get("email"), get("token")
             if not (spec or PROVIDERS["claude"]).capabilities.add_token:
                 return bad()
-            if not (isinstance(email, str) and email and isinstance(token, str) and token):
+            # like `ccswap add-token`: the token is required, the email is an optional label
+            if not (isinstance(token, str) and token.strip()) or not (email is None or isinstance(email, str)):
                 return bad()
-            reply["ok"] = bool(controller.add_token(email, token))
+            reply["ok"] = bool(controller.add_token(email or "", token))
         elif action == "setTitleProvider":
             if not isinstance(value, str) or value not in ("auto", *PROVIDERS):
                 return bad()
@@ -310,12 +311,13 @@ def _make_shell_class():
             button = self.item.button()
             title = self.controller.title(icon=False)
             button.setTitle_(f" {title}" if title else "")
+            button.setToolTip_(f"ccswap: {self.controller.title_label()}")  # the title itself carries no provider tag
             payload = payload or self.controller.payload()
             used = tightest_used_pct(payload)
             try:
-                from ccswap.brand import glyph_image
+                from ccswap.brand import status_image
 
-                image = glyph_image(used)
+                image = status_image(used, self.controller.title_provider())
             except Exception:  # brand glyph not available yet: keep the ring
                 image = _ring_image(used)
             button.setImage_(image)

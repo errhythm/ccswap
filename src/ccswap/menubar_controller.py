@@ -62,7 +62,6 @@ from ccswap.menubar import (
     parse_switch_history,
     resolve_title_provider,
     should_surface_engine_error,
-    title_tag,
 )
 from ccswap.settings import TITLE_PCT_CHOICES, load_settings, set_setting
 from ccswap.snapshot_source import SnapshotSource
@@ -372,9 +371,6 @@ class MenuBarController:
         pid = self.title_provider()
         state = self.states.get(pid)
         adapted = (state.adapted if state else None) or EMPTY_SNAPSHOT
-        tag = None
-        if self.settings.title_provider == "auto" and pid in self.providers:
-            tag = title_tag(pid, self.providers[pid].label)
         return format_title(
             adapted["active_email"],
             adapted["active_usage"],
@@ -382,8 +378,12 @@ class MenuBarController:
             alias=adapted.get("active_alias"),
             attention=self.health()[1],
             icon=icon,
-            tag=tag,
         )
+
+    def title_label(self) -> str:
+        """Name of the provider the title shows, for the status item's tooltip."""
+        spec = self.providers.get(self.title_provider())
+        return spec.label if spec else "ccswap"
 
     def history(self) -> list[str]:
         try:
@@ -598,10 +598,43 @@ class MenuBarController:
         return self._done(provider_id)
 
     def add_login(self, provider_id: str) -> bool:
+        """``ccswap add`` (or ``ccswap <provider> add``) for the provider's current login.
+
+        The switcher reports its outcome by printing, which a menu bar never
+        shows, so compare the account list before and after and say what happened.
+        """
         sw = self._usable(provider_id)
-        if sw is None or not self._guard(sw.add_account):
+        if sw is None:
             return False
+        before = self._accounts_now(sw)
+        if not self._guard(sw.add_account):
+            return False
+        after = self._accounts_now(sw)
+        label = self.providers[provider_id].label
+        added = [n for n in after if n not in before]
+        if added:
+            self.notify(APP, f"{label}: account {added[0]} added", after[added[0]])
+        else:
+            active = self._active_number(sw)
+            if active in after:
+                self.notify(APP, f"{label}: already account {active}", f"Saved login refreshed for {after[active]}")
         return self._done(provider_id)
+
+    @staticmethod
+    def _accounts_now(sw) -> dict[str, str]:
+        """Number -> email from the local store, without touching the network."""
+        try:
+            snap = sw.accounts_snapshot(fetch=set())
+        except Exception:  # noqa: BLE001 - only used to word the notification
+            return {}
+        return {acc.number: acc.email for acc in snap.accounts}
+
+    @staticmethod
+    def _active_number(sw) -> str | None:
+        try:
+            return sw.accounts_snapshot(fetch=set()).active_number
+        except Exception:  # noqa: BLE001
+            return None
 
     def add_token(self, email: str, token: str) -> bool:
         """Add a Claude account from a setup-token; the token is never logged."""
@@ -610,7 +643,7 @@ class MenuBarController:
         if sw is None or not hasattr(sw, "add_account_from_token"):
             return False
         if not self._guard(lambda: sw.add_account_from_token(
-            token=token.strip(), email=email.strip(), slot=None
+            token=token.strip(), email=email.strip() or None, slot=None
         )):
             return False
         return self._done("claude")

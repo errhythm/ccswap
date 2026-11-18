@@ -525,13 +525,6 @@ def title_usage_pct(usage: dict | str | None) -> float | None:
     return max(scoped) if scoped else None
 
 
-TITLE_TAGS = {"claude": "CC", "codex": "CX", "agy": "AG"}
-
-
-def title_tag(provider_id: str, label: str) -> str:
-    """Short prefix naming the provider in an ``auto`` title."""
-    return TITLE_TAGS.get(provider_id) or label[:2].upper()
-
 
 def resolve_title_provider(setting: str, actives: dict[str, dict | str | None]) -> str:
     """The provider whose numbers the title shows.
@@ -560,14 +553,12 @@ def format_title(
     *,
     attention: bool = False,
     icon: bool = True,
-    tag: str | None = None,
 ) -> str:
     """Build the menu-bar title from the active account and settings.
 
     ``attention`` prefixes a warning sign: auto-switch is enabled but not
     running, which the closed menu would otherwise never show. ``icon=False``
     drops the text icon (the popover shell draws a ring image instead).
-    ``tag`` names the provider when the title provider is ``auto``.
     """
     mark = ICON if icon else ""
     icon = (f"⚠ {mark}" if attention else mark).strip()
@@ -575,7 +566,7 @@ def format_title(
         return icon
     if now is None:
         now = time.time()
-    segments: list[str] = [tag] if tag else []
+    segments: list[str] = []
     if settings.show_account_name:
         segments.append(alias if alias else _local_part(active_email))
     if isinstance(active_usage, dict) and isinstance(active_usage.get("rejected"), dict):

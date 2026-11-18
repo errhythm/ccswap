@@ -470,12 +470,14 @@ def test_title_provider_follows_setting_including_auto(env):
     ctl.settings.title_provider = "codex"
     assert ctl.title_provider() == "codex"
     ctl.settings.title_provider = "auto"
-    # claude's active account (1) reads 20%, codex's 60%: auto picks codex and tags the title
+    # claude's active account (1) reads 20%, codex's 60%: auto picks codex; the title carries
+    # no provider tag, the tooltip names it instead
     assert ctl.title_provider() == "codex"
-    assert ctl.title().startswith(f"{menubar.ICON} CX")
+    assert ctl.title() == f"{menubar.ICON} c · 50% · 60%"
+    assert ctl.title_label() == "Codex"
     assert ctl.payload()["title"]["resolved"] == "codex"
     ctl.settings.title_provider = "claude"
-    assert "CX" not in ctl.title()
+    assert ctl.title_label() == "Claude Code"
 
 
 def test_set_display_rejects_bogus_and_persists(env):
@@ -561,3 +563,18 @@ def test_payload_carries_plan_and_strategy(env):
     p = refreshed(env).payload()
     assert p["settings"]["strategy"] in ("best", "consume-first")
     assert all("plan" in a for prov in p["providers"] for a in prov["accounts"])
+
+
+def test_add_login_says_what_happened(env):
+    ctl = refreshed(env)
+    sw = env.sw["codex"]
+    # already managed: the store doesn't change, so the notification says which account it is
+    sw.add_account = lambda: None
+    assert ctl.add_login("codex") is True
+    assert any("already account 1" in n[1] for n in env.notes)
+    # a new account appears in the store after add_account runs
+    def add():
+        sw.snapshot = snap((1, "c@x.com", usage(50, 60, "weekly")), (2, "new@x.com", None))
+    sw.add_account = add
+    assert ctl.add_login("codex") is True
+    assert any("account 2 added" in n[1] and n[2] == "new@x.com" for n in env.notes)

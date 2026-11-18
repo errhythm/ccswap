@@ -159,3 +159,18 @@ def test_page_has_no_inline_style_or_remote_urls():
         text = (web / name).read_text()
         assert not re.search(r"https?://(?!www\.w3\.org)", text), name
     assert " style=" not in (web / "index.html").read_text()
+
+
+def test_add_token_email_is_optional_like_the_cli():
+    calls = []
+
+    class C:
+        def add_token(self, email, token):
+            calls.append((email, token))
+            return True
+
+    assert mp.dispatch(C(), {"action": "addToken", "token": "sk-ant-oat01-x"})["ok"] is True
+    assert mp.dispatch(C(), {"action": "addToken", "token": "sk-ant-oat01-y", "email": "a@x.io"})["ok"] is True
+    assert mp.dispatch(C(), {"action": "addToken", "token": "  "})["ok"] is False
+    assert mp.dispatch(C(), {"action": "addToken", "token": "t", "email": 5})["ok"] is False
+    assert calls == [("", "sk-ant-oat01-x"), ("a@x.io", "sk-ant-oat01-y")]
