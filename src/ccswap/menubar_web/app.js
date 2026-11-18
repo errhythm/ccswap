@@ -1,11 +1,15 @@
 "use strict";
 // Page for the ccswap menu bar popover. All user strings go through textContent.
+// The logos in logos/ are the providers' own marks, used only to identify the service.
 (function () {
-  const ACCENT = { claude: "--claude", codex: "--codex", agy: "--antigravity" };
+  const COLORS = { claude: "#E07A5F", codex: "#C9C6C1", agy: "#7FA8FF" };
+  const LOGOS = { claude: "logos/claude-ai-icon.svg", agy: "logos/antigravity.svg" };
   const TITLE_PCT = ["off", "5h", "7d", "both"];
+  const REFRESH = [15, 30, 60, 120, 300, 600];
+  const dark = window.matchMedia("(prefers-color-scheme: dark)");
   let data = null;
-  let tab = "overview";
-  let pending = null; // {provider, number}: switch awaiting a second click
+  let tab = "overview"; // "overview" | "settings" | provider id
+  let pending = null; // {key}: switch awaiting a second click
   let note = null; // {text, until}: reply note (restart hint, errors)
   let dirty = false;
 
@@ -24,72 +28,159 @@
     return el;
   }
   const svgNS = "http://www.w3.org/2000/svg";
-  function svg(tag, attrs) {
+  function svg(tag, attrs, ...kids) {
     const el = document.createElementNS(svgNS, tag);
-    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+    for (const kid of kids) if (kid != null) el.append(kid);
     return el;
   }
 
+  const ICONS = {
+    refresh: [["path", { d: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" }]],
+    settings: [["path", { d: "M4 7h9M17 7h3M4 17h3M11 17h9" }], ["circle", { cx: 15, cy: 7, r: 2 }], ["circle", { cx: 9, cy: 17, r: 2 }]],
+    power: [["path", { d: "M12 3v8M7 6.3a8 8 0 1 0 10 0" }]],
+    back: [["path", { d: "M15 5l-7 7 7 7" }]],
+  };
+  const icon = (name) => svg("svg", { viewBox: "0 0 24 24" }, ...ICONS[name].map(([t, a]) => svg(t, a)));
+
   const level = (pct) => (pct >= 90 ? "bad" : pct >= 70 ? "warn" : "ok");
   const round = (n) => Math.round(n);
+  const label = (acct) => acct.alias || acct.email || `#${acct.number}`;
+  const hhmm = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
-  function countdown(iso) {
-    if (!iso) return "";
-    const ms = Date.parse(iso) - Date.now();
-    if (!isFinite(ms)) return "";
-    if (ms <= 0) return "resetting";
+  function dur(ms) {
     const m = Math.floor(ms / 60000);
     const d = Math.floor(m / 1440), hr = Math.floor((m % 1440) / 60);
     if (d) return `${d}d ${hr}h`;
     return hr ? `${hr}h ${m % 60}m` : `${m}m`;
   }
-
-  function windowsOf(acct) {
-    return Array.isArray(acct.windows) ? acct.windows : [];
+  function countdown(iso) {
+    const ms = iso ? Date.parse(iso) - Date.now() : NaN;
+    if (!isFinite(ms)) return "";
+    return ms <= 0 ? "resetting" : dur(ms);
   }
-  // Account-wide windows when there are any, else every window (Antigravity is scoped only).
-  function mainWindows(acct) {
-    const w = windowsOf(acct);
-    const wide = w.filter((x) => !x.scope);
-    return wide.length ? wide : w;
-  }
-  function tightest(acct) {
-    const w = mainWindows(acct).filter((x) => typeof x.pct === "number");
-    return w.length ? w.reduce((a, b) => (b.pct > a.pct ? b : a)) : null;
+  function clock(iso) {
+    const t = Date.parse(iso);
+    if (!isFinite(t)) return "";
+    const d = new Date(t);
+    return t - Date.now() > 20 * 3600000 ? `${d.toLocaleDateString([], { weekday: "short" })} ${hhmm(d)}` : hhmm(d);
   }
 
-  function ring(pct, size) {
-    const r = size / 2 - 5, c = 2 * Math.PI * r;
-    const used = pct == null ? 0 : Math.min(100, Math.max(0, pct));
-    const box = h("div", { class: "ring " + (pct == null ? "" : level(pct)), style: `width:${size}px;height:${size}px` });
-    const s = svg("svg", { width: size, height: size });
-    s.append(svg("circle", { cx: size / 2, cy: size / 2, r, fill: "none", stroke: "var(--track)", "stroke-width": 5 }));
-    s.append(svg("circle", {
-      cx: size / 2, cy: size / 2, r, fill: "none", stroke: pct == null ? "none" : "var(--level)",
-      "stroke-width": 5, "stroke-linecap": "round", "stroke-dasharray": `${(c * used) / 100} ${c}`,
-    }));
-    box.append(s, h("b", { text: pct == null ? "–" : `${round(pct)}%` }));
+  // --- window model: every window tagged 5h/wk and account-wide vs per-model ---
+  function norm(w, model, kind) {
+    const short = w.durationS ? w.durationS <= 21600 : /5h/i.test(`${w.id} ${w.label}`);
+    return { w, model, kind: kind || (short ? "5h" : "wk"), label: w.label || w.id || "" };
+  }
+  function wins(acct) {
+    const out = (Array.isArray(acct.windows) ? acct.windows : []).map((w) => norm(w, !!w.scope));
+    if (!out.some((x) => x.model)) { // Claude lists per-model limits under usage.scoped
+      for (const s of (acct.usage && acct.usage.scoped) || []) {
+        out.push(norm(Object.assign({}, s, { label: s.window ? s.name : `Weekly · ${s.name}` }), true, s.window === "5h" ? "5h" : "wk"));
+      }
+    }
+    return out;
+  }
+  // Highest pct of a kind; account-wide windows win unless there are none (Antigravity is all scoped).
+  function pick(ws, kind) {
+    const k = ws.filter((x) => x.kind === kind && typeof x.w.pct === "number");
+    const wide = k.filter((x) => !x.model);
+    const pool = wide.length ? wide : k;
+    return pool.length ? pool.reduce((a, b) => (b.w.pct > a.w.pct ? b : a)) : null;
+  }
+  function tight(acct) {
+    const ws = wins(acct);
+    const a = pick(ws, "5h"), b = pick(ws, "wk");
+    return [a, b].filter(Boolean).reduce((x, y) => (!x || y.w.pct > x.w.pct ? y : x), null);
+  }
+  function runsOut(w) {
+    const pe = Date.parse(w.projectedExhaustionAt), rs = Date.parse(w.resetsAt);
+    return isFinite(pe) && isFinite(rs) && pe < rs && w.willLastToReset !== true ? { at: w.projectedExhaustionAt, before: rs - pe } : null;
+  }
+  const kindName = (x) => (x.kind === "5h" ? "5h" : "Weekly");
+  function lasts(w) {
+    return w.willLastToReset === true ? " · lasts to reset" : "";
+  }
+
+  // --- logos ---
+  function logoSrc(id) {
+    return id === "codex" ? (dark.matches ? "logos/codex_dark.svg" : "logos/codex_light.svg") : LOGOS[id];
+  }
+  const colorOf = (id) => COLORS[id] || "var(--neutral)";
+  function logo(id) {
+    const src = logoSrc(id);
+    return src ? h("img", { src, alt: "" }) : h("span", { class: "dot", style: `background:${colorOf(id)}` });
+  }
+  const ltile = (id, sm) => h("span", { class: "ltile" + (sm ? " sm" : "") }, logo(id));
+  const accent = (el, id) => { el.style.setProperty("--accent", colorOf(id)); return el; };
+  const planOf = (prov) => {
+    const a = (prov.accounts || []).find((x) => x.active);
+    const p = (a && (a.plan || a.planType)) || prov.plan;
+    return typeof p === "string" && p ? p : null;
+  };
+
+  // --- tooltip + rings ---
+  const tip = () => document.getElementById("tip");
+  function showTip(x, ev) {
+    const w = x.w, t = tip();
+    const name = x.kind === "5h" ? (x.model ? x.label : "5-hour session") : (x.model ? x.label : "Weekly · all models");
+    const ro = runsOut(w);
+    const line = w.resetsAt
+      ? `Resets in ${countdown(w.resetsAt)} · ${clock(w.resetsAt)}${lasts(w)}${ro ? ` · runs out ~${clock(ro.at)}` : ""}`
+      : "No active window";
+    t.replaceChildren(h("b", { class: level(w.pct), text: `${name}` }), h("b", { class: level(w.pct), text: `${round(w.pct)}%` }), h("div", { text: line }));
+    t.style.display = "block";
+    moveTip(ev);
+  }
+  function moveTip(ev) {
+    const t = tip();
+    const x = Math.max(6, Math.min(ev.clientX + 10, window.innerWidth - t.offsetWidth - 6));
+    const y = Math.max(6, Math.min(ev.clientY + 26, window.innerHeight - t.offsetHeight - 6));
+    t.style.left = x + "px";
+    t.style.top = y + "px";
+  }
+
+  // outer = weekly, inner = 5h; each arc is its own element with a wider invisible hit area
+  function ring(outer, inner) {
+    const S = 46, C = S / 2;
+    const box = h("div", { class: "ring" });
+    const s = svg("svg", { viewBox: `0 0 ${S} ${S}` });
+    const centre = h("div", { class: "c" });
+    const best = [outer, inner].filter(Boolean).reduce((a, b) => (!a || b.w.pct > a.w.pct ? b : a), null);
+    const setCentre = (x, text) => {
+      centre.className = "c " + (x ? level(x.w.pct) : "");
+      centre.style.color = x ? "var(--level)" : "";
+      centre.replaceChildren(x ? `${round(x.w.pct)}%` : "–", h("small", { text: x ? text : "" }));
+    };
+    const rest = () => { box.className = "ring"; setCentre(best, best ? (best.kind === "5h" ? "5h" : "wk") : ""); tip().style.display = "none"; };
+    const arcs = [];
+    for (const [x, r, cls, sw, cls2, word] of [[outer, 20.5, "out", 3.5, "ho", "weekly"], [inner, 14.5, "in", 3.5, "hi", "5h"]]) {
+      s.append(svg("circle", { class: "t", cx: C, cy: C, r, "stroke-width": sw }));
+      if (!x) continue;
+      const used = Math.min(100, Math.max(0, x.w.pct));
+      const visible = used > 0; // a round cap would paint a dot at 0%
+      const arc = svg("circle", { class: `a ${cls} ${level(x.w.pct)}`, cx: C, cy: C, r, "stroke-width": sw, pathLength: 100,
+        "stroke-dasharray": `${Math.max(used, 2)} 100`, visibility: visible ? "visible" : "hidden" });
+      const hit = svg("circle", { class: "hit", cx: C, cy: C, r });
+      hit.addEventListener("mouseenter", (ev) => { box.className = "ring " + cls2; setCentre(x, word); showTip(x, ev); });
+      hit.addEventListener("mousemove", moveTip);
+      hit.addEventListener("mouseleave", rest);
+      arcs.push(arc, hit);
+    }
+    s.append(...arcs);
+    box.append(s, centre);
+    setCentre(best, best ? (best.kind === "5h" ? "5h" : "wk") : "");
     return box;
   }
 
-  function bar(pct) {
-    const i = h("i", { style: `width:${Math.min(100, Math.max(0, pct || 0))}%;background:var(--level)` });
-    return h("div", { class: "bar " + level(pct || 0) }, i);
+  function bar(pct, notch) {
+    const kids = [h("i", { style: `width:${Math.min(100, Math.max(0, pct || 0))}%` })];
+    if (typeof notch === "number") kids.push(h("b", { style: `left:${Math.min(100, Math.max(0, notch))}%` }));
+    return h("div", { class: "bar " + level(pct || 0) }, ...kids);
   }
-
-  function fullWindow(w) {
-    const reset = h("span", { class: "muted", "data-reset": w.resetsAt || "", text: countdown(w.resetsAt) });
-    return h("div", { class: "win " + level(w.pct || 0) },
-      h("div", { class: "head" }, h("span", { text: w.label || w.id }), h("span", { text: `${round(w.pct || 0)}%` })),
-      bar(w.pct),
-      reset);
-  }
-
-  const label = (acct) => acct.alias || acct.email || `#${acct.number}`;
-
-  function accent(el, prov) {
-    el.style.setProperty("--accent", `var(${ACCENT[prov.id] || "--muted"})`);
-    return el;
+  const chipWarn = (text) => h("span", { class: "chip warn" }, h("i"), text);
+  function runsOutChip(w) {
+    const ro = runsOut(w);
+    return ro ? chipWarn(`Runs out ~${clock(ro.at)} · ${dur(ro.before)} before the reset`) : null;
   }
 
   function doSwitch(prov, acct) {
@@ -102,190 +193,280 @@
     pending = null;
     post({ action: "switch", provider: prov.id, number: acct.number });
   }
-
   function switchButton(prov, acct) {
     if (!prov.capabilities.switch || acct.active) return null;
     const armed = pending && pending.key === prov.id + ":" + acct.number;
-    return h("button", { text: armed ? "Restart sessions? Confirm" : "Switch", class: armed ? "on" : "",
-      onclick: () => doSwitch(prov, acct) });
+    return h("button", { class: "btn" + (armed ? " on" : ""), text: armed ? "Restart sessions? Confirm" : "Switch",
+      onclick: (e) => { e.stopPropagation(); doSwitch(prov, acct); } });
   }
 
-  function compactRow(prov, acct) {
-    const t = tightest(acct);
-    return h("div", { class: "row" + (acct.active ? " active" : "") },
-      h("span", { class: "name", text: label(acct) + (acct.disabled ? " (disabled)" : "") }),
-      t ? h("span", { class: "muted", "data-reset": t.resetsAt || "", text: countdown(t.resetsAt) }) : null,
-      h("span", { text: t ? `${round(t.pct)}%` : "–" }),
-      switchButton(prov, acct));
+  function miniBars(acct) {
+    const ws = wins(acct);
+    const a = pick(ws, "5h"), b = pick(ws, "wk");
+    const line = (name, x) => [h("span", { text: name }), x ? bar(x.w.pct) : h("div", { class: "bar" })];
+    return h("div", { class: "mini2" }, ...line("5h", a), ...line("wk", b));
+  }
+  function otherRow(prov, acct) {
+    const caps = prov.capabilities;
+    const manage = caps.disable && tab === prov.id;
+    const row = h("div", { class: "acct" },
+      h("span", { class: "em", title: label(acct), text: label(acct) + (acct.disabled ? " (disabled)" : "") }),
+      miniBars(acct), switchButton(prov, acct));
+    if (!manage) return row;
+    return h("div", {}, row, h("div", { class: "actions" },
+      h("button", { class: "btn", text: acct.disabled ? "Enable" : "Disable",
+        onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: acct.number, disabled: !acct.disabled }) }),
+      h("button", { class: "btn", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: acct.number }) })));
   }
 
-  function autoPill(prov) {
-    if (!prov.capabilities.autoSwitch || !prov.autoSwitch) return null;
-    const on = prov.autoSwitch.enabled;
-    return h("button", { class: on ? "on" : "", title: prov.autoSwitch.failure || "Auto-switch",
-      text: "Auto " + (on ? "on" : "off"),
-      onclick: () => post({ action: "toggleAuto", provider: prov.id, enabled: !on }) });
+  function autoOn(prov) { return !!(prov.autoSwitch && prov.autoSwitch.enabled); }
+  function autoChip(text, onclick) {
+    return h(onclick ? "button" : "span", { class: "chip", onclick }, h("i"), text);
   }
-
   function failureRow(prov) {
     const f = prov.autoSwitch && prov.autoSwitch.failure;
     if (!f) return null;
     return h("div", { class: "actions" }, h("span", { class: "err", text: f }),
-      h("button", { text: "Restart", onclick: () => post({ action: "restartEngine", provider: prov.id }) }));
+      h("button", { class: "btn", text: "Restart", onclick: () => post({ action: "restartEngine", provider: prov.id }) }));
   }
 
   function overviewCard(prov) {
-    const card = accent(h("section", { class: "card" }), prov);
-    card.append(h("h3", {}, h("span", { class: "dot" }), h("span", { text: prov.label }),
-      h("span", { class: "spacer" }), prov.refreshing ? h("span", { class: "muted", text: "refreshing" }) : null,
-      autoPill(prov)));
+    const card = accent(h("section", { class: "pcard", onclick: () => { tab = prov.id; pending = null; draw(); } }), prov.id);
+    const active = (prov.accounts || []).find((a) => a.active);
+    const ws = active ? wins(active) : [];
+    const outer = pick(ws, "wk"), inner = pick(ws, "5h");
+    const bind = tight(active || { windows: [] });
+    const plan = planOf(prov);
+    let sub = prov.refreshing ? "refreshing" : "No active account";
+    if (bind) sub = `${bind.model && bind.kind === "wk" ? bind.label : kindName(bind)}` + (bind.w.resetsAt
+      ? ` resets in ${countdown(bind.w.resetsAt)} · ${clock(bind.w.resetsAt)}${lasts(bind.w)}` : " · no active window");
+    card.append(h("div", { class: "head" }, ltile(prov.id),
+      h("div", { class: "meta" },
+        h("div", { class: "name" }, h("span", { text: prov.label }), plan ? h("span", { class: "chip plan", text: plan }) : null),
+        h("div", { class: "sub", text: sub })),
+      outer || inner ? ring(outer, inner) : null));
     if (prov.error) card.append(h("div", { class: "err", text: prov.error }));
     const fail = failureRow(prov);
     if (fail) card.append(fail); // append(null) would print "null"
-    const accounts = prov.accounts || [];
-    const active = accounts.find((a) => a.active);
+    if (active && active.note) card.append(h("div", { class: "note", text: active.note }));
+    const chip = bind && runsOutChip(bind.w);
+    if (chip) card.append(h("div", { class: "actions" }, chip));
     if (active) {
-      const t = tightest(active);
-      card.append(h("div", { class: "big" }, ring(t ? t.pct : null, 56),
-        h("div", {}, h("div", { text: label(active) }),
-          h("div", { class: "muted", "data-reset": t ? t.resetsAt || "" : "", text: t ? `${t.label} resets ${countdown(t.resetsAt)}` : "" }),
-          active.note ? h("div", { class: "note", text: active.note }) : null)));
-    } else if (!prov.error) card.append(h("div", { class: "muted", text: "No active account" }));
-    for (const a of accounts.filter((x) => !x.active)) card.append(compactRow(prov, a));
+      const others = (prov.accounts || []).filter((x) => !x.active);
+      if (!others.length) card.append(h("div", { class: "acct" }, h("span", { class: "em", text: label(active) })));
+      for (const a of others) card.append(otherRow(prov, a));
+    } else for (const a of prov.accounts || []) card.append(otherRow(prov, a));
     return card;
   }
 
+  // --- provider detail ---
+  function winBlock(x) {
+    const w = x.w;
+    const name = x.model ? x.label : kindName(x);
+    const wrap = h("div", { class: "win " + level(w.pct || 0) + (x.model ? " model" : "") },
+      h("div", { class: "l" },
+        h("span", { class: "n" }, name, x.model ? h("small", { text: "per-model" }) : (x.kind === "wk" ? h("small", { text: "all models" }) : null)),
+        h("span", { style: "color:var(--level);font-weight:600", text: `${round(w.pct || 0)}%` })),
+      bar(w.pct, w.expectedPct),
+      w.resetsAt ? h("div", { class: "muted", text: `Resets in ${countdown(w.resetsAt)} · ${clock(w.resetsAt)}` }) : null);
+    if (typeof w.expectedPct === "number" && !x.model) {
+      const d = round(w.pct - w.expectedPct);
+      const ro = runsOut(w);
+      wrap.append(h("div", { class: "pace" + (w.aheadOfPace ? " ahead" : ""),
+        text: (w.aheadOfPace ? `Pace: ahead +${d} pts` : `Pace: ${Math.abs(d)} pts under budget`)
+          + (ro ? ` · runs out ~${clock(ro.at)}` : lasts(w)) }));
+    }
+    return wrap;
+  }
+
+  function item(sym, text, onclick) {
+    return h("button", { class: "item", onclick }, h("span", { text: sym }), h("span", { text }));
+  }
+
   function providerTab(prov) {
-    const wrap = accent(h("div", {}), prov);
     const caps = prov.capabilities;
+    const wrap = accent(h("div", {}), prov.id);
+    const active = (prov.accounts || []).find((a) => a.active);
+    const ws = active ? wins(active) : [];
     if (prov.error) wrap.append(h("div", { class: "card err", text: prov.error }));
     const fail = failureRow(prov);
     if (fail) wrap.append(h("div", { class: "card" }, fail));
-    for (const a of prov.accounts || []) {
-      const card = h("section", { class: "card" });
-      card.append(h("h3", {}, h("span", { text: label(a) }), h("span", { class: "spacer" }),
-        a.active ? h("span", { class: "muted", text: "active" }) : null, switchButton(prov, a)));
-      if (a.note) card.append(h("div", { class: "note", text: a.note }));
-      if (a.loginNote) card.append(h("div", { class: "muted", text: a.loginNote }));
-      for (const w of windowsOf(a)) card.append(fullWindow(w));
-      if (caps.disable) {
-        card.append(h("div", { class: "actions" },
-          h("button", { text: a.disabled ? "Enable" : "Disable",
-            onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: a.number, disabled: !a.disabled }) }),
-          h("button", { text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: a.number }) })));
+    if (active) {
+      const age = typeof active.usageAgeSeconds === "number" ? `checked ${dur(active.usageAgeSeconds * 1000) || "0m"} ago` : "";
+      wrap.append(h("div", { class: "row" }, h("span", { class: "em", text: label(active) + (active.disabled ? " (disabled)" : "") }),
+        h("span", { class: "chip active", text: "ACTIVE" }), h("span", { class: "muted", text: age })));
+      if (active.note) wrap.append(h("div", { class: "note", text: active.note }));
+      if (active.loginNote) wrap.append(h("div", { class: "muted", text: active.loginNote }));
+      const hero = pick(ws, "5h") || pick(ws, "wk");
+      if (hero) {
+        const w = hero.w;
+        const card = h("section", { class: "card hero big " + level(w.pct) });
+        card.append(h("div", { class: "head" },
+          h("div", { class: "meta" }, h("div", { class: "name", text: hero.model ? hero.label : hero.kind === "5h" ? "Session" : "Weekly" }),
+            h("div", { class: "sub", text: hero.kind === "5h" ? "5-hour window" : "weekly window" })),
+          h("div", { class: "pct" }, `${round(w.pct)}`, h("small", { text: "%" }))));
+        card.append(h("div", { style: "margin:10px 0 6px" }, bar(w.pct, w.expectedPct)));
+        if (w.resetsAt) card.append(h("div", { class: "muted", text: `Resets in ${countdown(w.resetsAt)} · ${clock(w.resetsAt)}` }));
+        const chip = runsOutChip(w);
+        if (chip) card.append(h("div", { class: "actions" }, chip));
+        wrap.append(card);
       }
-      wrap.append(card);
+      const rest = ws.filter((x) => x !== hero).sort((a, b) => (a.model - b.model) || (a.kind === b.kind ? 0 : a.kind === "wk" ? -1 : 1));
+      if (rest.length) wrap.append(h("section", { class: "card" }, ...rest.map(winBlock)));
     }
-    const bottom = h("div", { class: "actions" });
+    const others = (prov.accounts || []).filter((a) => !a.active);
+    if (others.length) wrap.append(h("section", { class: "card" }, h("div", { class: "sect", text: "Other accounts" }), ...others.map((a) => otherRow(prov, a))));
+    if (prov.addToken) wrap.append(h("section", { class: "card" }, tokenForm(prov)));
+
+    const list = h("section", { class: "card list" });
+    const strategies = caps.strategies || [];
     // No strategy key: the page sends a plain rotation (the shell reads it as None).
-    if ((caps.strategies || []).length) bottom.append(h("button", { text: "Next account", onclick: () => post({ action: "rotate", provider: prov.id }) }));
-    if (prov.id === "claude") bottom.append(h("button", { text: "Refresh credentials", onclick: () => post({ action: "refreshCreds" }) }));
-    for (const s of caps.strategies || []) {
-      bottom.append(h("button", { text: s, onclick: () => post({ action: "rotate", provider: prov.id, strategy: s }) }));
+    if (strategies.length) list.append(item("→", "Next account", () => post({ action: "rotate", provider: prov.id })));
+    for (const s of strategies) {
+      list.append(item("✦", s === "best" ? "Switch to best" : `Switch: ${s}`, () => post({ action: "rotate", provider: prov.id, strategy: s })));
     }
-    bottom.append(h("button", { text: "Add account", onclick: () => post({ action: "addLogin", provider: prov.id }) }));
-    if (prov.addToken) bottom.append(tokenForm(prov));
-    const auto = autoPill(prov);
-    if (auto) bottom.append(auto, h("button", { text: "Restart engine", onclick: () => post({ action: "restartEngine", provider: prov.id }) }));
-    wrap.append(h("div", { class: "card" }, bottom));
+    if (prov.id === "claude") list.append(item("↻", "Refresh credentials", () => post({ action: "refreshCreds" })));
+    list.append(item("+", "Add account…", () => post({ action: "addLogin", provider: prov.id })));
+    if (caps.autoSwitch && prov.autoSwitch) list.append(item("⟳", "Restart engine", () => post({ action: "restartEngine", provider: prov.id })));
+    if (active && caps.disable) {
+      list.append(item("⏸", active.disabled ? "Enable account" : "Disable account",
+        () => post({ action: "toggleDisabled", provider: prov.id, number: active.number, disabled: !active.disabled })));
+      list.append(item("✕", "Remove account", () => post({ action: "remove", provider: prov.id, number: active.number })));
+    }
+    wrap.append(list);
     return wrap;
   }
 
   function tokenForm(prov) {
     const email = h("input", { type: "email", placeholder: "email", autocomplete: "off" });
     const token = h("input", { type: "password", placeholder: "token", autocomplete: "off" });
-    return h("div", { class: "actions" }, email, token, h("button", { text: "Add token", onclick: () => {
+    return h("div", { class: "actions" }, email, token, h("button", { class: "btn", text: "Add token", onclick: () => {
       if (!email.value || !token.value) return;
       post({ action: "addToken", provider: prov.id, email: email.value, token: token.value });
       token.value = "";
     } }));
   }
 
-  function toggle(text, on, action, extra) {
-    return h("label", { class: "set" }, h("span", { text }),
-      h("button", { class: on ? "on" : "", text: on ? "On" : "Off",
-        onclick: () => post(Object.assign({ action }, extra || { value: !on })) }));
+  // --- settings ---
+  function setRow(text, sub, control, stacked) {
+    return h("div", { class: "set" + (stacked ? " col" : "") },
+      h("div", { class: "tx" }, h("span", { text }), sub ? h("small", { text: sub }) : null), control);
   }
-
-  function select(text, options, current, action) {
+  function sw(on, onclick) {
+    return h("button", { class: "sw", role: "switch", "aria-checked": on ? "true" : "false", onclick });
+  }
+  function seg(options, current, onpick, full) {
+    return h("div", { class: "seg" + (full ? " full" : "") }, options.map(([v, text, id]) =>
+      h("button", { class: v === current ? "sel" : "", onclick: () => onpick(v) }, id ? logo(id) : null, text)));
+  }
+  function selectRow(text, options, current, action) {
     const sel = h("select", {}, options.map(([v, l]) => h("option", { value: v, text: l, selected: v === current })));
-    sel.addEventListener("change", () => post({ action, value: sel.value }));
-    return h("label", { class: "set" }, h("span", { text }), sel);
+    sel.addEventListener("change", () => post({ action, value: Number(sel.value) }));
+    return setRow(text, null, sel);
   }
-
-  function numberInput(text, value, action, min, max) {
-    const input = h("input", { type: "number", min, max, value });
-    input.addEventListener("change", () => {
-      const n = Number(input.value);
-      if (Number.isFinite(n)) post({ action, value: n });
-    });
-    return h("label", { class: "set" }, h("span", { text }), input);
+  function group(title, ...rows) {
+    return h("div", {}, h("div", { class: "sect", text: title }), h("section", { class: "card" }, ...rows));
   }
 
   function settingsTab() {
     const s = data.settings;
-    const wrap = h("div", { class: "card" });
-    wrap.append(h("h4", { text: "Menu bar title" }));
-    wrap.append(select("Provider", [["auto", "Auto (fullest)"]].concat(data.providers.map((p) => [p.id, p.label])),
-      data.title.setting, "setTitleProvider"));
-    wrap.append(select("Percentages", TITLE_PCT.map((v) => [v, v]), s.titlePct, "setTitlePct"));
-    wrap.append(toggle("Account name", s.showAccountName, "toggleName"));
-    wrap.append(toggle("Scoped limits", s.titleScoped, "toggleScoped"));
-    wrap.append(h("h4", { text: "Behavior" }));
-    wrap.append(numberInput("Refresh every (s)", s.refreshInterval, "setInterval", 10, 3600));
-    wrap.append(numberInput("Auto-switch threshold (%)", s.threshold, "setThreshold", 1, 100));
-    wrap.append(select("Style", [["popover", "Popover"], ["classic", "Classic menu"]], s.style, "setStyle"));
-    for (const p of data.providers.filter((x) => x.capabilities.autoSwitch && x.autoSwitch)) {
-      wrap.append(toggle(`Auto-switch: ${p.label}`, p.autoSwitch.enabled, "toggleAuto",
-        { provider: p.id, enabled: !p.autoSwitch.enabled }));
-    }
+    const wrap = h("div", {});
+    wrap.append(group("Menu bar title",
+      setRow("Show", "Auto follows the account closest to its limit",
+        seg([["auto", "Auto"]].concat(data.providers.map((p) => [p.id, p.label.split(" ")[0], p.id])), data.title.setting,
+          (v) => post({ action: "setTitleProvider", value: v }), true), true),
+      setRow("Percentages", null, seg(TITLE_PCT.map((v) => [v, v === "both" ? "Both" : v === "off" ? "Off" : v]), s.titlePct,
+        (v) => post({ action: "setTitlePct", value: v }))),
+      setRow("Account name", null, sw(s.showAccountName, () => post({ action: "toggleName", value: !s.showAccountName }))),
+      setRow("Per-model limits", "e.g. Fable", sw(s.titleScoped, () => post({ action: "toggleScoped", value: !s.titleScoped })))));
+    const capable = data.providers.filter((x) => x.capabilities.autoSwitch && x.autoSwitch);
+    wrap.append(group("Auto-switch",
+      ...capable.map((p) => setRow(p.label, null, sw(p.autoSwitch.enabled,
+        () => post({ action: "toggleAuto", provider: p.id, enabled: !p.autoSwitch.enabled })))),
+      (() => {
+        const out = h("span", { class: "muted", text: `${round(s.threshold)}%` });
+        const rng = h("input", { type: "range", min: 1, max: 100, value: round(s.threshold) });
+        rng.addEventListener("input", () => { out.textContent = `${rng.value}%`; });
+        rng.addEventListener("change", () => post({ action: "setThreshold", value: Number(rng.value) }));
+        return setRow("Switch at", null, h("div", { class: "row" }, rng, out));
+      })()));
     const ci = s.claudeIntegrations || {};
-    for (const key of Object.keys(ci)) wrap.append(toggle(`Claude ${key}`, ci[key], "toggleIntegration", { key }));
-    wrap.append(h("h4", { text: "Switch history" }));
+    const names = { statusline: "Claude Code statusline", mod: "Claude Code mod" };
+    const iv = REFRESH.includes(s.refreshInterval) ? REFRESH : REFRESH.concat(s.refreshInterval).sort((a, b) => a - b);
+    wrap.append(group("General",
+      selectRow("Refresh every", iv.map((v) => [v, `${v} s`]), s.refreshInterval, "setInterval"),
+      setRow("Style", null, seg([["popover", "Popover"], ["classic", "Classic"]], s.style, (v) => post({ action: "setStyle", value: v }))),
+      ...Object.keys(ci).map((key) => setRow(names[key] || `Claude ${key}`, null, sw(ci[key], () => post({ action: "toggleIntegration", key }))))));
     const lines = Array.isArray(data.history) ? data.history : [];
-    for (const l of lines) wrap.append(h("div", { class: "muted", text: l }));
-    if (!lines.length) wrap.append(h("div", { class: "muted", text: "No switches logged yet" }));
-    wrap.append(h("div", { class: "actions" }, h("button", { text: "Open log", onclick: () => post({ action: "openLog" }) })));
+    wrap.append(group("Switch history", ...lines.map((l) => h("div", { class: "logline", text: l })),
+      lines.length ? null : h("div", { class: "muted", text: "No switches logged yet" }),
+      h("div", { class: "actions" }, h("button", { class: "btn", text: "Open log", onclick: () => post({ action: "openLog" }) }))));
     return wrap;
+  }
+
+  // --- chrome ---
+  function backHead(titleKids) {
+    return [h("button", { class: "back", title: "Back", "aria-label": "Back", onclick: () => { tab = "overview"; pending = null; draw(); } }, icon("back")), ...titleKids.filter(Boolean)];
+  }
+  function drawHead(prov) {
+    const head = document.getElementById("head");
+    if (tab === "settings") return head.replaceChildren(...backHead([h("span", { class: "title", text: "Settings" })]));
+    if (prov) {
+      const plan = planOf(prov);
+      return head.replaceChildren(...backHead([ltile(prov.id), h("span", { class: "title", text: prov.label }),
+        plan ? h("span", { class: "chip plan", text: plan }) : null, h("span", { class: "spacer" }),
+        prov.capabilities.autoSwitch && prov.autoSwitch
+          ? (autoOn(prov) ? autoChip("Auto on", () => post({ action: "toggleAuto", provider: prov.id, enabled: false }))
+            : h("button", { class: "chip", text: "Auto off", onclick: () => post({ action: "toggleAuto", provider: prov.id, enabled: true }) }))
+          : null]));
+    }
+    const any = data.providers.some(autoOn);
+    head.replaceChildren(h("span", { class: "tile" }, h("img", { src: "mark.svg", alt: "" })), h("span", { class: "title", text: "ccswap" }),
+      h("span", { class: "spacer" }),
+      any ? autoChip(`Auto · ${round(data.settings.threshold)}%`, () => { tab = "settings"; draw(); }) : null,
+      h("button", { class: "ib", title: "Refresh", "aria-label": "Refresh", onclick: () => post({ action: "refresh" }) }, icon("refresh")));
+  }
+
+  function drawTabs() {
+    const tabs = document.getElementById("tabs");
+    if (tab !== "overview") return tabs.replaceChildren();
+    const mk = (id, kids, extra) => h("button", { role: "tab", class: tab === id ? "sel" : "", onclick: () => { tab = id; pending = null; draw(); } },
+      h("span", { class: "lbl" }, ...kids), extra);
+    tabs.replaceChildren(mk("overview", [h("span", { text: "All" })], h("div", { class: "mini" })),
+      ...data.providers.map((p) => {
+        const a = (p.accounts || []).find((x) => x.active);
+        const t = a && tight(a);
+        const m = h("div", { class: "mini " + (t ? level(t.w.pct) : "") });
+        if (t) m.append(h("i", { style: `display:block;height:100%;border-radius:2px;background:var(--level);width:${Math.min(100, t.w.pct)}%` }));
+        return mk(p.id, [logo(p.id), h("span", { text: p.label.split(" ")[0] })], m);
+      }));
   }
 
   function draw() {
     if (!data) return;
-    const tabs = document.getElementById("tabs");
-    tabs.replaceChildren(
-      tabButton("overview", "Overview"),
-      ...data.providers.map((p) => tabButton(p.id, p.label)));  // Settings opens from the footer
     const view = document.getElementById("view");
+    const keep = view.scrollTop;
     const prov = data.providers.find((p) => p.id === tab);
     if (!prov && tab !== "overview" && tab !== "settings") tab = "overview";
+    drawHead(prov);
+    drawTabs();
     view.replaceChildren();
     if (note && note.until > Date.now()) view.append(h("div", { class: "card " + (note.bad ? "err" : "note"), text: note.text }));
-    if (tab === "overview" && data.health && data.health.label) {
-      view.append(h("div", { class: "card " + (data.health.attention ? "err" : "muted"), text: data.health.label }));
+    if (tab === "overview" && data.health && data.health.attention && data.health.label) {
+      view.append(h("div", { class: "card err", text: data.health.label }));
     }
     if (tab === "overview") for (const p of data.providers) view.append(overviewCard(p));
     else if (tab === "settings") view.append(settingsTab());
     else view.append(providerTab(prov));
+    view.scrollTop = keep;
     const at = data.lastCheckedAt;
-    document.getElementById("checked").textContent = at ? "Checked " + new Date(at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not checked yet";
+    document.getElementById("checked").textContent = at ? "Checked " + hhmm(new Date(at * 1000)) : "Not checked yet";
     dirty = false;
-  }
-
-  function tabButton(id, text) {
-    return h("button", { text, role: "tab", class: tab === id ? "sel" : "", onclick: () => { tab = id; pending = null; draw(); } });
   }
 
   function editing() {
     const a = document.activeElement;
     return a && (a.tagName === "INPUT" || a.tagName === "SELECT");
-  }
-
-  function updateCountdowns() {
-    for (const el of document.querySelectorAll("[data-reset]")) {
-      const iso = el.getAttribute("data-reset");
-      if (iso && el.closest(".big")) el.textContent = el.textContent.replace(/resets .*$/, "resets " + countdown(iso));
-      else if (iso) el.textContent = countdown(iso);
-    }
   }
 
   window.ccswap = {
@@ -302,9 +483,11 @@
   };
 
   document.addEventListener("focusout", () => setTimeout(() => { if (dirty && !editing()) draw(); }, 0));
+  for (const [id, name] of [["f-refresh", "refresh"], ["f-settings", "settings"], ["f-quit", "power"]]) document.getElementById(id).append(icon(name));
   document.getElementById("f-refresh").addEventListener("click", () => post({ action: "refresh" }));
   document.getElementById("f-settings").addEventListener("click", () => { tab = "settings"; draw(); });
   document.getElementById("f-quit").addEventListener("click", () => post({ action: "quit" }));
-  setInterval(updateCountdowns, 30000);
+  dark.addEventListener("change", () => { if (!editing()) draw(); });
+  setInterval(() => { if (!editing()) draw(); }, 30000); // countdowns
   post({ action: "ready" });
 })();
