@@ -11,7 +11,8 @@ The fix is a minimal bundle built on demand::
 
     /Applications/ccswap Menubar.app/
       Contents/
-        Info.plist          CFBundleIdentifier com.ccswap.menubar, LSUIElement
+        Info.plist          CFBundleIdentifier com.ccswap.menubar, LSUIElement, icon
+        Resources/ccswap.icns   the brand icon
         pyvenv.cfg          home = <directory of the real interpreter>
         lib/
           python3.X -> <sys.prefix>/lib/python3.X      the install's site-packages
@@ -60,6 +61,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from ccswap.brand import BRAND_DIR
 from ccswap.printer import warning
 
 BUNDLE_ID = "com.ccswap.menubar"
@@ -67,6 +69,8 @@ BUNDLE_NAME = "ccswap"
 BUNDLE_DIRNAME = "ccswap Menubar.app"
 APPLICATIONS_DIR = Path("/Applications")
 OPT_OUT_ENV = "CCSWAP_NO_BUNDLE"
+ICON_NAME = "ccswap.icns"
+ICON_SRC = BRAND_DIR / ICON_NAME
 
 
 def bundle_dir(backup_dir: Path, applications: Path = APPLICATIONS_DIR) -> Path:
@@ -204,18 +208,24 @@ def build(
     # recognise a (re)launched app by "its executable is CFBundleExecutable"
     # before they re-adopt its icon, and a launcher script in between would
     # hide the match.
-    _write_if_changed(
-        contents / "Info.plist",
-        plistlib.dumps(
-            {
-                "CFBundleIdentifier": BUNDLE_ID,
-                "CFBundleName": BUNDLE_NAME,
-                "CFBundleExecutable": "python",
-                "CFBundlePackageType": "APPL",
-                "LSUIElement": True,
-            }
-        ),
-    )
+    info = {
+        "CFBundleIdentifier": BUNDLE_ID,
+        "CFBundleName": BUNDLE_NAME,
+        "CFBundleExecutable": "python",
+        "CFBundlePackageType": "APPL",
+        "LSUIElement": True,
+    }
+    # Content-compared on every start, so bundles built before the icon existed
+    # pick it up on the next launch.
+    try:
+        icon = ICON_SRC.read_bytes()
+    except OSError:
+        icon = None
+    if icon:
+        (contents / "Resources").mkdir(exist_ok=True)
+        _write_if_changed(contents / "Resources" / ICON_NAME, icon)
+        info["CFBundleIconFile"] = ICON_NAME
+    _write_if_changed(contents / "Info.plist", plistlib.dumps(info))
     # `home` is the directory holding the base interpreter; CPython derives
     # the stdlib location from it exactly as it does for a normal venv.
     _write_if_changed(

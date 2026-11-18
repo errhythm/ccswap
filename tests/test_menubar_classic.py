@@ -130,3 +130,8 @@ def test_health_row_restarts_failed_engine():
     f.payload = lambda: base
     row = mc.menu_spec(f)[0]
     assert (row.action, row.args, row.tooltip) == ("restart_engine", ("claude",), "boom")
+
+
+def test_paint_glyph_falls_back_when_the_image_cannot_be_built():
+    # no rumps app / status item: must report False so the text icon stays
+    assert mc._paint_glyph(object(), Fake(), True) is False

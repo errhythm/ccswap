@@ -269,6 +269,20 @@ def _ask_token(controller) -> None:
     controller.add_token(email_resp.text.strip(), token_resp.text.strip())
 
 
+def _paint_glyph(app, controller, has_text: bool) -> bool:
+    """Set the status item's button image to the live glyph; False to fall back to text."""
+    try:
+        from ccswap import brand
+        from ccswap.menubar_popover import tightest_used_pct
+
+        button = app._nsapp.nsstatusitem.button()
+        button.setImage_(brand.glyph_image(tightest_used_pct(controller.payload())))
+        button.setImagePosition_(2 if has_text else 1)  # NSImageLeft / NSImageOnly
+        return True
+    except Exception:  # noqa: BLE001 - any AppKit/rumps failure keeps the text icon
+        return False
+
+
 def run(controller) -> int:
     """Build the rumps app around the controller; blocks until quit."""
     import rumps
@@ -283,11 +297,18 @@ def run(controller) -> int:
             self.tick_timer = rumps.Timer(self.on_tick, 1)
             self.tick_timer.start()
 
+        def set_title(self):
+            text = controller.title(icon=False)
+            if _paint_glyph(self, controller, bool(text)):
+                self.title = text
+            else:
+                self.title = controller.title()
+
         def on_tick(self, _timer):
             if controller.tick():
                 self.render()
             else:
-                self.title = controller.title()
+                self.set_title()
             secs = controller.settings.refresh_interval
             if secs != self._interval:
                 # rumps 0.4.0's Timer.interval setter is a no-op while running;
@@ -302,7 +323,7 @@ def run(controller) -> int:
             _purge_callbacks(rumps, self.menu)
             self.menu.clear()
             self.menu = [self._item(r) for r in rows]
-            self.title = controller.title()
+            self.set_title()
 
         def _item(self, row):
             if row.separator:

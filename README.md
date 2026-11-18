@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/ccswap-logo.png" width="128" alt="ccswap logo: two Cs joined into one loop on an indigo tile"></p>
+
 # ccswap (Claude Codex Swap)
 
 [![CI](https://github.com/errhythm/ccswap/actions/workflows/ci.yml/badge.svg)](https://github.com/errhythm/ccswap/actions/workflows/ci.yml)
