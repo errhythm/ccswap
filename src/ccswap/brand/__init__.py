@@ -1,4 +1,4 @@
-"""ccswap brand: the Swap CC mark (two Cs joined into one loop, flat off-white on the Relay green tile).
+"""ccswap brand: the Swap CC mark: two Cs joined into one loop, drawn as a dim track with 30% of it filled (light green to near-white) on the flat Relay green tile.
 
 ``mark.svg`` (white → coral blend), ``mark-mono.svg`` (template glyph) and
 ``icon.svg`` (1024 app icon on the flat Relay green tile) are the source files, drawn from

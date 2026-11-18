@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/ccswap-logo.png" width="128" alt="ccswap logo: two Cs joined into one off-white loop on a deep green tile"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/ccswap-logo.png" width="128" alt="ccswap logo: two Cs joined into one loop, 30% filled like a loading ring, on a deep green tile"></p>
 
 # ccswap (Claude Codex Swap)
 
