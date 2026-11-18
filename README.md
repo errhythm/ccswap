@@ -1,18 +1,31 @@
-<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/ccswap-logo.png" width="128" alt="ccswap logo: two Cs joined into one loop, 30% filled like a loading ring, on a deep green tile"></p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/ccswap-logo.png" width="112" alt="ccswap logo: two Cs joined into one loop, 30% filled like a loading ring, on a deep green tile">
+</p>
 
-# ccswap (Claude Codex Swap)
+<h1 align="center">ccswap</h1>
 
-[![CI](https://github.com/errhythm/ccswap/actions/workflows/ci.yml/badge.svg)](https://github.com/errhythm/ccswap/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/ccswap.svg)](https://pypi.org/project/ccswap/)
-[![Python versions](https://img.shields.io/pypi/pyversions/ccswap.svg)](https://pypi.org/project/ccswap/)
-[![Downloads](https://img.shields.io/pypi/dm/ccswap.svg)](https://pypi.org/project/ccswap/)
-[![License](https://img.shields.io/pypi/l/ccswap.svg)](https://github.com/errhythm/ccswap/blob/main/LICENSE)
-[![Raycast Store](https://img.shields.io/badge/Raycast-Store-FF6363?logo=raycast&logoColor=white)](https://www.raycast.com/errhythm/ccswap)
-[![GitHub stars](https://img.shields.io/github/stars/errhythm/ccswap?style=social)](https://github.com/errhythm/ccswap)
+<p align="center">Multi-account and usage manager for Claude Code, Codex and Antigravity.</p>
 
-Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. Save multiple logins, check their quota windows, and manage them from one dashboard. Claude Code and Codex also support automatic switching.
+<p align="center">
+  <a href="https://pypi.org/project/ccswap/"><img src="https://img.shields.io/pypi/v/ccswap?label=PyPI&labelColor=173F33&color=4FA67B" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/ccswap/"><img src="https://img.shields.io/pypi/pyversions/ccswap?label=Python&labelColor=173F33&color=4FA67B" alt="Python versions"></a>
+  <a href="https://pypi.org/project/ccswap/"><img src="https://img.shields.io/pypi/dm/ccswap?label=Downloads&labelColor=173F33&color=4FA67B" alt="Monthly downloads"></a>
+  <a href="https://github.com/errhythm/ccswap/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/errhythm/ccswap/ci.yml?branch=main&label=CI&labelColor=173F33&color=4FA67B" alt="CI status"></a>
+  <a href="https://github.com/errhythm/ccswap/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/ccswap?label=License&labelColor=173F33&color=4FA67B" alt="License"></a>
+  <br>
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-4FA67B?label=Runs%20on&labelColor=173F33" alt="Runs on macOS, Linux and Windows">
+  <a href="https://www.raycast.com/errhythm/ccswap"><img src="https://img.shields.io/badge/Raycast-Store-4FA67B?labelColor=173F33&logo=raycast&logoColor=white" alt="Raycast Store"></a>
+</p>
 
-<img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-watch.png" width="760" alt="ccswap watch: live usage bars for every Claude Code and Codex account, with reset times and the active account marked">
+<p align="center">
+  <a href="https://github.com/errhythm/ccswap#quick-start">Install</a> ·
+  <a href="https://github.com/errhythm/ccswap/blob/main/docs/commands.md">Commands</a> ·
+  <a href="https://github.com/errhythm/ccswap/blob/main/docs/auto-switching.md">Auto-switching</a> ·
+  <a href="https://github.com/errhythm/ccswap#raycast-extension">Raycast</a> ·
+  <a href="https://github.com/errhythm/ccswap#documentation">Docs</a>
+</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-watch.png" width="760" alt="ccswap watch: live usage bars for every Claude Code and Codex account, with reset times and the active account marked"></p>
 
 ## What it does
 

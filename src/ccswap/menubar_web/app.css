@@ -101,9 +101,12 @@ footer span { flex: 1; }
 .win .bar i { border-radius: 3px; }
 .win .bar b { height: 10px; top: -2px; }
 .pace { color: var(--ok); font-size: 11px; margin-top: 4px; } .pace.ahead { color: var(--warn); }
-.list button.item { display: flex; width: 100%; background: none; border: 0; border-radius: 8px; padding: 8px 6px;
-  text-align: left; gap: 10px; align-items: center; } .list button.item:hover { background: var(--glass); filter: none; }
-.list button.item span:first-child { width: 14px; opacity: .7; text-align: center; }
+.card > .actions:first-child { margin-top: 0; align-items: center; } .card > .actions .sect { margin: 0; }
+.card > .seg { margin: 10px 0 6px; }
+.menu { display: flex; flex-direction: column; margin-top: 8px; padding: 4px; border-radius: 10px; background: var(--glass); }
+.menu .choice { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: none; border: 0;
+  border-radius: 7px; padding: 6px 8px; text-align: left; font-weight: 500; } .menu .choice:hover { background: var(--glass); filter: none; }
+.btn.bad { color: var(--bad); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .note { color: var(--warn); font-size: 11px; } .err { color: var(--bad); }
 .muted { color: var(--muted); font-size: 11px; }

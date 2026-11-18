@@ -18,7 +18,9 @@
   let data = null;
   let tab = "overview"; // "overview" | "settings" | provider id
   let pending = null; // {key}: switch awaiting a second click
-  let tokenOpen = false; // the add-token form, opened from the actions list
+  let tokenOpen = false; // the add-token form, opened from the Add menu
+  let addOpen = false; // the Add menu on the Other accounts card
+  const chosen = {}; // provider id -> strategy picked on its Switch card
   let note = null; // {text, until}: reply note (restart hint, errors)
   let dirty = false;
 
@@ -299,8 +301,22 @@
     return wrap;
   }
 
-  function item(sym, text, onclick) {
-    return h("button", { class: "item", onclick }, h("span", { text: sym }), h("span", { text }));
+  // Words from `ccswap switch --strategy` help.
+  const STRATEGY = {
+    "best": ["Best", "Moves to the account with the most room left."],
+    "next-available": ["Next available", "Moves to the next account, skipping any at their limit."],
+    "consume-first": ["Consume first", "Moves to the account whose weekly limit resets soonest, so no quota is lost at a reset."],
+  };
+  function switchCard(prov, strategies) {
+    const saved = data.settings && data.settings.strategy;
+    const pick = chosen[prov.id] || (strategies.includes(saved) ? saved : strategies[0]);
+    const seg = h("div", { class: "seg full", role: "radiogroup", "aria-label": "Strategy" }, ...strategies.map((s) =>
+      h("button", { class: s === pick ? "sel" : "", role: "radio", "aria-checked": String(s === pick), text: (STRATEGY[s] || [s])[0],
+        onclick: () => { chosen[prov.id] = s; draw(); } })));
+    return h("section", { class: "card" },
+      h("div", { class: "actions" }, h("span", { class: "title", text: "Switch account" }), h("span", { class: "spacer" }),
+        h("button", { class: "btn on", text: "Switch", onclick: () => post({ action: "rotate", provider: prov.id, strategy: pick }) })),
+      seg, STRATEGY[pick] ? h("div", { class: "muted", text: STRATEGY[pick][1] }) : null);
   }
 
   function providerTab(prov) {
@@ -341,27 +357,36 @@
       const rest = ws.filter((x) => x !== hero).sort((a, b) => (a.model - b.model) || (a.kind === b.kind ? 0 : a.kind === "wk" ? -1 : 1));
       if (rest.length) wrap.append(h("section", { class: "card" }, ...rest.map(winBlock)));
     }
-    const others = (prov.accounts || []).filter((a) => !a.active);
-    if (others.length) wrap.append(h("section", { class: "card" }, h("div", { class: "sect", text: "Other accounts" }), ...others.map((a) => otherRow(prov, a))));
-    if (prov.addToken && tokenOpen) wrap.append(h("section", { class: "card" }, tokenForm(prov)));
-
-    const list = h("section", { class: "card list" });
     const strategies = caps.strategies || [];
-    // No strategy key: the page sends a plain rotation (the shell reads it as None).
-    if (strategies.length) list.append(item("→", "Next account", () => post({ action: "rotate", provider: prov.id })));
-    for (const s of strategies) {
-      list.append(item("✦", s === "best" ? "Switch to best" : `Switch: ${s}`, () => post({ action: "rotate", provider: prov.id, strategy: s })));
+    if (strategies.length && (prov.accounts || []).length > 1) wrap.append(switchCard(prov, strategies));
+
+    const others = (prov.accounts || []).filter((a) => !a.active);
+    const add = h("button", { class: "btn", text: "+ Add", "aria-expanded": String(addOpen), onclick: () => { addOpen = !addOpen; tokenOpen = false; draw(); } });
+    const oc = h("section", { class: "card" }, h("div", { class: "actions" }, h("span", { class: "sect", text: others.length ? "Other accounts" : "Add an account" }), h("span", { class: "spacer" }), add));
+    if (addOpen) {
+      const choice = (title, sub, onclick) => h("button", { class: "choice", onclick }, h("span", { text: title }), h("span", { class: "muted", text: sub }));
+      oc.append(h("div", { class: "menu" },
+        choice("Current login", `Saves the account ${prov.label} is signed in to`, () => { addOpen = false; post({ action: "addLogin", provider: prov.id }); draw(); }),
+        prov.addToken ? choice("Setup token or API key", "Same as ccswap add-token", () => { addOpen = false; tokenOpen = true; draw(); }) : null));
     }
-    if (prov.id === "claude") list.append(item("↻", "Refresh credentials", () => post({ action: "refreshCreds" })));
-    list.append(item("+", "Add current login", () => post({ action: "addLogin", provider: prov.id })));
-    if (prov.addToken) list.append(item("+", "Add setup token or API key…", () => { tokenOpen = !tokenOpen; draw(); }));
-    if (caps.autoSwitch && prov.autoSwitch) list.append(item("⟳", "Restart engine", () => post({ action: "restartEngine", provider: prov.id })));
+    if (prov.addToken && tokenOpen) oc.append(tokenForm(prov));
+    oc.append(...others.map((a) => otherRow(prov, a)));
+    wrap.append(oc);
+
+    // Tools for the active account, under its email so it's clear which account they act on.
+    const tools = [];
+    if (prov.id === "claude") tools.push(h("button", { class: "btn", text: "Refresh credentials", onclick: () => post({ action: "refreshCreds" }) }));
     if (active && caps.disable) {
-      list.append(item("⏸", active.disabled ? "Enable account" : "Disable account",
-        () => post({ action: "toggleDisabled", provider: prov.id, number: active.number, disabled: !active.disabled })));
-      list.append(item("✕", "Remove account", () => post({ action: "remove", provider: prov.id, number: active.number })));
+      tools.push(h("button", { class: "btn", text: active.disabled ? "Enable" : "Disable",
+        onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: active.number, disabled: !active.disabled }) }));
+      tools.push(h("button", { class: "btn bad", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: active.number }) }));
     }
-    wrap.append(list);
+    if (active && tools.length) {
+      // Laid out like an Other accounts row, so the two cards read the same way.
+      wrap.append(h("section", { class: "card" }, h("div", { class: "sect", text: "Active account" }),
+        h("div", { class: "acctwrap" }, h("div", { class: "acct" }, h("span", { class: "em", title: label(active), text: label(active) + (active.disabled ? " (disabled)" : "") })),
+          h("div", { class: "actions" }, h("span", { class: "spacer" }), ...tools))));
+    }
     return wrap;
   }
 
