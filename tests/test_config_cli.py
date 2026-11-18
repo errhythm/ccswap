@@ -79,7 +79,7 @@ class TestConfigList:
             "usage.fableProbe",
         ):
             assert key in out
-        assert out.count("(default)") == 32
+        assert out.count("(default)") == 40
 
     def test_set_key_not_marked_default(self, temp_home, capsys):
         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
@@ -106,7 +106,7 @@ class TestConfigList:
         assert payload["schemaVersion"] == 1
         assert payload["path"].endswith("settings.json")
         by_key = {entry["key"]: entry for entry in payload["settings"]}
-        assert len(by_key) == 32
+        assert len(by_key) == 40
         assert by_key["autoswitch.warmupFiveHour"]["value"] is False
         assert by_key["ui.starPrompt"]["value"] is True
         assert by_key["ui.starPrompt"]["isSet"] is False

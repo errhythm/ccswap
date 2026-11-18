@@ -16,6 +16,7 @@ import pytest
 from ccswap.exceptions import ConfigError
 from ccswap.settings import (
     ClaudeIntegrationSettings,
+    MenuBarConfig,
     CredentialSettings,
     SETTING_SPECS,
     atomic_write_json,
@@ -402,6 +403,7 @@ class TestSettingSpecs:
             "run": RunSettings(),
             "updates": UpdateSettings(),
             "usage": UsageSettings(),
+            "menubar": MenuBarConfig(),
         }
         for spec in SETTING_SPECS.values():
             assert spec.default == getattr(sources[spec.section], spec.field)

@@ -70,60 +70,141 @@ def test_notification_identity_is_noop_off_macos(tmp_path: Path):
 # --- settings ------------------------------------------------------------------
 
 def test_settings_defaults_when_file_missing(tmp_path: Path):
-    s = menubar.MenuBarSettings.load(tmp_path / "nope.json")
+    s = menubar.MenuBarSettings.load(tmp_path)
     assert s.show_account_name is True
     assert s.title_pct == "both"
     assert s.refresh_interval == 60
     assert s.auto_switch_enabled is False
     assert s.codex_auto_switch_enabled is False
+    assert s.style == "popover"
+    assert s.title_provider == "claude"
 
 
 def test_settings_round_trip(tmp_path: Path):
-    path = tmp_path / "menubar_settings.json"
     original = menubar.MenuBarSettings(
+        style="classic",
+        title_provider="auto",
         show_account_name=False,
         title_pct="5h",
         refresh_interval=300,
         auto_switch_enabled=True,
         codex_auto_switch_enabled=True,
     )
-    original.save(path)
-    loaded = menubar.MenuBarSettings.load(path)
-    assert loaded == original
+    original.save(tmp_path)
+    assert menubar.MenuBarSettings.load(tmp_path) == original
+
+
+def test_settings_save_keeps_only_non_defaults_in_settings_json(tmp_path: Path):
+    menubar.MenuBarSettings(title_provider="agy").save(tmp_path)
+    raw = json.loads((tmp_path / "settings.json").read_text())
+    assert raw["menubar"] == {"titleProvider": "agy"}
 
 
 def test_settings_save_is_atomic(tmp_path: Path, monkeypatch):
-    # The CLI and the running menu bar share this file, and load() reads a
-    # torn write as defaults (auto-switch off), so save() must not truncate
-    # in place.
+    # The CLI and the running menu bar share settings.json, and a torn write
+    # reads back as defaults (auto-switch off), so save() must not write in place.
+    from ccswap import settings
+
     calls = []
-    monkeypatch.setattr(
-        menubar, "atomic_write_text", lambda path, text, **kw: calls.append((path, kw))
-    )
-    path = tmp_path / "menubar_settings.json"
-    menubar.MenuBarSettings(auto_switch_enabled=True).save(path)
-    assert calls == [(path, {"mode": 0o600})]
+    monkeypatch.setattr(settings, "atomic_write_json", lambda path, data: calls.append(path))
+    menubar.MenuBarSettings(auto_switch_enabled=True).save(tmp_path)
+    assert calls == [tmp_path / "settings.json"]
 
 
 def test_settings_corrupt_file_falls_back_to_defaults(tmp_path: Path):
-    path = tmp_path / "menubar_settings.json"
-    path.write_text("{ this is not json", encoding="utf-8")
-    s = menubar.MenuBarSettings.load(path)
-    assert s == menubar.MenuBarSettings()
+    (tmp_path / "settings.json").write_text("{ this is not json", encoding="utf-8")
+    assert menubar.MenuBarSettings.load(tmp_path) == menubar.MenuBarSettings()
 
 
-def test_settings_ignores_unknown_and_bad_types(tmp_path: Path):
-    path = tmp_path / "menubar_settings.json"
-    path.write_text(
-        json.dumps(
-            {"refresh_interval": "fast", "bogus": 1, "show_account_name": False}
-        ),
+def test_settings_ignores_unknown_and_bad_values(tmp_path: Path):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"menubar": {
+            "refreshInterval": "fast", "bogus": 1, "showAccountName": False,
+            "titleProvider": "nope", "style": "classic",
+        }}),
         encoding="utf-8",
     )
-    s = menubar.MenuBarSettings.load(path)
-    # bad-typed refresh_interval falls back to default; valid bool is kept
-    assert s.refresh_interval == 60
-    assert s.show_account_name is False
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.refresh_interval == 60 and s.title_provider == "claude"
+    assert s.show_account_name is False and s.style == "classic"
+
+
+def test_legacy_menubar_settings_file_is_imported_once(tmp_path: Path):
+    legacy = tmp_path / "menubar_settings.json"
+    legacy.write_text(json.dumps({"title_pct": "5h", "auto_switch_enabled": True, "refresh_interval": "x"}))
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.title_pct == "5h" and s.auto_switch_enabled is True and s.refresh_interval == 60
+    raw = json.loads((tmp_path / "settings.json").read_text())
+    assert raw["menubar"] == {"titlePct": "5h", "autoSwitch": True}
+    assert legacy.exists()  # kept for older versions
+    legacy.write_text(json.dumps({"title_pct": "off"}))  # ignored from now on
+    assert menubar.MenuBarSettings.load(tmp_path).title_pct == "5h"
+
+
+def test_menubar_keys_are_ccswap_config_settings(tmp_path: Path):
+    from ccswap import settings
+
+    settings.set_setting(tmp_path, "menubar.titleProvider", "codex")
+    assert menubar.MenuBarSettings.load(tmp_path).title_provider == "codex"
+    with pytest.raises(Exception):
+        settings.set_setting(tmp_path, "menubar.style", "bogus")
+
+
+# --- title provider ------------------------------------------------------------
+
+_AGY_USAGE = {"scoped": [
+    {"name": "Gemini · 5h", "group": "Gemini", "window": "5h", "pct": 12.0},
+    {"name": "Gemini · weekly", "group": "Gemini", "window": "weekly", "pct": 40.0},
+    {"name": "Claude · 5h", "group": "Claude", "window": "5h", "pct": 30.0},
+]}
+
+
+def test_resolve_title_provider_explicit_setting_wins():
+    assert menubar.resolve_title_provider("codex", {"claude": {"five_hour": {"pct": 99}}}) == "codex"
+
+
+def test_resolve_title_provider_auto_picks_fullest_with_registry_order_ties():
+    actives = {"claude": {"five_hour": {"pct": 50}}, "codex": {"weekly": {"pct": 80}}, "agy": _AGY_USAGE}
+    assert menubar.resolve_title_provider("auto", actives) == "codex"
+    tie = {"claude": {"five_hour": {"pct": 80}}, "codex": {"weekly": {"pct": 80}}}
+    assert menubar.resolve_title_provider("auto", tie) == "claude"
+
+
+def test_resolve_title_provider_auto_counts_rejected_and_scoped_only():
+    assert menubar.resolve_title_provider(
+        "auto", {"claude": {"five_hour": {"pct": 99}}, "codex": {"rejected": {}}}
+    ) == "codex"
+    assert menubar.resolve_title_provider("auto", {"claude": None, "agy": _AGY_USAGE}) == "agy"
+
+
+def test_resolve_title_provider_auto_without_numbers():
+    assert menubar.resolve_title_provider("auto", {"codex": None, "agy": None}) == "codex"
+    assert menubar.resolve_title_provider("auto", {}) == "claude"
+
+
+def test_format_title_uses_scoped_maxima_for_antigravity():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="both")
+    assert menubar.format_title("a@x.io", _AGY_USAGE, s, now=0) == f"{menubar.ICON} 30% · 40%"
+
+
+def test_format_title_tag_and_no_icon():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="5h")
+    title = menubar.format_title("a@x.io", {"five_hour": {"pct": 42.0}}, s, now=0, icon=False, tag="CX")
+    assert title == "CX · 42%"
+
+
+def test_five_hour_scoped_window_is_not_rolled_weekly():
+    past = {"window": "5h", "pct": 70.0, "resets_at": "2020-01-01T00:00:00+00:00"}
+    assert menubar._rolled_scoped_window(past, now=2_000_000_000) is past
+
+
+def test_single_instance_lock_refuses_a_second_menu_bar(tmp_path: Path):
+    first = menubar.acquire_single_instance(tmp_path)
+    try:
+        with pytest.raises(ClaudeSwitchError, match="already running"):
+            menubar.acquire_single_instance(tmp_path)
+    finally:
+        first.release()
 
 
 _USAGE = {

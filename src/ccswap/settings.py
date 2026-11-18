@@ -24,7 +24,7 @@ import math
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ccswap.exceptions import ConfigError
@@ -180,6 +180,30 @@ class UsageSettings:
     fable_probe: bool = False
 
 
+TITLE_PCT_CHOICES: tuple[str, ...] = ("off", "5h", "7d", "both")
+
+
+@dataclass(frozen=True)
+class MenuBarConfig:
+    """Menu bar preferences (``menubar`` section).
+
+    ``style`` picks the shell: the tabbed ``popover`` or the ``classic`` text
+    menu. ``title_provider`` is whose numbers the menu bar title shows;
+    ``auto`` follows the active account closest to its limit. Older versions
+    kept these in ``menubar_settings.json``; :func:`load_menubar_settings`
+    imports that file once.
+    """
+
+    style: str = "popover"
+    title_provider: str = "claude"
+    show_account_name: bool = True
+    title_pct: str = "both"
+    title_scoped: bool = False
+    refresh_interval: int = 60
+    auto_switch_enabled: bool = False
+    codex_auto_switch_enabled: bool = False
+
+
 _SECTION_DEFAULT_SOURCES = {
     "autoswitch": AutoSwitchSettings,
     "ui": UiSettings,
@@ -188,6 +212,7 @@ _SECTION_DEFAULT_SOURCES = {
     "run": RunSettings,
     "updates": UpdateSettings,
     "usage": UsageSettings,
+    "menubar": MenuBarConfig,
 }
 
 
@@ -229,6 +254,18 @@ class _ViewChoices(Sequence):
         from ccswap import providers
 
         return ("combined", *providers.PROVIDERS)[index]
+
+    def __len__(self) -> int:
+        return len(self[:])
+
+
+class _TitleProviderChoices(Sequence):
+    """"auto" plus every registered provider id, read at use time (see _ViewChoices)."""
+
+    def __getitem__(self, index):
+        from ccswap import providers
+
+        return ("auto", *providers.PROVIDERS)[index]
 
     def __len__(self) -> int:
         return len(self[:])
@@ -373,6 +410,39 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "usage", "wasteWarningPct", "waste_warning_pct", "int", 1, 100,
             help="Warn only when at least this pct of the weekly window is unused",
+        ),
+        SettingSpec(
+            "menubar", "style", "style", "choice", choices=("popover", "classic"),
+            help="Menu bar shell: tabbed popover or the classic text menu",
+        ),
+        SettingSpec(
+            "menubar", "titleProvider", "title_provider", "choice",
+            choices=_TitleProviderChoices(),
+            help="Whose usage the menu bar title shows; auto picks the account closest to its limit",
+        ),
+        SettingSpec(
+            "menubar", "showAccountName", "show_account_name", "bool",
+            help="Show the active account's name in the menu bar title",
+        ),
+        SettingSpec(
+            "menubar", "titlePct", "title_pct", "choice", choices=TITLE_PCT_CHOICES,
+            help="Which usage percentages the menu bar title shows",
+        ),
+        SettingSpec(
+            "menubar", "titleScoped", "title_scoped", "bool",
+            help="Also show per-model limits (e.g. Fable) in the menu bar title",
+        ),
+        SettingSpec(
+            "menubar", "refreshInterval", "refresh_interval", "int", 15, 3600,
+            help="Seconds between menu bar usage refreshes",
+        ),
+        SettingSpec(
+            "menubar", "autoSwitch", "auto_switch_enabled", "bool",
+            help="Run Claude Code auto-switching inside the menu bar app",
+        ),
+        SettingSpec(
+            "menubar", "codexAutoSwitch", "codex_auto_switch_enabled", "bool",
+            help="Run Codex auto-switching inside the menu bar app",
         ),
     )
 }
@@ -860,6 +930,83 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
     )
 
 
+LEGACY_MENUBAR_FILE = "menubar_settings.json"
+
+
+def _menubar_from_section(section: dict) -> MenuBarConfig:
+    default = MenuBarConfig()
+    values = {}
+    for spec in SETTING_SPECS.values():
+        if spec.section != "menubar" or spec.json_key not in section:
+            continue
+        value = section[spec.json_key]
+        ok = (
+            value in spec.choices if spec.kind == "choice"
+            else isinstance(value, bool) if spec.kind == "bool"
+            else isinstance(value, int) and not isinstance(value, bool) and spec.lo <= value <= spec.hi
+        )
+        if ok:
+            values[spec.field] = value
+        else:
+            _logger.warning(
+                "settings.json: unsupported %s %r; using %r",
+                spec.dotted, value, getattr(default, spec.field),
+            )
+    return replace(default, **values)
+
+
+def _import_legacy_menubar(backup_root: Path) -> MenuBarConfig | None:
+    """One-time import of ``menubar_settings.json`` (snake_case keys) into settings.json.
+
+    The old file is left in place, so going back to an older ccswap keeps its
+    settings. Returns None when there is nothing to import.
+    """
+    legacy = backup_root / LEGACY_MENUBAR_FILE
+    try:
+        old = json.loads(legacy.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(old, dict):
+        return None
+    by_field = {s.field: s.json_key for s in SETTING_SPECS.values() if s.section == "menubar"}
+    config = _menubar_from_section({by_field[k]: v for k, v in old.items() if k in by_field})
+    try:
+        save_menubar_settings(backup_root, config)
+    except (ConfigError, OSError) as e:
+        _logger.warning("Could not import %s into settings.json: %s", legacy, e)
+    return config
+
+
+def load_menubar_settings(backup_root: Path) -> MenuBarConfig:
+    """Load the menubar section; a bad value falls back to its default.
+
+    With no menubar section yet, settings from an older ccswap's
+    ``menubar_settings.json`` are imported once.
+    """
+    section = _read_raw(settings_path(backup_root)).get("menubar")
+    if isinstance(section, dict):
+        return _menubar_from_section(section)
+    return _import_legacy_menubar(backup_root) or MenuBarConfig()
+
+
+def save_menubar_settings(backup_root: Path, config: MenuBarConfig) -> None:
+    """Write the menubar section, keeping only values that differ from the defaults.
+
+    Defaults stay out of the file so a later default change reaches everyone
+    (the reason ``set_setting`` writes one key at a time).
+    """
+    path = settings_path(backup_root)
+    raw = _read_raw_for_write(path)
+    raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
+    default = MenuBarConfig()
+    raw["menubar"] = {
+        spec.json_key: getattr(config, spec.field)
+        for spec in SETTING_SPECS.values()
+        if spec.section == "menubar" and getattr(config, spec.field) != getattr(default, spec.field)
+    }
+    atomic_write_json(path, raw)
+
+
 def load_credential_settings(backup_root: Path) -> CredentialSettings:
     """Load the credentials section; missing/corrupt/bad fields → defaults."""
     raw = _read_raw(settings_path(backup_root))
@@ -1141,6 +1288,7 @@ def effective_settings(
         "run": load_run_settings(backup_root),
         "updates": load_update_settings(backup_root),
         "usage": load_usage_settings(backup_root),
+        "menubar": load_menubar_settings(backup_root),
     }
     rows = []
     for spec in SETTING_SPECS.values():

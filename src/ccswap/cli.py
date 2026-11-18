@@ -1917,6 +1917,11 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         ),
     )
     parser.add_argument(
+        "--classic",
+        action="store_true",
+        help="With 'menubar': use the classic text menu for this run instead of the popover",
+    )
+    parser.add_argument(
         "--install-service",
         action="store_true",
         help=(
@@ -2133,10 +2138,10 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         parser.error("--hold must be a non-negative number of seconds")
 
     if (
-        args.install_service or args.uninstall_service or args.service_status
+        args.install_service or args.uninstall_service or args.service_status or args.classic
     ) and not args.menubar:
         parser.error(
-            "--install-service, --uninstall-service and --service-status "
+            "--classic, --install-service, --uninstall-service and --service-status "
             "can only be used with 'menubar'"
         )
 
@@ -2249,7 +2254,7 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
             from ccswap.menubar import run as menubar_run
 
 
-            sys.exit(menubar_run(switcher))
+            sys.exit(menubar_run(switcher, classic=args.classic))
     except ClaudeSwitchError as e:
         # In JSON mode keep stdout pure JSON: emit the structured error envelope
         # there (exit 1) instead of a red stderr line.

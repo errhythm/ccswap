@@ -33,12 +33,17 @@ from ccswap import oauth, pace
 from ccswap.exceptions import ClaudeSwitchError, CredentialReadError
 from ccswap.fsutil import atomic_write_text
 from ccswap.printer import warning
+from ccswap.settings import (
+    TITLE_PCT_CHOICES,
+    MenuBarConfig,
+    load_menubar_settings,
+    save_menubar_settings,
+)
 from ccswap.switcher import SENTINEL_NOTES, USAGE_RELOGIN_REQUIRED
 
 ICON = "⇄"
 REFRESH_CHOICES: tuple[int, ...] = (30, 60, 300)
 AUTO_THRESHOLD_CHOICES: tuple[int, ...] = (80, 90, 95, 98)
-TITLE_PCT_CHOICES: tuple[str, ...] = ("off", "5h", "7d", "both")
 SWITCH_HISTORY_LIMIT = 10
 # How long an identical engine error stays quiet after being surfaced. The
 # engine retries every tick, so an unconditional notification is a storm; an
@@ -94,14 +99,16 @@ def ensure_notification_identity(
 
 @dataclass
 class MenuBarSettings:
-    """User-configurable menu bar display behavior, persisted as JSON.
+    """User-configurable menu bar behavior: the ``menubar`` section of settings.json.
 
-    Only display preferences and the auto-switch on/off toggle live here.
-    Auto-switch *policy* (threshold, cooldown, hysteresis, …) is core config,
-    read/written through ``ccswap.settings`` (the ``autoswitch.*`` keys),
-    so the CLI and the menu bar share one source of truth.
+    A mutable mirror of :class:`ccswap.settings.MenuBarConfig` so the menu can
+    flip fields in place; ``ccswap config set menubar.*`` edits the same keys.
+    Auto-switch *policy* (threshold, cooldown, hysteresis, …) stays in the
+    ``autoswitch.*`` keys.
     """
 
+    style: str = "popover"  # "popover" | "classic"
+    title_provider: str = "claude"  # "auto" or a provider id
     show_account_name: bool = True
     title_pct: str = "both"  # one of TITLE_PCT_CHOICES
     title_scoped: bool = False  # append per-model weekly limits (e.g. Fable) to the title
@@ -110,35 +117,17 @@ class MenuBarSettings:
     codex_auto_switch_enabled: bool = False
 
     @classmethod
-    def load(cls, path: Path) -> "MenuBarSettings":
-        """Load settings, falling back to defaults on any problem.
+    def load(cls, backup_root: Path) -> "MenuBarSettings":
+        """Load from settings.json (importing an old menubar_settings.json once)."""
+        return cls(**asdict(load_menubar_settings(backup_root)))
 
-        Unknown keys are ignored; a value whose type doesn't match the field
-        default is dropped (that field keeps its default). A missing or
-        unparseable file yields all-defaults.
+    def save(self, backup_root: Path) -> None:
+        """Write the menubar section of settings.json atomically.
+
+        Atomic, because the CLI and the running menu bar both write it and a
+        torn write would read back as defaults (auto-switch off).
         """
-        defaults = cls()
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return defaults
-        if not isinstance(raw, dict):
-            return defaults
-        kwargs = {}
-        for f in fields(cls):
-            if f.name in raw and isinstance(raw[f.name], type(getattr(defaults, f.name))):
-                kwargs[f.name] = raw[f.name]
-        return cls(**kwargs)
-
-    def save(self, path: Path) -> None:
-        """Write settings as pretty JSON, creating parent directories.
-
-        Atomic, because the CLI and the running menu bar both write this file
-        and :meth:`load` reads a torn write as all-defaults, which would turn
-        auto-switch off without anyone touching the menu.
-        """
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, json.dumps(asdict(self), indent=2), mode=0o600)
+        save_menubar_settings(backup_root, MenuBarConfig(**asdict(self)))
 
 
 # ---- pure display helpers (operate on the usage-window dict shape produced by
@@ -447,7 +436,7 @@ def usage_summary(
             parts.append(seg)
     # Per-model weekly limits (e.g. Fable), from the usage API's ``limits`` array.
     for window in usage.get("scoped") or []:
-        window = _rolled_weekly_window(window, now)  # weekly cadence, same roll-forward
+        window = _rolled_scoped_window(window, now)
         pace_result = pace.compute_pace(window, fetched_at=fetched_at)  # against the rolled window, see above
         if isinstance(window, dict) and isinstance(window.get("pct"), (int, float)) and window.get("name"):
             seg = f"{window['name']} {window['pct']:.0f}%"
@@ -498,6 +487,72 @@ def _local_part(email: str, limit: int = 12) -> str:
     return local
 
 
+def _rolled_scoped_window(window: dict | None, now: float) -> dict | None:
+    """Roll a passed scoped window forward, weekly ones only.
+
+    Antigravity buckets carry ``window: "5h"``; rolling those on a weekly
+    cadence would show a wrong reset.
+    """
+    if isinstance(window, dict) and window.get("window") == "5h":
+        return window
+    return _rolled_weekly_window(window, now)
+
+
+def _scoped_max(usage: dict | str | None, duration: str) -> float | None:
+    """Highest pct among scoped windows of one duration (``"5h"``/``"weekly"``).
+
+    Antigravity reports only per-group buckets, no account-wide window.
+    """
+    if not isinstance(usage, dict):
+        return None
+    pcts = [
+        w["pct"] for w in usage.get("scoped") or []
+        if isinstance(w, dict) and w.get("window") == duration and isinstance(w.get("pct"), (int, float))
+    ]
+    return max(pcts) if pcts else None
+
+
+def title_usage_pct(usage: dict | str | None) -> float | None:
+    """How close an account is to a limit, for picking the ``auto`` title provider.
+
+    The tightest account-wide window; without one (Antigravity), the highest
+    scoped window. A rejected probe counts as 100.
+    """
+    if isinstance(usage, dict) and isinstance(usage.get("rejected"), dict):
+        return 100.0
+    pct = tightest_pct(usage)
+    if pct is not None or not isinstance(usage, dict):
+        return pct
+    scoped = [w["pct"] for w in usage.get("scoped") or [] if isinstance(w, dict) and isinstance(w.get("pct"), (int, float))]
+    return max(scoped) if scoped else None
+
+
+TITLE_TAGS = {"claude": "CC", "codex": "CX", "agy": "AG"}
+
+
+def title_tag(provider_id: str, label: str) -> str:
+    """Short prefix naming the provider in an ``auto`` title."""
+    return TITLE_TAGS.get(provider_id) or label[:2].upper()
+
+
+def resolve_title_provider(setting: str, actives: dict[str, dict | str | None]) -> str:
+    """The provider whose numbers the title shows.
+
+    ``actives`` maps each provider that has an active account to that
+    account's usage, in registry order. ``auto`` picks the highest
+    :func:`title_usage_pct` (ties go to the earlier provider); with no
+    numbers anywhere, the first provider with an active account; else claude.
+    """
+    if setting != "auto":
+        return setting
+    best, best_pct = None, None
+    for pid, usage in actives.items():
+        pct = title_usage_pct(usage)
+        if pct is not None and (best_pct is None or pct > best_pct):
+            best, best_pct = pid, pct
+    return best or next(iter(actives), "claude")
+
+
 def format_title(
     active_email: str | None,
     active_usage: dict | str | None,
@@ -506,24 +561,31 @@ def format_title(
     alias: str | None = None,
     *,
     attention: bool = False,
+    icon: bool = True,
+    tag: str | None = None,
 ) -> str:
     """Build the menu-bar title from the active account and settings.
 
     ``attention`` prefixes a warning sign: auto-switch is enabled but not
-    running, which the closed menu would otherwise never show.
+    running, which the closed menu would otherwise never show. ``icon=False``
+    drops the text icon (the popover shell draws a ring image instead).
+    ``tag`` names the provider when the title provider is ``auto``.
     """
-    icon = f"⚠ {ICON}" if attention else ICON
+    mark = ICON if icon else ""
+    icon = (f"⚠ {mark}" if attention else mark).strip()
     if active_email is None:
         return icon
     if now is None:
         now = time.time()
-    segments: list[str] = []
+    segments: list[str] = [tag] if tag else []
     if settings.show_account_name:
         segments.append(alias if alias else _local_part(active_email))
     if isinstance(active_usage, dict) and isinstance(active_usage.get("rejected"), dict):
         segments.append("rejected (!)")
     if settings.title_pct in ("5h", "both"):
         p = _window_pct(active_usage, "five_hour")
+        if p is None:
+            p = _scoped_max(active_usage, "5h")
         if p is not None:
             segments.append(f"{p:.0f}%")
     if settings.title_pct in ("7d", "both"):
@@ -532,18 +594,20 @@ def format_title(
             seven = active_usage.get("seven_day") or active_usage.get("weekly")
         seven = _rolled_weekly_window(seven, now)  # reflect a passed weekly reset
         p = seven["pct"] if isinstance(seven, dict) and isinstance(seven.get("pct"), (int, float)) else None
+        if p is None:
+            p = _scoped_max(active_usage, "weekly")
         if p is not None:
             segments.append(f"{p:.0f}%")
     if settings.title_scoped and isinstance(active_usage, dict):
         # Per-model weekly limits (e.g. Fable), same shape/roll-forward as the
         # dropdown rows; named so multiple scoped models stay distinguishable.
         for window in active_usage.get("scoped") or []:
-            window = _rolled_weekly_window(window, now)
+            window = _rolled_scoped_window(window, now)
             if isinstance(window, dict) and isinstance(window.get("pct"), (int, float)) and window.get("name"):
                 segments.append(f"{window['name']} {window['pct']:.0f}%")
     if not segments:
         return icon
-    return f"{icon} " + " · ".join(segments)
+    return (f"{icon} " if icon else "") + " · ".join(segments)
 
 
 def format_usage_log(email: str, usage: dict | str | None) -> str | None:
@@ -774,8 +838,29 @@ def framework_build_warning(
     )
 
 
-def run(switcher) -> int:
-    """Entry point for ``cswap --menubar``. Blocks until the user quits."""
+def acquire_single_instance(backup_dir: Path):
+    """Hold ``menubar.lock`` for the life of the process, or raise.
+
+    Two menu bars would run two auto-switch engines over the same accounts.
+    Taken after the app-bundle hop: file descriptors do not survive exec.
+    """
+    from ccswap.locking import FileLock
+
+    lock = FileLock(backup_dir / "menubar.lock", timeout=0)
+    if not lock.acquire(timeout=0):
+        raise ClaudeSwitchError(
+            "Another ccswap menu bar is already running. Quit it first, or "
+            "restart the service: launchctl kickstart -k gui/$(id -u)/com.ccswap.menubar"
+        )
+    return lock
+
+
+def run(switcher, classic: bool = False) -> int:
+    """Entry point for ``cswap --menubar``. Blocks until the user quits.
+
+    ``classic`` forces the rumps text menu for this run. Until the popover
+    shell lands, every run uses the classic menu.
+    """
     try:
         import rumps  # lazy: optional dependency, imported only when launching
         import AppKit  # ships with rumps (pyobjc-framework-Cocoa), never fails alone
@@ -813,6 +898,7 @@ def run(switcher) -> int:
     AppKit.NSApplication.sharedApplication().setActivationPolicy_(
         AppKit.NSApplicationActivationPolicyAccessory
     )
+    _instance_lock = acquire_single_instance(switcher.backup_dir)  # noqa: F841 - held until exit
 
     from ccswap.autoswitch import AutoSwitchEngine
     from ccswap.codex import CodexAccountSwitcher, _codex_restart_hint
@@ -820,14 +906,14 @@ def run(switcher) -> int:
     from ccswap.settings import load_settings, set_setting
     from ccswap.snapshot_source import SnapshotSource
 
-    settings_path = switcher.backup_dir / "menubar_settings.json"
+    settings_root = switcher.backup_dir
     log_path = switcher.backup_dir / "claude-swap.log"
 
     class MenuBarApp(rumps.App):
         def __init__(self):
             super().__init__(ICON, quit_button=None)
             self.switcher = switcher
-            self.settings = MenuBarSettings.load(settings_path)
+            self.settings = MenuBarSettings.load(settings_root)
             # The supported paced read path: per refresh it fetches only the
             # active account plus (at most once per freshness window) one stale
             # alternate, so an open menu costs O(1) requests per window instead
@@ -1498,7 +1584,7 @@ def run(switcher) -> int:
 
         # ---- callbacks --------------------------------------------------------
         def _save_and_rebuild(self):
-            self.settings.save(settings_path)
+            self.settings.save(settings_root)
             self.rebuild_menu()
 
         def _guard(self, fn):
@@ -1697,7 +1783,7 @@ def run(switcher) -> int:
 
         def on_toggle_autoswitch(self, _sender):
             self.settings.auto_switch_enabled = not self.settings.auto_switch_enabled
-            self.settings.save(settings_path)
+            self.settings.save(settings_root)
             if self.settings.auto_switch_enabled:
                 self._start_engine()
             else:
@@ -1706,7 +1792,7 @@ def run(switcher) -> int:
 
         def on_toggle_codex_autoswitch(self, _sender):
             self.settings.codex_auto_switch_enabled = not self.settings.codex_auto_switch_enabled
-            self.settings.save(settings_path)
+            self.settings.save(settings_root)
             if self.settings.codex_auto_switch_enabled:
                 self._start_codex_engine()
             else:

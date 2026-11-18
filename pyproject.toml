@@ -54,7 +54,11 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-menubar = ["rumps>=0.4.0"]
+menubar = [
+    "pyobjc-framework-Cocoa>=12",
+    "pyobjc-framework-WebKit>=12",
+    "rumps>=0.4.0",  # classic text menu only
+]
 
 [project.urls]
 Homepage = "https://github.com/errhythm/ccswap"
