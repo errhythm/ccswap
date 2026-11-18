@@ -13,7 +13,9 @@ const HTML = fs.readFileSync(path.join(WEB, "index.html"), "utf8").replace(/<(sc
 
 let w, doc, posts;
 
-function boot(p = payload()) {
+// By default the fake bridge behaves like the app: frames are immediate and every action
+// gets its reply. Busy-state tests pass { live: true } and drive both by hand.
+function boot(p = payload(), { live = false } = {}) {
   if (w) w.close(); // each window owns a 30 s setInterval
   const dom = new JSDOM(HTML, { runScripts: "outside-only", pretendToBeVisual: true });
   w = dom.window;
@@ -21,7 +23,11 @@ function boot(p = payload()) {
   posts = [];
   // jsdom has no matchMedia, WKWebView bridge or layout; stub only those.
   w.matchMedia = () => ({ matches: false, addEventListener() {} });
-  w.webkit = { messageHandlers: { ccswap: { postMessage: (m) => posts.push(JSON.parse(JSON.stringify(m))) } } };
+  w.webkit = { messageHandlers: { ccswap: { postMessage: (m) => {
+    posts.push(JSON.parse(JSON.stringify(m)));
+    if (!live && m.action !== "ready" && w.ccswap) w.ccswap.reply({ ok: true, action: m.action });
+  } } } };
+  if (!live) w.requestAnimationFrame = (cb) => { cb(0); return 0; };
   w.Range.prototype.getBoundingClientRect = () => ({ width: 0, height: 0, left: 0, top: 0, right: 0, bottom: 0 });
   w.eval(fs.readFileSync(APP_JS, "utf8"));
   w.ccswap.render(p);
@@ -273,4 +279,51 @@ test("strip: each provider's logo sits in a ring filled to its active account's 
   }
   assert.equal($$("#tabs .mini").length, 0); // the old line under the logo is gone
   assert.equal(tabBtn("All").querySelector(".tring"), null);
+});
+
+const frames = () => new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(() => setTimeout(r, 0))));
+
+test("an action shows its busy label until the reply, and blocks other actions", async () => {
+  boot(payload(), { live: true });
+  open("Claude Code");
+  const before = posts.length;
+  click(btn("Switch", card("Switch account")));
+  const busyBtn = $("button.busy");
+  assert.equal(busyBtn.textContent, "Switching…");
+  assert.equal(busyBtn.getAttribute("aria-busy"), "true");
+  assert.ok(btns("Remove").every((b) => b.disabled), "other actions wait");
+  assert.equal(posts.length, before, "posted only after the busy frame is drawn");
+  await frames();
+  assert.equal(lastPost().action, "rotate");
+  click(btns("Remove")[0]); // ignored while busy
+  assert.equal(lastPost().action, "rotate");
+  w.ccswap.reply({ ok: true, action: "rotate" });
+  assert.equal($("button.busy"), null);
+  assert.ok(btns("Remove").every((b) => !b.disabled));
+});
+
+test("+ Add shows Adding… while the current login is saved", async () => {
+  boot(payload(), { live: true });
+  open("Claude Code");
+  click(btn("+ Add"));
+  click($$(".choice")[0]);
+  assert.equal($("button.busy").textContent, "Adding…");
+  await frames();
+  assert.deepEqual(lastPost(), { action: "addLogin", provider: "claude" });
+  w.ccswap.reply({ ok: true, action: "addLogin", note: "Claude Code: account 3 added. c@example.com" });
+  assert.ok(btn("+ Add"));
+  assert.match($("#view").textContent, /account 3 added/);
+});
+
+test("refresh spins and the footer says Checking… while any provider is fetching", () => {
+  const p = payload();
+  p.providers[1].refreshing = true;
+  boot(p);
+  assert.equal($("#checked").textContent, "Checking…");
+  assert.ok($("#f-refresh").classList.contains("spin"));
+  const q = payload();
+  q.providers.forEach((x) => { x.refreshing = false; });
+  w.ccswap.render(q);
+  assert.match($("#checked").textContent, /^(Checked|Not checked)/);
+  assert.ok(!$("#f-refresh").classList.contains("spin"));
 });

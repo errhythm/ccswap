@@ -25,6 +25,29 @@
   let dirty = false;
 
   const post = (msg) => window.webkit.messageHandlers.ccswap.postMessage(msg);
+  // An account action runs on the app's main thread and freezes the popover until it
+  // replies, so mark it busy and let that frame reach the screen before posting.
+  let busy = null; // key of the action awaiting its reply
+  let busyTimer = 0;
+  const keyOf = (m) => [m.action, m.provider, m.number, m.strategy].filter((x) => x != null).join(":");
+  const BUSY_TEXT = { switch: "Switching…", rotate: "Switching…", addLogin: "Adding…", addToken: "Adding…",
+    remove: "Removing…", toggleDisabled: "Saving…", refreshCreds: "Refreshing…", restartEngine: "Restarting…", toggleAuto: "Saving…" };
+  const checking = () => !!(data && data.providers.some((p) => p.refreshing));
+  function act(msg) {
+    if (busy) return;
+    busy = keyOf(msg);
+    clearTimeout(busyTimer);
+    busyTimer = setTimeout(() => { busy = null; draw(); }, 60000); // never strand the page if no reply comes
+    draw();
+    requestAnimationFrame(() => requestAnimationFrame(() => post(msg)));
+  }
+  // A button for an account action: shows a spinner and its busy label while that action runs,
+  // and is disabled while any other one does.
+  function actBtn(text, msg, cls = "btn") {
+    const mine = busy === keyOf(msg);
+    return h("button", { class: cls + (mine ? " busy" : ""), disabled: !!busy, "aria-busy": mine ? "true" : null,
+      onclick: (e) => { e.stopPropagation(); act(msg); } }, mine ? (BUSY_TEXT[msg.action] || "Working…") : text);
+  }
 
   function h(tag, props, ...kids) {
     const el = document.createElement(tag);
@@ -213,12 +236,14 @@
       return;
     }
     pending = null;
-    post({ action: "switch", provider: prov.id, number: acct.number });
+    act({ action: "switch", provider: prov.id, number: acct.number });
   }
   function switchButton(prov, acct) {
     if (!prov.capabilities.switch || acct.active) return null;
     const armed = pending && pending.key === prov.id + ":" + acct.number;
-    return h("button", { class: "btn" + (armed ? " on" : ""), text: armed ? "Restart sessions? Confirm" : "Switch",
+    const mine = busy === keyOf({ action: "switch", provider: prov.id, number: acct.number });
+    return h("button", { class: "btn" + (armed ? " on" : "") + (mine ? " busy" : ""), disabled: !!busy, "aria-busy": mine ? "true" : null,
+      text: mine ? BUSY_TEXT.switch : armed ? "Restart sessions? Confirm" : "Switch",
       onclick: (e) => { e.stopPropagation(); doSwitch(prov, acct); } });
   }
 
@@ -234,9 +259,8 @@
     const email = h("span", { class: "em", title: label(acct), text: label(acct) + (acct.disabled ? " (disabled)" : "") });
     if (!manage) return h("div", { class: "acct" }, email, miniBars(acct), switchButton(prov, acct));
     return h("div", { class: "acctwrap" }, h("div", { class: "acct" }, email), h("div", { class: "actions" }, miniBars(acct), h("span", { class: "spacer" }), switchButton(prov, acct),
-      caps.disable ? h("button", { class: "btn", text: acct.disabled ? "Enable" : "Disable",
-        onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: acct.number, disabled: !acct.disabled }) }) : null,
-      h("button", { class: "btn", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: acct.number }) })));
+      caps.disable ? actBtn(acct.disabled ? "Enable" : "Disable", { action: "toggleDisabled", provider: prov.id, number: acct.number, disabled: !acct.disabled }) : null,
+      actBtn("Remove", { action: "remove", provider: prov.id, number: acct.number })));
   }
 
   function autoOn(prov) { return !!(prov.autoSwitch && prov.autoSwitch.enabled); }
@@ -247,7 +271,7 @@
     const f = prov.autoSwitch && prov.autoSwitch.failure;
     if (!f) return null;
     return h("div", { class: "actions" }, h("span", { class: "err", text: f }),
-      h("button", { class: "btn", text: "Restart", onclick: () => post({ action: "restartEngine", provider: prov.id }) }));
+      actBtn("Restart", { action: "restartEngine", provider: prov.id }));
   }
 
   function overviewCard(prov) {
@@ -313,7 +337,7 @@
         onclick: () => { chosen[prov.id] = s; draw(); } })));
     return h("section", { class: "card" },
       h("div", { class: "actions" }, h("span", { class: "title", text: "Switch account" }), h("span", { class: "spacer" }),
-        h("button", { class: "btn on", text: "Switch", onclick: () => post({ action: "rotate", provider: prov.id, strategy: pick }) })),
+        actBtn("Switch", { action: "rotate", provider: prov.id, strategy: pick }, "btn on")),
       seg, STRATEGY[pick] ? h("div", { class: "muted", text: STRATEGY[pick][1] }) : null);
   }
 
@@ -359,12 +383,14 @@
     if (strategies.length && (prov.accounts || []).length > 1) wrap.append(switchCard(prov, strategies));
 
     const others = (prov.accounts || []).filter((a) => !a.active);
-    const add = h("button", { class: "btn", text: "+ Add", "aria-expanded": String(addOpen), onclick: () => { addOpen = !addOpen; tokenOpen = false; draw(); } });
+    const adding = busy === keyOf({ action: "addLogin", provider: prov.id }) || busy === keyOf({ action: "addToken", provider: prov.id });
+    const add = h("button", { class: "btn" + (adding ? " busy" : ""), text: adding ? BUSY_TEXT.addLogin : "+ Add", disabled: !!busy,
+      "aria-busy": adding ? "true" : null, "aria-expanded": String(addOpen), onclick: () => { addOpen = !addOpen; tokenOpen = false; draw(); } });
     const oc = h("section", { class: "card" }, h("div", { class: "actions" }, h("span", { class: "sect", text: others.length ? "Other accounts" : "Add an account" }), h("span", { class: "spacer" }), add));
     if (addOpen) {
       const choice = (title, sub, onclick) => h("button", { class: "choice", onclick }, h("span", { text: title }), h("span", { class: "muted", text: sub }));
       oc.append(h("div", { class: "menu" },
-        choice("Current login", `Saves the account ${prov.label} is signed in to`, () => { addOpen = false; post({ action: "addLogin", provider: prov.id }); draw(); }),
+        choice("Current login", `Saves the account ${prov.label} is signed in to`, () => { addOpen = false; act({ action: "addLogin", provider: prov.id }); }),
         prov.addToken ? choice("Setup token or API key", "Same as ccswap add-token", () => { addOpen = false; tokenOpen = true; draw(); }) : null));
     }
     if (prov.addToken && tokenOpen) oc.append(tokenForm(prov));
@@ -373,10 +399,9 @@
 
     // Tools for the active account, under its email so it's clear which account they act on.
     const tools = [];
-    if (prov.id === "claude") tools.push(h("button", { class: "btn", text: "Refresh credentials", onclick: () => post({ action: "refreshCreds" }) }));
-    if (active && caps.disable) tools.push(h("button", { class: "btn", text: active.disabled ? "Enable" : "Disable",
-      onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: active.number, disabled: !active.disabled }) }));
-    if (active) tools.push(h("button", { class: "btn bad", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: active.number }) }));
+    if (prov.id === "claude") tools.push(actBtn("Refresh credentials", { action: "refreshCreds" }));
+    if (active && caps.disable) tools.push(actBtn(active.disabled ? "Enable" : "Disable", { action: "toggleDisabled", provider: prov.id, number: active.number, disabled: !active.disabled }));
+    if (active) tools.push(actBtn("Remove", { action: "remove", provider: prov.id, number: active.number }, "btn bad"));
     if (active && tools.length) {
       // Laid out like an Other accounts row, so the two cards read the same way.
       wrap.append(h("section", { class: "card" }, h("div", { class: "sect", text: "Active account" }),
@@ -391,8 +416,9 @@
     const token = h("input", { type: "password", autocomplete: "off", id: "tok", spellcheck: "false" });
     const email = h("input", { type: "email", autocomplete: "off", id: "tokmail", placeholder: "Detected from the token" });
     const add = h("button", { class: "btn on", text: "Add", disabled: true, onclick: () => {
-      post({ action: "addToken", provider: prov.id, email: email.value.trim(), token: token.value.trim() });
-      token.value = ""; tokenOpen = false; draw();
+      const msg = { action: "addToken", provider: prov.id, email: email.value.trim(), token: token.value.trim() };
+      token.value = ""; tokenOpen = false;
+      act(msg);
     } });
     token.addEventListener("input", () => { add.disabled = !token.value.trim(); });
     return h("div", { class: "tokform" },
@@ -469,7 +495,8 @@
     head.replaceChildren(h("span", { class: "tile" }, h("img", { src: "mark.svg", alt: "" })), h("span", { class: "title", text: "ccswap" }),
       h("span", { class: "spacer" }),
       any ? autoChip(`Auto at ${round(data.settings.threshold)}%`, () => { tab = "settings"; draw(); }, data.settings.strategy ? `Strategy: ${data.settings.strategy}` : null) : null,
-      h("button", { class: "ib", title: "Refresh", "aria-label": "Refresh", onclick: () => post({ action: "refresh" }) }, icon("refresh")));
+      h("button", { class: "ib" + (checking() ? " spin" : ""), title: "Refresh", "aria-label": checking() ? "Refreshing" : "Refresh",
+        onclick: () => post({ action: "refresh" }) }, icon("refresh")));
   }
 
   // Option B: the active account's tightest window wraps the provider logo as a ring.
@@ -516,7 +543,8 @@
     gear.classList.toggle("sel", tab === "settings");
     gear.setAttribute("aria-pressed", String(tab === "settings"));
     const at = data.lastCheckedAt;
-    document.getElementById("checked").textContent = at ? "Checked " + hhmm(new Date(at * 1000)) : "Not checked yet";
+    document.getElementById("checked").textContent = checking() ? "Checking…" : at ? "Checked " + hhmm(new Date(at * 1000)) : "Not checked yet";
+    document.getElementById("f-refresh").classList.toggle("spin", checking());
     dirty = false;
   }
 
@@ -532,6 +560,8 @@
       draw();
     },
     reply(r) {
+      busy = null;
+      clearTimeout(busyTimer);
       if (r.note && r.ok) note = { text: r.note, until: Date.now() + 8000 };
       else if (r.restart && r.ok) note = { text: "Restart running sessions to use the new account.", until: Date.now() + 8000 };
       else if (!r.ok && !r.cancelled) note = { text: r.error || "Action failed", bad: true, until: Date.now() + 5000 };

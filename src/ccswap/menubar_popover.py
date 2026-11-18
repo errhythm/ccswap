@@ -387,7 +387,11 @@ def _make_shell_class():
 
         # --- JS bridge ---
         def userContentController_didReceiveScriptMessage_(self, _ucc, message):
-            body = message.body()
+            # An action can hold the main thread for seconds. Run it on the next
+            # run-loop turn so the page's busy state is on screen first.
+            self.performSelector_withObject_afterDelay_("handleMessage:", message.body(), 0.02)
+
+        def handleMessage_(self, body):
             reply = dispatch(self.controller, body, confirm=_confirm)
             if reply is None:
                 return

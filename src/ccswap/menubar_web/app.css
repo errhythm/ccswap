@@ -148,3 +148,10 @@ input[type=range] { flex: 1; padding: 0; accent-color: var(--ok); min-width: 80p
 footer button.sel { background: var(--card-line); color: var(--text); }
 /* the official files carry transparent padding; scale to match the others (docs/provider-logos.md) */
 img[data-p="codex"] { transform: scale(1.15); } img[data-p="agy"] { transform: scale(1.32); }
+/* work in progress: a busy action button and the refresh icon while usage is fetched */
+.btn.busy { display: inline-flex; align-items: center; gap: 6px; opacity: 1; }
+.btn.busy::before { content: ""; width: 9px; height: 9px; border: 1.5px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; animation: spin .7s linear infinite; }
+.spin svg { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .btn.busy::before, .spin svg { animation: none; } }
