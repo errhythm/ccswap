@@ -596,9 +596,11 @@ def format_title(
             p = _scoped_max(active_usage, "weekly")
         if p is not None:
             segments.append(f"{p:.0f}%")
-    if settings.title_scoped and isinstance(active_usage, dict):
-        # Per-model weekly limits (e.g. Fable), same shape/roll-forward as the
-        # dropdown rows; named so multiple scoped models stay distinguishable.
+    if settings.title_scoped and isinstance(active_usage, dict) and tightest_pct(active_usage) is not None:
+        # Per-model weekly limits (e.g. Fable) as extras next to account-wide
+        # windows. A provider with only scoped windows (Antigravity's groups)
+        # is already summarised by the 5h / weekly maxima above, so listing
+        # every group would just repeat them at length.
         for window in active_usage.get("scoped") or []:
             window = _rolled_scoped_window(window, now)
             if isinstance(window, dict) and isinstance(window.get("pct"), (int, float)) and window.get("name"):

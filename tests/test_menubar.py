@@ -1131,3 +1131,13 @@ def test_empty_settings_json_still_imports_the_old_file(tmp_path: Path):
     (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True}))
     (tmp_path / "settings.json").write_text("{}", encoding="utf-8")
     assert menubar.MenuBarSettings.load(tmp_path).auto_switch_enabled is True
+
+
+def test_scoped_title_lists_extras_only_next_to_account_wide_windows():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="both", title_scoped=True)
+    # Antigravity: groups only -> just the 5h and weekly maxima, no group list
+    assert menubar.format_title("a@x.io", _AGY_USAGE, s, now=0, icon=False) == "30% · 40%"
+    # Claude: account-wide windows plus a per-model extra -> the extra is named
+    claude = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 69.0},
+              "scoped": [{"name": "Fable", "pct": 0.0}]}
+    assert menubar.format_title("a@x.io", claude, s, now=0, icon=False) == "10% · 69% · Fable 0%"
