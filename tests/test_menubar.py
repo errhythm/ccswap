@@ -795,18 +795,29 @@ def test_format_title_reflects_passed_weekly_reset():
 
 # --- run() app glue ------------------------------------------------------------
 
-def test_run_without_rumps_raises_clean_error(monkeypatch):
+def test_run_without_the_extra_raises_clean_error(monkeypatch):
     """A missing menubar extra surfaces as ClaudeSwitchError, not a traceback.
 
-    The module is import-safe without rumps, so the CLI's ImportError guard
-    around ``from ccswap.menubar import run`` can never fire — the import
-    failure happens inside ``run()``. Blocking the import (a ``None`` entry in
-    ``sys.modules`` makes ``import rumps`` raise) checks that ``run()`` turns
-    it into the error type the CLI renders with the install hint.
+    A ``None`` entry in ``sys.modules`` makes ``import AppKit`` raise.
     """
-    monkeypatch.setitem(sys.modules, "rumps", None)
+    monkeypatch.setitem(sys.modules, "AppKit", None)
     with pytest.raises(ClaudeSwitchError, match=r"ccswap\[menubar\]"):
         menubar.run(switcher=None)
+
+
+@pytest.mark.parametrize(
+    "style, classic, webkit, rumps, expected",
+    [
+        ("popover", False, True, True, "popover"),
+        ("popover", True, True, True, "classic"),  # --classic wins for one run
+        ("classic", False, True, True, "classic"),
+        ("popover", False, False, True, "classic"),  # no WebKit: fall back
+        ("popover", False, False, False, None),
+        ("classic", False, True, False, None),
+    ],
+)
+def test_pick_shell(style, classic, webkit, rumps, expected):
+    assert menubar.pick_shell(style, classic, webkit, rumps) == expected
 
 
 class TestFrameworkBuildWarning:

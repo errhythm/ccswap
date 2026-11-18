@@ -305,6 +305,5 @@ def run(controller) -> int:
                 self.render()
             return cb
 
-    controller.start()
     ClassicApp().run()
     return 0
