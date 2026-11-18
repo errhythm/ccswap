@@ -431,7 +431,7 @@
 
   function settingsTab() {
     const s = data.settings;
-    const wrap = h("div", {});
+    const wrap = h("div", {}, h("div", { class: "row phead" }, h("span", { class: "title", text: "Settings" })));
     wrap.append(group("Menu bar title",
       setRow("Show", "Auto follows the account closest to its limit",
         seg([["auto", "Auto"]].concat(data.providers.map((p) => [p.id, p.label.split(" ")[0], p.id])), data.title.setting,
@@ -509,6 +509,9 @@
     else if (tab === "settings") view.append(settingsTab());
     else view.append(providerTab(prov));
     view.scrollTop = keep;
+    const gear = document.getElementById("f-settings");
+    gear.classList.toggle("sel", tab === "settings");
+    gear.setAttribute("aria-pressed", String(tab === "settings"));
     const at = data.lastCheckedAt;
     document.getElementById("checked").textContent = at ? "Checked " + hhmm(new Date(at * 1000)) : "Not checked yet";
     dirty = false;
@@ -535,7 +538,8 @@
   document.addEventListener("focusout", () => setTimeout(() => { if (dirty && !editing()) draw(); }, 0));
   for (const [id, name] of [["f-refresh", "refresh"], ["f-settings", "settings"], ["f-quit", "power"]]) document.getElementById(id).append(icon(name));
   document.getElementById("f-refresh").addEventListener("click", () => post({ action: "refresh" }));
-  document.getElementById("f-settings").addEventListener("click", () => { tab = "settings"; draw(); });
+  // The gear toggles: a second click goes back to All.
+  document.getElementById("f-settings").addEventListener("click", () => { tab = tab === "settings" ? "overview" : "settings"; pending = null; draw(); });
   document.getElementById("f-quit").addEventListener("click", () => post({ action: "quit" }));
   dark.addEventListener("change", () => { if (!editing()) draw(); });
   setInterval(() => { if (!editing()) draw(); }, 30000); // countdowns

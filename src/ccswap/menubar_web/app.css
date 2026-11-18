@@ -141,3 +141,4 @@ input[type=range] { flex: 1; padding: 0; accent-color: var(--ok); min-width: 80p
   border-radius: 8px; padding: 6px 8px; }
 .tokform input:focus { outline: 2px solid var(--ok); outline-offset: 0; }
 .phead { margin-bottom: 6px; }
+footer button.sel { background: var(--card-line); color: var(--text); }
