@@ -1,5 +1,9 @@
 # CCSwap Changelog
 
+## [New icon] - {PR_MERGE_DATE}
+
+- New extension icon: the Swap CC mark, two Cs joined into one loop
+
 ## [Every Provider] - {PR_MERGE_DATE}
 
 - Show Accounts: lists every provider ccswap reports, including Antigravity. Each row shows up to two usage windows, and a +N tag lists the rest

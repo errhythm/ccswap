@@ -277,3 +277,25 @@ def test_bundle_built_from_the_real_interpreter_starts_and_imports(tmp_path: Pat
     assert proc.returncode == 0, proc.stderr
     assert Path(proc.stdout.strip()) == apps / app_bundle.BUNDLE_DIRNAME / "Contents"
     assert app_bundle.interpreter_error(python) is None
+
+
+def test_bundle_carries_the_brand_icon_and_refreshes_a_stale_one(tmp_path: Path, monkeypatch):
+    exe, prefix, apps = _fake_install(tmp_path)
+    icns = tmp_path / "ccswap.icns"
+    icns.write_bytes(b"icns v1")
+    monkeypatch.setattr(app_bundle, "ICON_SRC", icns)
+    backup = tmp_path / "data"
+    app_bundle.build(backup, executable=exe, prefix=prefix, applications=apps)
+
+    contents = apps / app_bundle.BUNDLE_DIRNAME / "Contents"
+    info = plistlib.loads((contents / "Info.plist").read_bytes())
+    assert info["CFBundleIconFile"] == "ccswap.icns"
+    assert (contents / "Resources" / "ccswap.icns").read_bytes() == b"icns v1"
+
+    icns.write_bytes(b"icns v2")
+    app_bundle.build(backup, executable=exe, prefix=prefix, applications=apps)
+    assert (contents / "Resources" / "ccswap.icns").read_bytes() == b"icns v2"
+
+
+def test_shipped_icon_exists():
+    assert app_bundle.ICON_SRC.read_bytes()[:4] == b"icns"
