@@ -83,7 +83,7 @@
     const out = (Array.isArray(acct.windows) ? acct.windows : []).map((w) => norm(w, !!w.scope));
     if (!out.some((x) => x.model)) { // Claude lists per-model limits under usage.scoped
       for (const s of (acct.usage && acct.usage.scoped) || []) {
-        out.push(norm(Object.assign({}, s, { label: s.window ? s.name : `Weekly · ${s.name}` }), true, s.window === "5h" ? "5h" : "wk"));
+        out.push(norm(Object.assign({}, s, { label: s.window ? s.name : `${s.name} weekly` }), true, s.window === "5h" ? "5h" : "wk"));
       }
     }
     return out;
@@ -106,7 +106,7 @@
   }
   const kindName = (x) => (x.kind === "5h" ? "5h" : "Weekly");
   function lasts(w) {
-    return w.willLastToReset === true ? " · lasts to reset" : "";
+    return w.willLastToReset === true ? ". Lasts until reset" : "";
   }
 
   // --- logos ---
@@ -130,10 +130,10 @@
   const tip = () => document.getElementById("tip");
   function showTip(x, anchor) {
     const w = x.w, t = tip();
-    const name = x.kind === "5h" ? (x.model ? x.label : "5-hour session") : (x.model ? x.label : "Weekly · all models");
+    const name = x.kind === "5h" ? (x.model ? x.label : "5-hour session") : (x.model ? x.label : "Weekly, all models");
     const ro = runsOut(w);
     const line = w.resetsAt
-      ? `Resets in ${countdown(w.resetsAt)} · ${clock(w.resetsAt)}${lasts(w)}${ro ? ` · runs out ~${clock(ro.at)}` : ""}`
+      ? `Resets in ${countdown(w.resetsAt)} (${clock(w.resetsAt)})${ro ? `. Runs out around ${clock(ro.at)}` : lasts(w)}`
       : "No active window";
     t.replaceChildren(h("b", { class: level(w.pct), text: `${name}` }), h("b", { class: level(w.pct), text: `${round(w.pct)}%` }), h("div", { text: line }));
     t.style.display = "block";
@@ -202,7 +202,7 @@
   const chipWarn = (text) => h("span", { class: "chip warn" }, h("i"), text);
   function runsOutChip(w) {
     const ro = runsOut(w);
-    return ro ? chipWarn(`Runs out ~${clock(ro.at)} · ${dur(ro.before)} before the reset`) : null;
+    return ro ? chipWarn(`Runs out around ${clock(ro.at)}, ${dur(ro.before)} before the reset`) : null;
   }
 
   function doSwitch(prov, acct) {
@@ -240,8 +240,8 @@
   }
 
   function autoOn(prov) { return !!(prov.autoSwitch && prov.autoSwitch.enabled); }
-  function autoChip(text, onclick) {
-    return h(onclick ? "button" : "span", { class: "chip", onclick }, h("i"), text);
+  function autoChip(text, onclick, title) {
+    return h(onclick ? "button" : "span", { class: "chip", onclick, title }, h("i"), text);
   }
   function failureRow(prov) {
     const f = prov.autoSwitch && prov.autoSwitch.failure;
@@ -259,7 +259,7 @@
     const plan = planOf(prov);
     let sub = prov.refreshing ? "refreshing" : "No active account";
     if (bind) sub = `${bind.model && bind.kind === "wk" ? bind.label : kindName(bind)}` + (bind.w.resetsAt
-      ? ` resets in ${countdown(bind.w.resetsAt)} · ${clock(bind.w.resetsAt)}${lasts(bind.w)}` : " · no active window");
+      ? ` resets in ${countdown(bind.w.resetsAt)} (${clock(bind.w.resetsAt)})${lasts(bind.w)}` : ", no active window");
     card.append(h("div", { class: "head" }, ltile(prov.id),
       h("div", { class: "meta" },
         h("div", { class: "name" }, h("span", { text: prov.label }), plan ? h("span", { class: "chip plan", text: plan }) : null),
@@ -288,13 +288,13 @@
         h("span", { class: "n" }, name, x.model ? h("small", { text: "per-model" }) : (x.kind === "wk" ? h("small", { text: "all models" }) : null)),
         h("span", { style: "color:var(--level);font-weight:600", text: `${round(w.pct || 0)}%` })),
       bar(w.pct, w.expectedPct),
-      w.resetsAt ? h("div", { class: "muted", text: `Resets in ${countdown(w.resetsAt)} · ${clock(w.resetsAt)}` }) : null);
+      w.resetsAt ? h("div", { class: "muted", text: `Resets in ${countdown(w.resetsAt)} (${clock(w.resetsAt)})` }) : null);
     if (typeof w.expectedPct === "number" && !x.model) {
       const d = round(w.pct - w.expectedPct);
       const ro = runsOut(w);
       wrap.append(h("div", { class: "pace" + (w.aheadOfPace ? " ahead" : ""),
         text: (w.aheadOfPace ? `Pace: ahead +${d} pts` : `Pace: ${Math.abs(d)} pts under budget`)
-          + (ro ? ` · runs out ~${clock(ro.at)}` : lasts(w)) }));
+          + (ro ? `. Runs out around ${clock(ro.at)}` : lasts(w)) }));
     }
     return wrap;
   }
@@ -314,7 +314,7 @@
     if (active) {
       const age = typeof active.usageAgeSeconds === "number" ? `checked ${dur(active.usageAgeSeconds * 1000) || "0m"} ago` : "";
       wrap.append(h("div", { class: "row" }, h("span", { class: "em", text: label(active) + (active.disabled ? " (disabled)" : "") }),
-        h("span", { class: "chip active", text: "ACTIVE" }), h("span", { class: "muted", text: age })));
+        h("span", { class: "chip active", text: "Active" }), h("span", { class: "muted", text: age })));
       if (active.note) wrap.append(h("div", { class: "note", text: active.note }));
       if (active.loginNote) wrap.append(h("div", { class: "muted", text: active.loginNote }));
       const hero = pick(ws, "5h") || pick(ws, "wk");
@@ -326,7 +326,7 @@
             h("div", { class: "sub", text: hero.kind === "5h" ? "5-hour window" : "weekly window" })),
           h("div", { class: "pct" }, `${round(w.pct)}`, h("small", { text: "%" }))));
         card.append(h("div", { style: "margin:10px 0 6px" }, bar(w.pct, w.expectedPct)));
-        if (w.resetsAt) card.append(h("div", { class: "muted", text: `Resets in ${countdown(w.resetsAt)} · ${clock(w.resetsAt)}` }));
+        if (w.resetsAt) card.append(h("div", { class: "muted", text: `Resets in ${countdown(w.resetsAt)} (${clock(w.resetsAt)})` }));
         const chip = runsOutChip(w);
         if (chip) card.append(h("div", { class: "actions" }, chip));
         wrap.append(card);
@@ -443,7 +443,7 @@
     const any = data.providers.some(autoOn);
     head.replaceChildren(h("span", { class: "tile" }, h("img", { src: "mark.svg", alt: "" })), h("span", { class: "title", text: "ccswap" }),
       h("span", { class: "spacer" }),
-      any ? autoChip(`Auto · ${data.settings.strategy ? data.settings.strategy + " · " : ""}${round(data.settings.threshold)}%`, () => { tab = "settings"; draw(); }) : null,
+      any ? autoChip(`Auto at ${round(data.settings.threshold)}%`, () => { tab = "settings"; draw(); }, data.settings.strategy ? `Strategy: ${data.settings.strategy}` : null) : null,
       h("button", { class: "ib", title: "Refresh", "aria-label": "Refresh", onclick: () => post({ action: "refresh" }) }, icon("refresh")));
   }
 

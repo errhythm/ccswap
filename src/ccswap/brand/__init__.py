@@ -1,8 +1,8 @@
-"""ccswap brand: the Swap CC mark (two Cs joined into one loop).
+"""ccswap brand: the Swap CC mark (two Cs joined into one loop, flat off-white on the Relay green tile).
 
 ``mark.svg`` (white → coral blend), ``mark-mono.svg`` (template glyph) and
-``icon.svg`` (1024 app icon on the Dusk tile) are the source files, drawn from
-the Figma "Swap CC · seamless join" board. Contract for the menu bar shells
+``icon.svg`` (1024 app icon on the flat Relay green tile) are the source files, drawn from
+the Figma "Logo palettes · Relay" board. Contract for the menu bar shells
 (menu bar v2 phase); ``glyph_image`` is implemented by the brand implementer.
 """
 
