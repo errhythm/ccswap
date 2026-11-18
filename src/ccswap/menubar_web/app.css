@@ -49,7 +49,7 @@ nav button { flex: 1; background: transparent; border: 0; border-radius: 8px; pa
   flex-direction: column; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; min-width: 0; }
 nav button.sel { background: var(--card-line); color: var(--text); font-weight: 600; }
 nav .lbl { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
-nav .lbl img { width: 13px; height: 13px; }
+nav .lbl img { width: 16px; height: 16px; }
 nav .mini { width: 70%; height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
 main { flex: 1; overflow-y: auto; padding: 4px 12px 8px; }
 footer { display: flex; gap: 6px; align-items: center; padding: 8px 12px 10px; color: var(--muted); font-size: 11px; }

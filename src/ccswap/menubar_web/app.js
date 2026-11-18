@@ -450,15 +450,16 @@
   function drawTabs() {
     const tabs = document.getElementById("tabs");
     if (tab !== "overview") return tabs.replaceChildren();
-    const mk = (id, kids, extra) => h("button", { role: "tab", class: tab === id ? "sel" : "", onclick: () => { tab = id; pending = null; draw(); } },
-      h("span", { class: "lbl" }, ...kids), extra);
+    const mk = (id, kids, extra, name) => h("button", { role: "tab", class: tab === id ? "sel" : "", title: name, "aria-label": name,
+      onclick: () => { tab = id; pending = null; draw(); } }, h("span", { class: "lbl" }, ...kids), extra);
     tabs.replaceChildren(mk("overview", [h("span", { text: "All" })], h("div", { class: "mini" })),
       ...data.providers.map((p) => {
         const a = (p.accounts || []).find((x) => x.active);
         const t = a && tight(a);
         const m = h("div", { class: "mini " + (t ? level(t.w.pct) : "") });
         if (t) m.append(h("i", { style: `display:block;height:100%;border-radius:2px;background:var(--level);width:${Math.min(100, t.w.pct)}%` }));
-        return mk(p.id, [logo(p.id), h("span", { text: p.label.split(" ")[0] })], m);
+        // logo only; the provider name is the tooltip and the accessible label
+        return mk(p.id, [logo(p.id)], m, p.label);
       }));
   }
 
