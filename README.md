@@ -131,7 +131,7 @@ From source: `git clone https://github.com/errhythm/ccswap.git && cd ccswap && u
 ## Requirements
 
 - Python 3.12+
-- Claude Code and/or Codex CLI
+- Claude Code, Codex CLI and/or Antigravity
 - A file-backed login for managed Codex accounts
 
 ## Support
@@ -140,6 +140,6 @@ If ccswap saved you from a rate limit, a ⭐ on [GitHub](https://github.com/errh
 
 ## License and credits
 
-`ccswap` began as a fork of [claude-swap (`cswap`)](https://github.com/realiti4/claude-swap) by Onur Cetinkol, and still carries the original MIT license and credit for that. Since then it's grown into its own project: no more tracking upstream, no `cswap` compatibility, its own package and release line, and adds Codex support. It's MIT-licensed too, so fork it, file issues, send PRs — whatever's useful to you.
+`ccswap` began as a fork of [claude-swap (`cswap`)](https://github.com/realiti4/claude-swap) by Onur Cetinkol, and still carries the original MIT license and credit for that. Since then it's grown into its own project: no more tracking upstream, no `cswap` compatibility, its own package and release line, and Codex and Antigravity support. It's MIT-licensed too, so fork it, file issues, send PRs, whatever's useful to you.
 
-MIT. This fork retains the original project's copyright and license notice; see [LICENSE](https://github.com/errhythm/ccswap/blob/main/LICENSE). Upstream: [realiti4/claude-swap](https://github.com/realiti4/claude-swap).
+[LICENSE](https://github.com/errhythm/ccswap/blob/main/LICENSE) keeps Onur Cetinkol's original copyright notice next to ccswap's.
