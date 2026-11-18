@@ -40,8 +40,7 @@ img { display: block; }
 .chip.warn i { background: var(--warn); }
 .chip.active { color: var(--ok); font-size: 10px; font-weight: 600; padding: 0 6px; }
 .ib { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border-radius: 9px; }
-.ib svg, .back svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.back { background: none; border: 0; padding: 4px; display: grid; place-items: center; color: var(--muted); }
+.ib svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 nav { display: flex; gap: 2px; margin: 4px 12px 6px; padding: 3px; border-radius: 11px; background: var(--glass);
   border: 1px solid var(--card-line); }
 nav:empty { display: none; }
@@ -138,3 +137,4 @@ input[type=range] { flex: 1; padding: 0; accent-color: var(--ok); min-width: 80p
 .tokform input { font: inherit; color: var(--text); background: var(--glass); border: 1px solid var(--card-line);
   border-radius: 8px; padding: 6px 8px; }
 .tokform input:focus { outline: 2px solid var(--ok); outline-offset: 0; }
+.phead { margin-bottom: 6px; }

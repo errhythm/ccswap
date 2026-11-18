@@ -48,7 +48,6 @@
     refresh: [["path", { d: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" }]],
     settings: [["path", { d: "M4 7h9M17 7h3M4 17h3M11 17h9" }], ["circle", { cx: 15, cy: 7, r: 2 }], ["circle", { cx: 9, cy: 17, r: 2 }]],
     power: [["path", { d: "M12 3v8M7 6.3a8 8 0 1 0 10 0" }]],
-    back: [["path", { d: "M15 5l-7 7 7 7" }]],
   };
   const icon = (name) => svg("svg", { viewBox: "0 0 24 24" }, ...ICONS[name].map(([t, a]) => svg(t, a)));
 
@@ -312,6 +311,13 @@
     if (prov.error) wrap.append(h("div", { class: "card err", text: prov.error }));
     const fail = failureRow(prov);
     if (fail) wrap.append(h("div", { class: "card" }, fail));
+    const plan = planOf(prov);
+    wrap.append(h("div", { class: "row phead" }, h("span", { class: "title", text: prov.label }),
+      plan ? h("span", { class: "chip plan", text: plan }) : null, h("span", { class: "spacer" }),
+      caps.autoSwitch && prov.autoSwitch
+        ? (autoOn(prov) ? autoChip("Auto on", () => post({ action: "toggleAuto", provider: prov.id, enabled: false }))
+          : h("button", { class: "chip", text: "Auto off", onclick: () => post({ action: "toggleAuto", provider: prov.id, enabled: true }) }))
+        : null));
     if (active) {
       const age = typeof active.usageAgeSeconds === "number" ? `checked ${dur(active.usageAgeSeconds * 1000) || "0m"} ago` : "";
       wrap.append(h("div", { class: "row" }, h("span", { class: "em", text: label(active) + (active.disabled ? " (disabled)" : "") }),
@@ -435,21 +441,9 @@
   }
 
   // --- chrome ---
-  function backHead(titleKids) {
-    return [h("button", { class: "back", title: "Back", "aria-label": "Back", onclick: () => { tab = "overview"; pending = null; draw(); } }, icon("back")), ...titleKids.filter(Boolean)];
-  }
-  function drawHead(prov) {
+  // The header and the provider strip stay put in every view, so switching is one click in the strip.
+  function drawHead() {
     const head = document.getElementById("head");
-    if (tab === "settings") return head.replaceChildren(...backHead([h("span", { class: "title", text: "Settings" })]));
-    if (prov) {
-      const plan = planOf(prov);
-      return head.replaceChildren(...backHead([ltile(prov.id), h("span", { class: "title", text: prov.label }),
-        plan ? h("span", { class: "chip plan", text: plan }) : null, h("span", { class: "spacer" }),
-        prov.capabilities.autoSwitch && prov.autoSwitch
-          ? (autoOn(prov) ? autoChip("Auto on", () => post({ action: "toggleAuto", provider: prov.id, enabled: false }))
-            : h("button", { class: "chip", text: "Auto off", onclick: () => post({ action: "toggleAuto", provider: prov.id, enabled: true }) }))
-          : null]));
-    }
     const any = data.providers.some(autoOn);
     head.replaceChildren(h("span", { class: "tile" }, h("img", { src: "mark.svg", alt: "" })), h("span", { class: "title", text: "ccswap" }),
       h("span", { class: "spacer" }),
@@ -459,7 +453,6 @@
 
   function drawTabs() {
     const tabs = document.getElementById("tabs");
-    if (tab !== "overview") return tabs.replaceChildren();
     const mk = (id, kids, extra, name) => h("button", { role: "tab", class: tab === id ? "sel" : "", title: name, "aria-label": name,
       onclick: () => { tab = id; pending = null; draw(); } }, h("span", { class: "lbl" }, ...kids), extra);
     tabs.replaceChildren(mk("overview", [h("span", { text: "All" })], h("div", { class: "mini" })),
@@ -480,7 +473,7 @@
     const keep = view.scrollTop;
     const prov = data.providers.find((p) => p.id === tab);
     if (!prov && tab !== "overview" && tab !== "settings") tab = "overview";
-    drawHead(prov);
+    drawHead();
     drawTabs();
     view.replaceChildren();
     if (note && note.until > Date.now()) view.append(h("div", { class: "card " + (note.bad ? "err" : "note"), text: note.text }));
