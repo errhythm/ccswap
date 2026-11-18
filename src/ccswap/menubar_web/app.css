@@ -18,7 +18,8 @@ button { font: inherit; color: inherit; background: var(--card2); border: 0; bor
 button:hover { filter: brightness(1.2); }
 button:disabled { opacity: .4; cursor: default; }
 button.on { background: var(--accent, var(--claude)); color: #111; }
-nav { display: flex; gap: 4px; padding: 10px 10px 4px; flex-wrap: wrap; }
+nav { display: flex; gap: 4px; padding: 10px 10px 4px; overflow-x: auto; scrollbar-width: none; }
+nav button { white-space: nowrap; }
 nav button { background: transparent; color: var(--muted); }
 nav button.sel { background: var(--card); color: var(--text); }
 main { flex: 1; overflow-y: auto; padding: 6px 10px 10px; }

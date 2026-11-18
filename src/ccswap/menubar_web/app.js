@@ -17,6 +17,7 @@
       if (k === "class") el.className = v;
       else if (k === "text") el.textContent = v;
       else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else if (k === "style") el.style.cssText = v; // the CSP blocks style attributes, not the CSSOM
       else if (v !== false && v != null) el.setAttribute(k, v === true ? "" : v);
     }
     for (const kid of kids.flat()) if (kid != null) el.append(kid);
@@ -235,8 +236,7 @@
     const tabs = document.getElementById("tabs");
     tabs.replaceChildren(
       tabButton("overview", "Overview"),
-      ...data.providers.map((p) => tabButton(p.id, p.label)),
-      tabButton("settings", "Settings"));
+      ...data.providers.map((p) => tabButton(p.id, p.label)));  // Settings opens from the footer
     const view = document.getElementById("view");
     const prov = data.providers.find((p) => p.id === tab);
     if (!prov && tab !== "overview" && tab !== "settings") tab = "overview";
@@ -246,7 +246,7 @@
     else if (tab === "settings") view.append(settingsTab());
     else view.append(providerTab(prov));
     const at = data.lastCheckedAt;
-    document.getElementById("checked").textContent = at ? "Checked " + new Date(at * 1000).toLocaleTimeString() : "Not checked yet";
+    document.getElementById("checked").textContent = at ? "Checked " + new Date(at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not checked yet";
     dirty = false;
   }
 
