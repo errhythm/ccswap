@@ -12,7 +12,6 @@ import sys
 
 from ccswap import __version__, paths, printer
 from ccswap.codex import CodexAccountSwitcher
-from ccswap.agy import AgyAccountSwitcher
 from ccswap.exceptions import ClaudeSwitchError, ConfigError
 from ccswap.json_output import error_envelope
 from ccswap.printer import (
@@ -766,15 +765,7 @@ def _hub_service(args) -> int:
         return 1
 
 
-# Tests and callers patch these module names; honor them before the registry
-# factory so one patch point keeps working per provider.
-_PATCHABLE_CLASSES = {"codex": "CodexAccountSwitcher", "agy": "AgyAccountSwitcher"}
-
-
 def _new_provider(spec, debug: bool = False):
-    cls = globals().get(_PATCHABLE_CLASSES.get(spec.id, ""))
-    if cls is not None:
-        return cls(debug=True) if debug else cls()
     return spec.factory(debug=debug)
 
 

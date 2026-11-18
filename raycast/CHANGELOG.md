@@ -2,7 +2,7 @@
 
 ## [Every Provider] - {PR_MERGE_DATE}
 
-- Show Accounts: lists every provider ccswap reports, including Antigravity, with all of an account's usage windows
+- Show Accounts: lists every provider ccswap reports, including Antigravity. Each row shows up to two usage windows, and a +N tag lists the rest
 - A provider that fails to load shows its error while the others still list
 - "Switch to Best Account" appears only for providers that support it
 

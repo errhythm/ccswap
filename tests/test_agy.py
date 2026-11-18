@@ -398,10 +398,10 @@ def test_malformed_quota_fraction_is_rejected(bad):
         agy.parse_usage(document)
 
 
-def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, capsys):
+def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, capsys, provider_factory):
     two_accounts(provider)
     capsys.readouterr()
-    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
+    provider_factory("agy", lambda debug=False: provider)
     cli._provider_command(providers.get("agy"), ["list", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["schemaVersion"] == 1
@@ -426,7 +426,7 @@ def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, 
     "Antigravity returned invalid or unavailable quota data",
     "Antigravity usage unavailable",
 ])
-def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, capsys, diagnostic):
+def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, capsys, diagnostic, provider_factory):
     native(auth())
     provider.add_account()
     capsys.readouterr()
@@ -437,7 +437,7 @@ def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, 
         raise agy.AgyError(diagnostic)
 
     monkeypatch.setattr(provider, "_invoke_usage", fail_usage)
-    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
+    provider_factory("agy", lambda debug=False: provider)
     cli._provider_command(providers.get("agy"), ["usage"])
     assert diagnostic in capsys.readouterr().out
     for _ in range(2):
@@ -448,7 +448,7 @@ def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, 
     assert len(attempts) == 1
 
 
-def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypatch, capsys):
+def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypatch, capsys, provider_factory):
     native(auth())
     provider.add_account()
     capsys.readouterr()
@@ -460,7 +460,7 @@ def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypa
 
     monkeypatch.setattr(agy.shutil, "which", missing_cli)
     monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("missing CLI started"))
-    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
+    provider_factory("agy", lambda debug=False: provider)
     for _ in range(2):
         cli._provider_command(providers.get("agy"), ["usage", "--json"])
         diagnostic = json.loads(capsys.readouterr().out)["accounts"][0]["error"]

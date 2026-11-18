@@ -479,12 +479,10 @@ class CswapApp(App):
         )
 
     def do_switch_best(self, provider: str) -> None:
-        if not capabilities(provider).strategies:
+        if "best" not in capabilities(provider).strategies:
             return
         self._start_action(
-            self.gettext("Switch (best)")
-            if provider == "claude"
-            else self.gettext("Switch (next)"),
+            self.gettext("Switch (best)"),
             partial(
                 self.switcher_for(provider).switch,
                 strategy="best",

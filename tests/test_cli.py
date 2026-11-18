@@ -1231,12 +1231,12 @@ class TestJsonOutputCli:
         out = capsys.readouterr().out
         assert json.loads(out) == payload  # exactly one JSON object, no extra text
 
-    def test_list_json_merges_both_providers_by_default(self, capsys):
+    def test_list_json_merges_both_providers_by_default(self, capsys, provider_factory):
         """`list --json` (no --provider) nests both providers under one object."""
         claude_payload = {"schemaVersion": 1, "activeAccountNumber": None, "accounts": []}
         codex_payload = {"provider": "codex", "activeAccountNumber": None, "accounts": []}
+        codex_cls = provider_factory("codex", MagicMock())
         with patch("ccswap.cli.ClaudeAccountSwitcher") as claude_cls, \
-             patch("ccswap.cli.CodexAccountSwitcher") as codex_cls, \
              patch.object(sys, "argv", ["claude-swap", "--list", "--json"]), \
              patch("os.geteuid", return_value=1000, create=True), \
              patch("ccswap.update_check.check_for_update", return_value=None):
@@ -1253,11 +1253,11 @@ class TestJsonOutputCli:
             "agy": {"schemaVersion": 1, "provider": "agy", "activeAccountNumber": None, "accounts": []},
         }
 
-    def test_list_json_failing_provider_is_null_with_error(self, capsys):
+    def test_list_json_failing_provider_is_null_with_error(self, capsys, provider_factory):
         claude_payload = {"schemaVersion": 1, "activeAccountNumber": 1,
                           "accounts": [{"number": 1}]}
+        codex_cls = provider_factory("codex", MagicMock())
         with patch("ccswap.cli.ClaudeAccountSwitcher") as claude_cls, \
-             patch("ccswap.cli.CodexAccountSwitcher") as codex_cls, \
              patch.object(sys, "argv", ["claude-swap", "--list", "--json"]), \
              patch("os.geteuid", return_value=1000, create=True), \
              patch("ccswap.update_check.check_for_update", return_value=None):

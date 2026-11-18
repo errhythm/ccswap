@@ -4,6 +4,7 @@ import {
   canBest,
   errorMessage,
   parseList,
+  rowWindows,
   switchArgs,
   windowsOf,
 } from "../raycast/src/ccswap.ts";
@@ -151,4 +152,38 @@ test("parseList prefers providers[], lists agy, shows a provider error without f
 test("best is offered only when the provider has the strategy", () => {
   const out = parseList(PROVIDERS);
   assert.deepEqual(out.map(canBest), [true, false, true]);
+});
+
+test("rowWindows keeps 5h and weekly on the row and moves the rest to a tooltip", () => {
+  const w = (
+    label: string,
+    pct: number | null,
+    scope: object | null = null,
+  ) => ({ label, pct, scope, resetsAt: null });
+  const claude = rowWindows([
+    w("5h", 10),
+    w("7d", 40),
+    w("Fable", 63, { model: "Fable" }),
+  ]);
+  assert.deepEqual(
+    claude.shown.map((x) => x.label),
+    ["5h", "7d"],
+  );
+  assert.deepEqual(
+    claude.rest.map((x) => x.label),
+    ["Fable"],
+  );
+
+  // Antigravity: every window is scoped, so the two most used win.
+  const agy = rowWindows([
+    w("Pro · 5h", 12, { group: "Pro", bucket: "a" }),
+    w("Pro · weekly", 80, { group: "Pro", bucket: "a" }),
+    w("Flash · 5h", null, { group: "Flash", bucket: "b" }),
+    w("Flash · weekly", 30, { group: "Flash", bucket: "b" }),
+  ]);
+  assert.deepEqual(
+    agy.shown.map((x) => x.label),
+    ["Pro · weekly", "Flash · weekly"],
+  );
+  assert.equal(agy.rest.length, 2);
 });

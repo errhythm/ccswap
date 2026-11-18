@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -52,7 +52,7 @@ def test_claude_prefix_matches_provider_flag(capsys):
     assert json.loads(prefixed) == CLAUDE
 
 
-def test_agy_uses_generic_parser(monkeypatch, capsys):
+def test_agy_uses_generic_parser(provider_factory, capsys):
     calls = []
 
     class Agy:
@@ -60,18 +60,16 @@ def test_agy_uses_generic_parser(monkeypatch, capsys):
             calls.append(json_output)
             print("agy list")
 
-    monkeypatch.setattr(cli, "AgyAccountSwitcher", Agy)
+    provider_factory("agy", lambda debug=False: Agy())
     run_main("agy", "list")
     assert capsys.readouterr().out == "agy list\n" and calls == [False]
     assert providers.get("agy").cli is None
 
 
-def test_fake_provider_in_list_json_and_own_list(fake_provider, capsys):
-    with patch("ccswap.cli.CodexAccountSwitcher") as codex_cls, \
-         patch("ccswap.cli.AgyAccountSwitcher") as agy_cls:
-        codex_cls.return_value.list_payload.return_value = {"accounts": []}
-        agy_cls.return_value.list_payload.return_value = {"accounts": []}
-        run_main("list", "--json")
+def test_fake_provider_in_list_json_and_own_list(fake_provider, provider_factory, capsys):
+    for pid in ("codex", "agy"):
+        provider_factory(pid, MagicMock(**{"return_value.list_payload.return_value": {"accounts": []}}))
+    run_main("list", "--json")
     out = json.loads(capsys.readouterr().out)
     assert out["fake"]["provider"] == "fake"
     assert "fake" in [p["id"] for p in out["providers"]]

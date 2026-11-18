@@ -3218,3 +3218,22 @@ def test_translated_quota_labels_preserve_window_ids_and_spend_countdowns():
     assert 'Weekly' in seen and 'Woche' not in seen
     assert 'Woche' in card and 'Reset in 1h' in card
     assert 'Woche' in mini_account_text(account, now, tr=translate).plain
+
+
+def test_root_menu_hides_entries_no_provider_supports(monkeypatch):
+    from types import SimpleNamespace
+
+    from ccswap import providers as registry
+    from ccswap.tui.dashboard import DashboardScreen
+
+    fake_self = SimpleNamespace(app=SimpleNamespace(gettext=lambda text: text))
+    full = [action for _, action in DashboardScreen._root_entries(fake_self)]
+    assert {"switch", "auto", "disable-menu"} <= set(full)
+
+    usage_only = registry.ProviderSpec(
+        "fourth", "Fourth AI", registry.Capabilities(switch=False), lambda debug=False: None
+    )
+    monkeypatch.setattr(registry, "PROVIDERS", {"fourth": usage_only})
+    only = [action for _, action in DashboardScreen._root_entries(fake_self)]
+    assert "switch" not in only and "auto" not in only and "disable-menu" not in only
+    assert "watch" in only and "add-menu" in only and "remove-menu" in only

@@ -21,6 +21,7 @@ import {
   resolveBinary,
   run,
   switchArgs,
+  rowWindows,
   windowsOf,
 } from "./ccswap";
 
@@ -33,10 +34,16 @@ function windowTag(window: AccountWindow): List.Item.Accessory {
   return { tag: { value: `${name} ${pct}%`, color }, tooltip: window.countdown && `Resets in ${window.countdown}` };
 }
 
+function windowAccessories(windows: AccountWindow[]): List.Item.Accessory[] {
+  const { shown, rest } = rowWindows(windows);
+  const more = rest.map((w) => `${w.label} ${w.pct === null ? "?" : `${Math.round(w.pct)}%`}`).join("\n");
+  return [...shown.map(windowTag), ...(rest.length ? [{ tag: `+${rest.length}`, tooltip: more }] : [])];
+}
+
 function accessories(account: Account): List.Item.Accessory[] {
   return [
     ...(account.disabled ? [{ tag: "Disabled" }] : []),
-    ...windowsOf(account).map(windowTag),
+    ...windowAccessories(windowsOf(account)),
     ...(account.active ? [{ icon: { source: Icon.CheckCircle, tintColor: Color.Green }, tooltip: "Active" }] : []),
   ];
 }

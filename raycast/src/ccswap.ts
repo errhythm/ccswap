@@ -11,7 +11,7 @@ export type Provider = string;
 
 export type UsageWindow = { pct: number | null; countdown?: string };
 
-export type AccountWindow = UsageWindow & { id?: string; label: string };
+export type AccountWindow = UsageWindow & { id?: string; label: string; scope?: object | null };
 
 export type Account = {
   number: number;
@@ -128,6 +128,14 @@ export function windowsOf(account: Account): AccountWindow[] {
     ["7d", u?.sevenDay ?? u?.weekly],
   ];
   return old.flatMap(([label, w]) => (w ? [{ label, ...w }] : []));
+}
+
+/** The row shows at most `max` windows: unscoped ones (5h, weekly) first, then the most used; the rest are returned for a tooltip. */
+export function rowWindows(windows: AccountWindow[], max = 2): { shown: AccountWindow[]; rest: AccountWindow[] } {
+  const unscoped = windows.filter((w) => !w.scope);
+  const ranked = [...windows.filter((w) => w.scope)].sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1));
+  const ordered = [...unscoped, ...ranked];
+  return { shown: ordered.slice(0, max), rest: ordered.slice(max) };
 }
 
 export function label(account: Account): string {

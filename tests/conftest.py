@@ -1003,3 +1003,18 @@ def _crossing_clock(reads):
         return tick
 
     return clock
+
+
+@pytest.fixture
+def provider_factory(monkeypatch):
+    """Point a registered provider at a test double; the registry is the CLI's only seam."""
+    from dataclasses import replace
+
+    from ccswap import providers
+
+    def use(provider_id, factory):
+        spec = providers.PROVIDERS[provider_id]
+        monkeypatch.setitem(providers.PROVIDERS, provider_id, replace(spec, factory=factory))
+        return factory
+
+    return use

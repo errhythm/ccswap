@@ -143,7 +143,13 @@ class DashboardScreen(Screen):
     def _root_entries(self) -> MenuEntries:
         # No "Refresh" entry: every view auto-refreshes, so a menu item would
         # wrongly imply the user has to. `f` stays as a hidden escape hatch.
-        return [
+        # An entry shows only when some registered provider can do it.
+        offered = {
+            "switch": any(capabilities(p).switch for p in PROVIDERS),
+            "auto": any(capabilities(p).auto_switch for p in PROVIDERS),
+            "disable-menu": any(capabilities(p).disable for p in PROVIDERS),
+        }
+        entries = [
             (self.app.gettext("Switch account…"), "switch"),
             (self.app.gettext("Watch accounts"), "watch"),
             (self.app.gettext("Auto-switch view…"), "auto"),
@@ -153,6 +159,7 @@ class DashboardScreen(Screen):
             (self.app.gettext("Settings…"), "settings-menu"),
             (self.app.gettext("Quit"), "quit"),
         ]
+        return [e for e in entries if offered.get(e[1], True)]
 
     def _add_entries(self) -> MenuEntries:
         entries: MenuEntries = []
@@ -730,13 +737,13 @@ class SwitchScreen(AccountListScreen):
     def action_switch_best(self) -> None:
         listview = self.query_one("#accounts", ListView)
         item = listview.highlighted_child
-        if isinstance(item, AccountItem) and capabilities(item.provider).strategies:
+        if isinstance(item, AccountItem) and "best" in capabilities(item.provider).strategies:
             self.app.do_switch_best(item.provider)
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action == "switch_best":
             item = self.query_one("#accounts", ListView).highlighted_child
-            if isinstance(item, AccountItem) and not capabilities(item.provider).strategies:
+            if isinstance(item, AccountItem) and not "best" in capabilities(item.provider).strategies:
                 return False
         return True
 
