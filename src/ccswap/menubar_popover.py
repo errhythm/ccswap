@@ -394,7 +394,7 @@ def _make_shell_class():
                 NSApplication.sharedApplication().terminate_(None)
                 return
             if action == "setStyle" and reply["ok"]:
-                self.controller.stop()  # engines off before the exec
+                self.controller.stop(wait=10)  # let a switch in progress finish before the exec
                 os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
             if self.web is not None:
                 self.web.evaluateJavaScript_completionHandler_(

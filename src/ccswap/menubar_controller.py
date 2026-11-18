@@ -117,8 +117,10 @@ class _Capture:
         return self.raw
 
 
-def _spawn(fn, *args) -> None:
-    threading.Thread(target=fn, args=args, daemon=True).start()
+def _spawn(fn, *args) -> threading.Thread:
+    thread = threading.Thread(target=fn, args=args, daemon=True)
+    thread.start()
+    return thread
 
 
 @dataclass
@@ -204,6 +206,7 @@ class MenuBarController:
         self._claude_note: tuple[bool, str] | None = None
         self._claude_dirty = False
         self._spawn = _spawn  # tests swap in a synchronous runner
+        self._engine_threads: dict[str, threading.Thread | None] = {}
         for pid, spec in providers.items():
             self.states[pid] = self._build_state(pid, spec, claude_switcher)
 
@@ -238,10 +241,18 @@ class MenuBarController:
             if self._auto_enabled(pid):
                 self._start_engine(pid)
 
-    def stop(self) -> None:
-        """Stop every engine (quit, or before a style re-exec)."""
+    def stop(self, wait: float = 0) -> None:
+        """Stop every engine (quit, or before a style re-exec).
+
+        ``wait`` seconds bounds how long to join the engine threads; a re-exec
+        passes one so a switch in progress finishes before the process is replaced.
+        """
+        threads = [t for t in self._engine_threads.values() if t is not None]
         for pid in self.states:
             self._stop_engine(pid)
+        deadline = time.monotonic() + wait
+        for thread in threads:
+            thread.join(max(0.0, deadline - time.monotonic()))
 
     # ---- refresh plumbing -----------------------------------------------------
     def refresh(self, provider_id: str | None = None, full: bool = False) -> None:
@@ -425,7 +436,7 @@ class MenuBarController:
             state.engine_failure = str(e)
             return
         state.engine, state.engine_failure = engine, None
-        self._spawn(self._run_engine, pid, engine)
+        self._engine_threads[pid] = self._spawn(self._run_engine, pid, engine)
 
     def _run_engine(self, pid: str, engine) -> None:
         # Engine thread. Whatever ends the loop, tell the main thread which

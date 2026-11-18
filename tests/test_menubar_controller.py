@@ -531,3 +531,22 @@ def test_unknown_integration_state_is_not_toggled(env):
     ctl = env.ctl
     ctl._claude_state["claude.statusline"] = None
     assert ctl.toggle_claude_integration("statusline") is False
+
+
+def test_stop_with_wait_joins_engine_threads(env):
+    import threading
+
+    ctl = env.ctl
+    release = threading.Event()
+    finished = []
+
+    def slow():
+        release.wait(5)
+        finished.append(True)
+
+    worker = threading.Thread(target=slow, daemon=True)
+    worker.start()
+    ctl._engine_threads["claude"] = worker
+    threading.Timer(0.2, release.set).start()
+    ctl.stop(wait=5)
+    assert finished == [True]  # stop() waited for the engine thread
