@@ -114,7 +114,7 @@ def test_import_does_not_load_appkit():
 def test_shell_class_selectors_register():
     pytest.importorskip("WebKit")
     shell = mp._make_shell_class()[0]
-    for sel in ("togglePopover:", "tick:", "refreshTick:", "releaseWeb:", "popoverDidClose:",
+    for sel in ("togglePopover:", "tick:", "refreshTick:", "webViewWebContentProcessDidTerminate:",
                 "userContentController:didReceiveScriptMessage:"):
         assert shell.instancesRespondToSelector_(sel)
 

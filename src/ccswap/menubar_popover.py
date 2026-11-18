@@ -24,7 +24,6 @@ BRIDGE_ACTIONS = frozenset({
 
 WEB_DIR = Path(__file__).with_name("menubar_web")
 POPOVER_SIZE = (360, 560)
-RELEASE_AFTER_S = 60.0
 INTEGRATIONS = ("statusline", "mod")
 _BAD = {"ok": False, "error": "invalid request"}
 
@@ -260,7 +259,6 @@ def _make_shell_class():
             self.controller = controller
             self.web = self.popover = self.ucc = self.vc = None
             self.page_ready = False
-            self.release_timer = None
             self.refresh_timer = None
             self.interval = None
             self.item = NSStatusBar.systemStatusBar().statusItemWithLength_(
@@ -270,6 +268,9 @@ def _make_shell_class():
             button.setTarget_(self)
             button.setAction_("togglePopover:")
             self.paint_status()
+            # Build and load the page now: starting WebKit on the first click left
+            # the popover blank for about two seconds.
+            self.ensure_popover()
             self._timer(1.0, "tick:")
             self.reschedule_refresh()
             return self
@@ -319,7 +320,8 @@ def _make_shell_class():
 
         @objc.python_method
         def push(self, payload=None):
-            if self.web is None or not self.page_ready or not self.popover.isShown():
+            # Also while hidden, so the popover opens on current numbers.
+            if self.web is None or not self.page_ready:
                 return
             data = json.dumps(payload or self.controller.payload())
             self.web.evaluateJavaScript_completionHandler_(f"ccswap.render({data})", None)
@@ -336,6 +338,7 @@ def _make_shell_class():
             w, h = POPOVER_SIZE
             self.web = WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, w, h), cfg)
             self.web.setValue_forKey_(False, "drawsBackground")
+            self.web.setNavigationDelegate_(self)
             self.page_ready = False
             self.web.loadFileURL_allowingReadAccessToURL_(
                 NSURL.fileURLWithPath_(str(WEB_DIR / "index.html")),
@@ -347,36 +350,25 @@ def _make_shell_class():
             self.popover.setContentViewController_(self.vc)
             self.popover.setContentSize_((w, h))
             self.popover.setBehavior_(1)  # NSPopoverBehaviorTransient
-            self.popover.setDelegate_(self)
+            self.popover.setAnimates_(False)  # open at once, like tinybar
 
         def togglePopover_(self, _sender):
             if self.popover is not None and self.popover.isShown():
                 self.popover.performClose_(None)
                 return
-            if self.release_timer is not None:
-                self.release_timer.invalidate()
-                self.release_timer = None
             self.ensure_popover()
+            self.controller.refresh()  # refresh on open, like tinybar; the usage store paces the network
             button = self.item.button()
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
             self.popover.showRelativeToRect_ofView_preferredEdge_(button.bounds(), button, 1)
             self.web.window().makeFirstResponder_(self.web)
             self.push()
 
-        def popoverDidClose_(self, _note):
-            if self.release_timer is not None:
-                self.release_timer.invalidate()
-            self.release_timer = self._timer(RELEASE_AFTER_S, "releaseWeb:", repeats=False)
-
-        def releaseWeb_(self, _timer):
-            self.release_timer = None
-            if self.popover is None or self.popover.isShown():
-                return
-            self.ucc.removeScriptMessageHandlerForName_("ccswap")
-            self.popover.setContentViewController_(None)
-            self.popover.setDelegate_(None)
-            self.web = self.popover = self.ucc = self.vc = None
+        def webViewWebContentProcessDidTerminate_(self, web):
+            # macOS can kill the page's process under memory pressure; reload so
+            # the long-lived page doesn't stay blank.
             self.page_ready = False
+            web.reload()
 
         # --- JS bridge ---
         def userContentController_didReceiveScriptMessage_(self, _ucc, message):
