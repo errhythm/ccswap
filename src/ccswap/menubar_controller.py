@@ -63,7 +63,7 @@ from ccswap.menubar import (
     resolve_title_provider,
     should_surface_engine_error,
 )
-from ccswap.settings import TITLE_PCT_CHOICES, load_settings, set_setting
+from ccswap.settings import TITLE_PCT_CHOICES, load_settings, parse_model_names, set_setting
 from ccswap.snapshot_source import SnapshotSource
 from ccswap.switcher import SENTINEL_NOTES, USAGE_RELOGIN_REQUIRED
 
@@ -188,6 +188,7 @@ class MenuBarController:
         self.notify = notify
         self.alert = alert
         self.on_interval_changed = on_interval_changed
+        self.last_note: str | None = None  # outcome of the last add_login, for the popover reply
         self._logger = getattr(claude_switcher, "_logger", None) or logging.getLogger("ccswap")
         self.settings = MenuBarSettings.load(backup_root)
         self.states: dict[str, ProviderState] = {}
@@ -575,7 +576,15 @@ class MenuBarController:
             strategy is None or strategy in caps.strategies
         )
         sw = self._usable(provider_id, ok)
-        if sw is None or not self._guard(lambda: sw.switch(strategy=strategy)):
+        if sw is None:
+            return False
+        kwargs = {"strategy": strategy}
+        if provider_id == "claude" and strategy is not None:
+            # like `ccswap switch --strategy`: autoswitch.model steers the usage-aware pick
+            models = parse_model_names(load_settings(self.backup_root).model)
+            if models:
+                kwargs.update(models=models, model_source="autoswitch.model")
+        if not self._guard(lambda: sw.switch(**kwargs)):
             return False
         self._notified_switch(spec)
         return self._done(provider_id)
@@ -603,6 +612,7 @@ class MenuBarController:
         The switcher reports its outcome by printing, which a menu bar never
         shows, so compare the account list before and after and say what happened.
         """
+        self.last_note = None
         sw = self._usable(provider_id)
         if sw is None:
             return False
@@ -612,12 +622,19 @@ class MenuBarController:
         after = self._accounts_now(sw)
         label = self.providers[provider_id].label
         added = [n for n in after if n not in before]
+        said = None
         if added:
-            self.notify(APP, f"{label}: account {added[0]} added", after[added[0]])
+            said = (f"{label}: account {added[0]} added", after[added[0]])
         else:
             active = self._active_number(sw)
             if active in after:
-                self.notify(APP, f"{label}: already account {active}", f"Saved login refreshed for {after[active]}")
+                said = (f"{label}: already account {active}",
+                        f"Saved login refreshed for {after[active]}. "
+                        f"To add another account, sign in to it in {label} first.")
+        if said:
+            self.notify(APP, *said)
+        # the popover shows this inline: a notification can go unseen or be blocked
+        self.last_note = ". ".join(said) if said else None
         return self._done(provider_id)
 
     @staticmethod

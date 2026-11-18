@@ -232,12 +232,12 @@
   }
   function otherRow(prov, acct) {
     const caps = prov.capabilities;
-    const manage = caps.disable && tab === prov.id;
+    const manage = tab === prov.id;
     const email = h("span", { class: "em", title: label(acct), text: label(acct) + (acct.disabled ? " (disabled)" : "") });
     if (!manage) return h("div", { class: "acct" }, email, miniBars(acct), switchButton(prov, acct));
     return h("div", { class: "acctwrap" }, h("div", { class: "acct" }, email), h("div", { class: "actions" }, miniBars(acct), h("span", { class: "spacer" }), switchButton(prov, acct),
-      h("button", { class: "btn", text: acct.disabled ? "Enable" : "Disable",
-        onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: acct.number, disabled: !acct.disabled }) }),
+      caps.disable ? h("button", { class: "btn", text: acct.disabled ? "Enable" : "Disable",
+        onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: acct.number, disabled: !acct.disabled }) }) : null,
       h("button", { class: "btn", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: acct.number }) })));
   }
 
@@ -376,11 +376,9 @@
     // Tools for the active account, under its email so it's clear which account they act on.
     const tools = [];
     if (prov.id === "claude") tools.push(h("button", { class: "btn", text: "Refresh credentials", onclick: () => post({ action: "refreshCreds" }) }));
-    if (active && caps.disable) {
-      tools.push(h("button", { class: "btn", text: active.disabled ? "Enable" : "Disable",
-        onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: active.number, disabled: !active.disabled }) }));
-      tools.push(h("button", { class: "btn bad", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: active.number }) }));
-    }
+    if (active && caps.disable) tools.push(h("button", { class: "btn", text: active.disabled ? "Enable" : "Disable",
+      onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: active.number, disabled: !active.disabled }) }));
+    if (active) tools.push(h("button", { class: "btn bad", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: active.number }) }));
     if (active && tools.length) {
       // Laid out like an Other accounts row, so the two cards read the same way.
       wrap.append(h("section", { class: "card" }, h("div", { class: "sect", text: "Active account" }),
@@ -529,7 +527,8 @@
       draw();
     },
     reply(r) {
-      if (r.restart && r.ok) note = { text: "Restart running sessions to use the new account.", until: Date.now() + 8000 };
+      if (r.note && r.ok) note = { text: r.note, until: Date.now() + 8000 };
+      else if (r.restart && r.ok) note = { text: "Restart running sessions to use the new account.", until: Date.now() + 8000 };
       else if (!r.ok && !r.cancelled) note = { text: r.error || "Action failed", bad: true, until: Date.now() + 5000 };
       if (!editing()) draw();
     },

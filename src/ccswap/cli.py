@@ -899,6 +899,8 @@ def _codex_command(argv: list[str]) -> None:
     remove = subcommands.add_parser("remove", help="Remove a saved Codex account")
     remove.add_argument("account", metavar="NUM|EMAIL")
     remove.add_argument("--yes", action="store_true", help="Skip confirmation")
+    for verb, what in (("disable", "Skip a saved Codex account when switching"), ("enable", "Use a disabled Codex account again")):
+        subcommands.add_parser(verb, help=what).add_argument("account", metavar="NUM|EMAIL")
     auto = subcommands.add_parser(
         "auto",
         help="Switch Codex accounts when the active quota nears its limit",
@@ -947,6 +949,8 @@ def _codex_command(argv: list[str]) -> None:
             switcher.add_account(slot=args.slot)
         elif args.action == "remove":
             switcher.remove_account(args.account, assume_yes=args.yes)
+        elif args.action in ("disable", "enable"):
+            switcher.set_account_disabled(args.account, args.action == "disable")
         elif args.action == "auto":
             import signal
             import time as _time

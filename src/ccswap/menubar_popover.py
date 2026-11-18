@@ -94,6 +94,7 @@ def dispatch(controller, body, confirm=None) -> dict | None:
             if not caps.strategies or (strategy is not None and strategy not in caps.strategies):
                 return bad()
             reply["ok"] = bool(controller.rotate(pid, strategy))
+            reply["restart"] = bool(caps.restart_after_switch)
         elif action in ("toggleAuto", "restartEngine"):
             if not caps.auto_switch:
                 return bad()
@@ -111,13 +112,16 @@ def dispatch(controller, body, confirm=None) -> dict | None:
             reply["ok"] = bool(controller.set_disabled(pid, n, disabled))
         elif action == "remove":
             n = number()
-            if n is None or not caps.disable:
+            if n is None:  # every provider's CLI has `remove`, unlike disable/enable
                 return bad()
             if confirm and not confirm("Remove account?", f"Remove {spec.label} account {n}?"):
                 return {**reply, "ok": False, "cancelled": True}
             reply["ok"] = bool(controller.remove(pid, n))
         elif action == "addLogin":
             reply["ok"] = bool(controller.add_login(pid))
+            note = getattr(controller, "last_note", None)
+            if reply["ok"] and isinstance(note, str):
+                reply["note"] = note
         elif action == "addToken":
             email, token = get("email"), get("token")
             if not (spec or PROVIDERS["claude"]).capabilities.add_token:

@@ -255,10 +255,10 @@ def _ask_token(controller) -> None:
     import AppKit
     AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
     email_resp = rumps.Window(
-        title="Add account from setup-token", message="Email for this token:",
+        title="Add account from setup-token", message="Email for this token (optional):",
         ok="Next", cancel="Cancel", dimensions=(320, 24),
     ).run()
-    if email_resp.clicked != 1 or not email_resp.text.strip():
+    if email_resp.clicked != 1:  # like `ccswap add-token`, a blank email is detected from the token
         return
     token_resp = rumps.Window(
         title="Add account from setup-token", message="Setup token (sk-ant-oat01-…):",

@@ -56,7 +56,7 @@ def test_capability_gates():
     assert not run({"action": "rotate", "provider": "claude", "strategy": "bogus"})[0]["ok"]
     assert run({"action": "rotate", "provider": "claude", "strategy": "best"})[0]["ok"]
     assert not run({"action": "toggleDisabled", "provider": "agy", "number": 1, "disabled": True})[0]["ok"]
-    assert not run({"action": "remove", "provider": "agy", "number": 1})[0]["ok"]
+    assert run({"action": "remove", "provider": "agy", "number": 1})[0]["ok"]  # `ccswap agy remove`
     assert not run({"action": "toggleAuto", "provider": "agy", "enabled": True})[0]["ok"]
     assert not run({"action": "addToken", "provider": "codex", "email": "a@b", "token": "t"})[0]["ok"]
     reply, calls = run({"action": "addToken", "email": "a@b", "token": "t"})

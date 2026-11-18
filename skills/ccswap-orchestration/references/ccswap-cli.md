@@ -22,7 +22,7 @@ Mutating:
 - `run`
 - `config set`, `config unset`
 - `auto` (polling loop, no `--once`)
-- `codex switch [NUM|EMAIL]`, `codex auto [--once] [--dry-run]`, `codex add`, `codex remove`
+- `codex switch [NUM|EMAIL]`, `codex auto [--once] [--dry-run]`, `codex add`, `codex remove`, `codex disable|enable NUM|EMAIL`
 
 `run`, `auto`, `config`, and `codex` must be the first argv token. `ccswap --debug run 2` is not supported, put flags after the subcommand.
 
