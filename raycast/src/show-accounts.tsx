@@ -61,7 +61,7 @@ export default function Command() {
     toast.style = Toast.Style.Success;
     toast.title = `${provider.label}: ${active ? label(active) : "switched"}`;
     toast.message = provider.restartAfterSwitch
-      ? "Restart any open session to use it"
+      ? `Restart any open ${provider.label} session to use it`
       : "Open sessions pick it up within about 30 seconds";
   }
 

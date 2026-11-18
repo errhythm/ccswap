@@ -299,7 +299,13 @@ def make_handler(key: str, snapshots: Snapshots) -> type[BaseHTTPRequestHandler]
 def default_snapshots(debug: bool = False) -> Snapshots:
     from ccswap import providers
 
-    switchers = {pid: spec.factory(debug=debug) for pid, spec in providers.PROVIDERS.items()}
+    # Only providers the CLIProxyAPI protocol can serve: snapshotting the rest (agy) would
+    # hold its login lock and spend up to a minute per refresh on data that is thrown away.
+    switchers = {
+        pid: spec.factory(debug=debug)
+        for pid, spec in providers.PROVIDERS.items()
+        if pid in _USAGE_URLS
+    }
 
     def take() -> dict[str, AccountsSnapshot | None]:
         out: dict[str, AccountsSnapshot | None] = {}

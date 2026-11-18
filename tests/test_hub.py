@@ -220,7 +220,7 @@ def _fake_registry(monkeypatch, switchers):
     monkeypatch.setattr(providers, "PROVIDERS", specs)
 
 
-def test_default_snapshots_covers_every_registered_provider_and_survives_a_failure(monkeypatch):
+def test_default_snapshots_covers_servable_providers_and_survives_a_failure(monkeypatch):
     snap = AccountsSnapshot("1", (_acc("1", "a@x.io", build_usage_result(CLAUDE_RAW)),), time.time())
     _fake_registry(monkeypatch, {
         "claude": _FakeSwitcher(snap),
@@ -228,8 +228,8 @@ def test_default_snapshots_covers_every_registered_provider_and_survives_a_failu
         "extra": _FakeSwitcher(snap),
     })
     out = hub.default_snapshots()()
-    assert set(out) == {"claude", "codex", "extra"}
+    assert set(out) == {"claude", "codex"}
     assert out["codex"] is None and out["claude"] is snap
-    # extra has no usage URL: snapshotted, never served; the failing codex leaves claude served.
+    # extra has no usage URL, so it is never snapshotted; the failing codex leaves claude served.
     assert [p for p, _ in hub._hub_accounts(out)] == ["claude"]
     assert [f["id"] for f in hub.auth_files(out)["files"]] == ["claude-1"]
