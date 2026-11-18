@@ -52,9 +52,9 @@ def _cubic_length(p0, c1, c2, p3, steps: int = 32) -> float:
 def glyph_image(used_pct: float | None, size: float = 18.0):
     """The live menu bar glyph as an NSImage template.
 
-    The loop drawn at 40% alpha as the track; the left C (the active
-    account) drawn solid along ``used_pct`` percent of its length. None draws
-    the plain mark. AppKit is imported inside, so this module imports anywhere.
+    The loop drawn at 40% alpha as the track, and drawn solid along ``used_pct``
+    percent of its length from the junction, like the logo's loading arc. None
+    draws the plain mark. AppKit is imported inside, so this module imports anywhere.
     """
     from AppKit import NSAffineTransform, NSBezierPath, NSColor, NSImage
 
@@ -74,10 +74,12 @@ def glyph_image(used_pct: float | None, size: float = 18.0):
         bp.setLineJoinStyle_(1)  # round
         return bp
 
-    half = len(segs) // 2
-    loop, left = path(segs, start, close=True), path(segs[:half], start)
-    ends = [start, *(s[2] for s in segs[:half])]
-    total = sum(_cubic_length(a, *s) for a, s in zip(ends, segs[:half]))
+    # The fill runs along the whole loop from the junction, like the logo's loading arc:
+    # 30% usage looks exactly like the logo, 100% closes the loop.
+    loop, arc = path(segs, start, close=True), path(segs, start)
+    arc.setLineCapStyle_(1)  # round, as in the logo
+    ends = [start, *(s[2] for s in segs)]
+    total = sum(_cubic_length(a, *s) for a, s in zip(ends, segs))
 
     img = NSImage.alloc().initWithSize_((size, size))
     img.lockFocus()
@@ -94,8 +96,8 @@ def glyph_image(used_pct: float | None, size: float = 18.0):
             used = total * max(0.0, min(float(used_pct), 100.0)) / 100
             if used > 0:
                 NSColor.blackColor().set()
-                left.setLineDash_count_phase_([used, total + 1], 2, 0.0)
-                left.stroke()
+                arc.setLineDash_count_phase_([used, total + 1], 2, 0.0)
+                arc.stroke()
     finally:
         img.unlockFocus()
     img.setTemplate_(True)

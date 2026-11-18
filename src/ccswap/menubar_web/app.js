@@ -472,18 +472,25 @@
       h("button", { class: "ib", title: "Refresh", "aria-label": "Refresh", onclick: () => post({ action: "refresh" }) }, icon("refresh")));
   }
 
+  // Option B: the active account's tightest window wraps the provider logo as a ring.
+  function tabRing(p) {
+    const a = (p.accounts || []).find((x) => x.active);
+    const t = a && tight(a);
+    const used = t ? Math.min(100, Math.max(0, t.w.pct)) : 0;
+    const s = svg("svg", { viewBox: "0 0 26 26", "aria-hidden": "true" }, svg("circle", { class: "t", cx: 13, cy: 13, r: 11.85 }));
+    if (used > 0) s.append(svg("circle", { class: "a", cx: 13, cy: 13, r: 11.85, pathLength: 100, "stroke-dasharray": `${Math.max(used, 2)} 100` }));
+    const tipText = t ? `${p.label}: ${round(t.w.pct)}% of the ${t.kind === "5h" ? "5-hour" : "weekly"} limit` : p.label;
+    return { ring: h("span", { class: "tring " + (t ? level(t.w.pct) : "") }, s, logo(p.id)), tipText };
+  }
   function drawTabs() {
     const tabs = document.getElementById("tabs");
-    const mk = (id, kids, extra, name) => h("button", { role: "tab", class: tab === id ? "sel" : "", title: name, "aria-label": name,
-      onclick: () => { tab = id; pending = null; draw(); } }, h("span", { class: "lbl" }, ...kids), extra);
-    tabs.replaceChildren(mk("overview", [h("span", { text: "All" })], h("div", { class: "mini" })),
+    const mk = (id, kid, name, tipText) => h("button", { role: "tab", class: tab === id ? "sel" : "", title: tipText || name, "aria-label": name,
+      onclick: () => { tab = id; pending = null; draw(); } }, kid);
+    tabs.replaceChildren(mk("overview", h("span", { class: "all", text: "All" }), "All"),
       ...data.providers.map((p) => {
-        const a = (p.accounts || []).find((x) => x.active);
-        const t = a && tight(a);
-        const m = h("div", { class: "mini " + (t ? level(t.w.pct) : "") });
-        if (t) m.append(h("i", { style: `display:block;height:100%;border-radius:2px;background:var(--level);width:${Math.min(100, t.w.pct)}%` }));
-        // logo only; the provider name is the tooltip and the accessible label
-        return mk(p.id, [logo(p.id)], m, p.label);
+        const { ring, tipText } = tabRing(p);
+        // logo only; the provider name is the accessible label, the tooltip adds the usage
+        return mk(p.id, ring, p.label, tipText);
       }));
   }
 

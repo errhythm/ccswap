@@ -250,3 +250,27 @@ test("settings gear is sel while Settings is open; second click returns to All",
   assert.deepEqual($$("#tabs button.sel").map((b) => tn(b)), ["All"]);
   assert.equal($$("#view .pcard").length, 3);
 });
+
+test("strip: each provider's logo sits in a ring filled to its active account's tightest window", () => {
+  const p = payload();
+  boot(p);
+  for (const prov of p.providers) {
+    const b = tabBtn(prov.label);
+    const active = prov.accounts.find((a) => a.active);
+    const pcts = (active ? active.windows : []).filter((w) => !w.scope && typeof w.pct === "number").map((w) => w.pct);
+    const top = pcts.length ? Math.max(...pcts) : 0;
+    assert.ok(b.querySelector(".tring img"), `${prov.id} logo inside the ring`);
+    const arc = b.querySelector(".tring .a");
+    if (top > 0) {
+      assert.equal(arc.getAttribute("stroke-dasharray"), `${Math.max(Math.min(top, 100), 2)} 100`, prov.id);
+      const lvl = top >= 90 ? "bad" : top >= 70 ? "warn" : "ok";
+      assert.ok(b.querySelector(".tring").classList.contains(lvl), `${prov.id} is ${lvl}`);
+      assert.match(b.title, new RegExp(`${prov.label}: ${Math.round(top)}% of the`));
+    } else {
+      assert.equal(arc, null, `${prov.id} draws no arc at 0%`);
+    }
+    assert.equal(b.getAttribute("aria-label"), prov.label);
+  }
+  assert.equal($$("#tabs .mini").length, 0); // the old line under the logo is gone
+  assert.equal(tabBtn("All").querySelector(".tring"), null);
+});

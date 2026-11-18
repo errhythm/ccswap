@@ -60,3 +60,18 @@ def test_status_image_without_a_known_provider_is_the_glyph():
     pytest.importorskip("AppKit")
     assert brand.status_image(40, None, 18).size()[0] == 18 and brand.status_image(40, None, 18).isTemplate()
     assert brand.status_image(40, "unknown", 18).size()[0] == 18
+
+
+def test_glyph_fill_runs_along_the_whole_loop():
+    pytest.importorskip("AppKit")
+    from AppKit import NSBitmapImageRep
+
+    def alpha_at_right_edge(pct):
+        img = brand.glyph_image(pct, size=brand.BOX)  # 1 point per mark unit
+        rep = NSBitmapImageRep.imageRepWithData_(img.TIFFRepresentation())
+        sx = rep.pixelsWide() / brand.BOX
+        # the loop's rightmost point (98.7, 56.7), inside the stroke; bitmap rows count from the top
+        return rep.colorAtX_y_(int((98.748 - 3) * sx), int(56.7 * sx)).alphaComponent()
+
+    assert alpha_at_right_edge(40) < 0.6   # 40% only reaches the left C: track here
+    assert alpha_at_right_edge(100) > 0.9  # a full window closes the loop
