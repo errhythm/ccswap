@@ -536,6 +536,9 @@ class DashboardScreen(Screen):
     # -- actions ----------------------------------------------------------------
 
     def action_open_switch(self) -> None:
+        # `s` must not reach a view the menu hides (no provider can switch).
+        if not any(capabilities(p).switch for p in PROVIDERS):
+            return
         if not isinstance(self.app.screen, SwitchScreen):
             self.app.push_screen(SwitchScreen())
 
@@ -714,7 +717,7 @@ class SwitchScreen(AccountListScreen):
         # so "Switch" is visible in the footer; the action delegates right back
         # to the list cursor, so behavior is identical.
         Binding("enter", "select_highlighted", mark("Switch"), priority=True),
-        Binding("b", "switch_best", mark("Best / next")),
+        Binding("b", "switch_best", mark("Switch (best)")),
         Binding("escape,q,s", "back", mark("Back")),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
