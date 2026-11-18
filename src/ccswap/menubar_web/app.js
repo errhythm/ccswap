@@ -464,6 +464,7 @@
 
   function draw() {
     if (!data) return;
+    tip().style.display = "none"; // the hovered ring is about to be replaced and won't get mouseleave
     const view = document.getElementById("view");
     const keep = view.scrollTop;
     const prov = data.providers.find((p) => p.id === tab);

@@ -276,7 +276,12 @@ def _paint_glyph(app, controller, has_text: bool) -> bool:
         from ccswap.menubar_popover import tightest_used_pct
 
         button = app._nsapp.nsstatusitem.button()
-        button.setImage_(brand.glyph_image(tightest_used_pct(controller.payload())))
+        pct = tightest_used_pct(controller.payload())
+        key = None if pct is None else round(pct)
+        cache = app.__dict__.setdefault("_glyphs", {})  # one image per whole percent
+        if key not in cache:
+            cache[key] = brand.glyph_image(key)
+        button.setImage_(cache[key])
         button.setImagePosition_(2 if has_text else 1)  # NSImageLeft / NSImageOnly
         return True
     except Exception:  # noqa: BLE001 - any AppKit/rumps failure keeps the text icon
@@ -297,18 +302,19 @@ def run(controller) -> int:
             self.tick_timer = rumps.Timer(self.on_tick, 1)
             self.tick_timer.start()
 
-        def set_title(self):
+        def set_title(self, paint: bool = True):
+            # The glyph only changes with the data, so the 1 s tick updates the
+            # text alone; render() (after a data change) repaints the glyph.
             text = controller.title(icon=False)
-            if _paint_glyph(self, controller, bool(text)):
-                self.title = text
-            else:
-                self.title = controller.title()
+            if paint:
+                self._glyph_ok = _paint_glyph(self, controller, bool(text))
+            self.title = text if getattr(self, "_glyph_ok", False) else controller.title()
 
         def on_tick(self, _timer):
             if controller.tick():
                 self.render()
             else:
-                self.set_title()
+                self.set_title(paint=False)
             secs = controller.settings.refresh_interval
             if secs != self._interval:
                 # rumps 0.4.0's Timer.interval setter is a no-op while running;
