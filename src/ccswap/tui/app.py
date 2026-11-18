@@ -30,6 +30,7 @@ from ccswap.settings import (
     unset_setting,
     with_model_threshold,
 )
+from ccswap import providers as registry
 from ccswap.snapshot_source import account_identity
 from ccswap.switcher import ClaudeAccountSwitcher
 from ccswap.tui.autoview import AutoScreen
@@ -37,6 +38,7 @@ from ccswap.tui.dashboard import AccountListScreen, DashboardScreen, WatchScreen
 from ccswap.tui.data import (
     PROVIDER_LABELS,
     PROVIDERS,
+    capabilities,
     ActionResult,
     SnapshotSource,
     format_duration,
@@ -97,9 +99,13 @@ class CswapApp(App):
         detected: str | None = None,
     ) -> None:
         super().__init__()
-        codex = codex_switcher if codex_switcher is not None else CodexAccountSwitcher()
-        agy = agy_switcher if agy_switcher is not None else AgyAccountSwitcher()
-        self.switchers = {"claude": switcher, "codex": codex, "agy": agy}
+        given = {"claude": switcher, "codex": codex_switcher, "agy": agy_switcher}
+        self.switchers = {
+            provider: given[provider]
+            if given.get(provider) is not None
+            else spec.factory()
+            for provider, spec in registry.PROVIDERS.items()
+        }
         # Both sources live for the app's lifetime. In particular, Codex keeps
         # its usage cache in memory, so rebuilding it on a view change would
         # discard measurements.
@@ -463,6 +469,8 @@ class CswapApp(App):
     # -- account operations ----------------------------------------------------
 
     def do_switch(self, provider: str, number: str) -> None:
+        if not capabilities(provider).switch:
+            return
         self._start_action(
             self.gettext("Switch {provider} to account {number}").format(
                 provider=PROVIDER_LABELS[provider], number=number
@@ -471,7 +479,7 @@ class CswapApp(App):
         )
 
     def do_switch_best(self, provider: str) -> None:
-        if provider == "agy":
+        if not capabilities(provider).strategies:
             return
         self._start_action(
             self.gettext("Switch (best)")
@@ -487,7 +495,7 @@ class CswapApp(App):
     def do_toggle_disabled(self, provider: str, number: str) -> None:
         """Hold the account out of auto-rotation, or return it — reads its
         current state from the live snapshot to pick the direction."""
-        if provider == "agy":
+        if not capabilities(provider).disable:
             return
         snap = self.snapshots[provider]
         acc = next(
@@ -553,7 +561,7 @@ class CswapApp(App):
             )
 
     def action_add_token(self, provider: str = "claude") -> None:
-        if provider != "claude":
+        if not capabilities(provider).add_token:
             self.notify(
                 self.gettext(
                     "Codex accounts are added from the current 'codex login' session"
@@ -616,7 +624,9 @@ class CswapApp(App):
         eligible = [
             provider
             for provider in PROVIDERS
-            if provider != "agy" and (snapshot := self.snapshots[provider]) is not None and snapshot.accounts
+            if capabilities(provider).auto_switch
+            and (snapshot := self.snapshots[provider]) is not None
+            and snapshot.accounts
         ]
         provider = (
             self._last_auto_provider
@@ -626,7 +636,7 @@ class CswapApp(App):
         self.open_auto(provider)
 
     def open_auto(self, provider: str) -> None:
-        if provider == "agy" or isinstance(self.screen, AutoScreen):
+        if not capabilities(provider).auto_switch or isinstance(self.screen, AutoScreen):
             return
         self._last_auto_provider = provider
         self.push_screen(AutoScreen(provider))

@@ -1109,6 +1109,60 @@ class TestDashboard:
             ids = [item.action_id for item in menu.query(MenuItem)]
             assert ids[0] == "switch"
 
+    async def test_usage_only_provider_renders_accounts_without_actions(
+        self, tmp_path, monkeypatch
+    ):
+        from textual.widgets import ListView
+
+        from ccswap import providers as registry
+        from ccswap.tui.widgets import AccountItem, MenuItem
+
+        usage_only = FakeSwitcher([make_account(7, active=True)], tmp_path)
+        spec = registry.ProviderSpec(
+            "fourth",
+            "Fourth AI",
+            registry.Capabilities(switch=False),
+            lambda debug=False: usage_only,
+        )
+        monkeypatch.setitem(registry.PROVIDERS, "fourth", spec)
+        app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            from ccswap.tui.widgets import AccountsPanel
+
+            assert "Fourth AI" in app.screen.query_one(AccountsPanel).render().plain
+
+            def ids() -> list[str]:
+                menu = app.screen.query_one("#menu", ListView)
+                return [i.action_id for i in menu.query(MenuItem)]
+
+            await menu_select(pilot, "add-menu")
+            assert "add-login:fourth" in ids()
+            assert "add-token" in ids()  # still Claude's alone
+            await pilot.press("escape")
+            await menu_select(pilot, "disable-menu")
+            assert not [i for i in ids() if ":fourth:" in i]
+            await pilot.press("escape")
+            await menu_select(pilot, "auto")
+            assert app.screen.provider != "fourth"
+            await pilot.press("escape")
+            await pilot.pause()
+            await menu_select(pilot, "switch")
+            item = next(
+                i for i in app.screen.query(AccountItem) if i.provider == "fourth"
+            )
+            listview = app.screen.query_one("#accounts", ListView)
+            listview.index = list(listview.children).index(item)
+            await pilot.pause()
+            assert app.screen.check_action("switch_best", ()) is False
+            app.do_switch("fourth", "7")
+            app.do_switch_best("fourth")
+            app.do_toggle_disabled("fourth", "7")
+            app.open_auto("fourth")
+            await settle(pilot)
+            assert usage_only.calls == []
+            assert type(app.screen).__name__ == "SwitchScreen"
+
     async def test_filtered_dashboard_shows_one_section_with_its_header(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"view": "codex"}}))
         claude = FakeSwitcher([make_account(1, active=True)], tmp_path)

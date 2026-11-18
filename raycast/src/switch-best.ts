@@ -17,6 +17,8 @@ export default async function Command() {
     return;
   }
   // The switch already happened, so a failed lookup only loses the account name.
-  const active = (await listAccounts(bin).catch(() => undefined))?.claude.find((a) => a.active);
+  const active = (await listAccounts(bin).catch(() => undefined))
+    ?.find((p) => p.id === "claude")
+    ?.accounts.find((a) => a.active);
   await showHUD(`Claude Code: ${active ? label(active) : "switched"}`);
 }

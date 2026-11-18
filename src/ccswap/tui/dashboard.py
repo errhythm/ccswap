@@ -32,6 +32,7 @@ from ccswap.settings import parse_model_thresholds
 from ccswap.tui.data import (
     PROVIDER_LABELS,
     PROVIDERS,
+    capabilities,
     account_label,
     iter_accounts,
     present_tag,
@@ -86,6 +87,13 @@ def _next_gate(current: float | None) -> float | None:
     if index >= len(_GATE_STOPS):
         return None
     return _GATE_STOPS[index]
+
+
+_LOGIN_LABELS = {
+    "claude": mark("Claude Code — current login"),
+    "codex": mark("Codex — current login"),
+    "agy": mark("Antigravity — current login"),
+}
 
 
 class DashboardScreen(Screen):
@@ -147,19 +155,29 @@ class DashboardScreen(Screen):
         ]
 
     def _add_entries(self) -> MenuEntries:
-        return [
-            (self.app.gettext("Claude Code — current login"), "add-login:claude"),
-            (self.app.gettext("Claude Code — setup token or API key…"), "add-token"),
-            (self.app.gettext("Codex — current login"), "add-login:codex"),
-            (self.app.gettext("Antigravity — current login"), "add-login:agy"),
-            _BACK,
-        ]
+        entries: MenuEntries = []
+        for provider in PROVIDERS:
+            # Literal msgids keep the shipped translations for the built-ins.
+            label = _LOGIN_LABELS.get(provider) or "{label} — current login".format(
+                label=PROVIDER_LABELS[provider]
+            )
+            entries.append((self.app.gettext(label), f"add-login:{provider}"))
+            if capabilities(provider).add_token:
+                entries.append(
+                    (
+                        self.app.gettext("Claude Code — setup token or API key…"),
+                        "add-token",
+                    )
+                )
+        entries.append(_BACK)
+        return entries
 
     def _auto_entries(self) -> MenuEntries:
         entries = [
             (PROVIDER_LABELS[provider], f"auto:{provider}")
             for provider in PROVIDERS
-            if provider != "agy" and (snapshot := self.app.snapshots[provider]) is not None
+            if capabilities(provider).auto_switch
+            and (snapshot := self.app.snapshots[provider]) is not None
             and snapshot.accounts
         ]
         entries.append(_BACK)
@@ -187,7 +205,7 @@ class DashboardScreen(Screen):
         # not an account scope, so administrative menus must not hide accounts.
         entries: MenuEntries = []
         for provider, acc in iter_accounts(self.app.snapshots):
-            if provider == "agy":
+            if not capabilities(provider).disable:
                 continue
             name = self._account_label(acc)
             action = (
@@ -210,9 +228,7 @@ class DashboardScreen(Screen):
         """Inline preference cycles keep settings one level deep."""
         view_labels = {
             "combined": self.app.gettext("Combined"),
-            "claude": PROVIDER_LABELS["claude"],
-            "codex": PROVIDER_LABELS["codex"],
-            "agy": PROVIDER_LABELS["agy"],
+            **{provider: PROVIDER_LABELS[provider] for provider in PROVIDERS},
         }
         threshold = self.app.threshold_pct
         threshold_value = threshold if threshold is not None else DEFAULT_THRESHOLD_PCT
@@ -714,13 +730,13 @@ class SwitchScreen(AccountListScreen):
     def action_switch_best(self) -> None:
         listview = self.query_one("#accounts", ListView)
         item = listview.highlighted_child
-        if isinstance(item, AccountItem) and item.provider != "agy":
+        if isinstance(item, AccountItem) and capabilities(item.provider).strategies:
             self.app.do_switch_best(item.provider)
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action == "switch_best":
             item = self.query_one("#accounts", ListView).highlighted_child
-            if isinstance(item, AccountItem) and item.provider == "agy":
+            if isinstance(item, AccountItem) and not capabilities(item.provider).strategies:
                 return False
         return True
 
