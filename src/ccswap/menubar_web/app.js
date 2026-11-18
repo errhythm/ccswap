@@ -11,7 +11,7 @@
     }
   }
   const COLORS = { claude: "#D97757", codex: "#6C74FF", agy: "#7FA8FF" }; // taken from each official logo
-  const LOGOS = { claude: "logos/claude.svg", codex: "logos/codex.png", agy: "logos/antigravity.png" }; // sources: docs/provider-logos.md
+  const LOGOS = { claude: "logos/claude.svg", codex: "logos/codex.png", agy: "logos/antigravity.svg" }; // sources: docs/provider-logos.md
   const TITLE_PCT = ["off", "5h", "7d", "both"];
   const REFRESH = [15, 30, 60, 120, 300, 600];
   const dark = window.matchMedia("(prefers-color-scheme: dark)");

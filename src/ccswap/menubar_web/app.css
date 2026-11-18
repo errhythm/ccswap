@@ -147,4 +147,4 @@ input[type=range] { flex: 1; padding: 0; accent-color: var(--ok); min-width: 80p
 .phead { margin-bottom: 6px; }
 footer button.sel { background: var(--card-line); color: var(--text); }
 /* the official files carry transparent padding; scale to match the others (docs/provider-logos.md) */
-img[data-p="codex"] { transform: scale(1.15); } img[data-p="agy"] { transform: scale(1.38); }
+img[data-p="codex"] { transform: scale(1.15); } img[data-p="agy"] { transform: scale(1.32); }

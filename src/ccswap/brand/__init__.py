@@ -110,7 +110,7 @@ def glyph_image(used_pct: float | None, size: float = 18.0):
 _PROVIDER_LOGOS = {
     "claude": ("claude.svg", 1.0),
     "codex": ("codex.png", 1.15),
-    "agy": ("antigravity.png", 1.38),
+    "agy": ("antigravity.png", 1.32),  # PNG: AppKit flattens the press-kit SVG's blurred gradient
 }
 _LOGO_DIR = BRAND_DIR.parent / "menubar_web" / "logos"
 
