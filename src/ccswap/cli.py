@@ -766,32 +766,79 @@ def _hub_service(args) -> int:
         return 1
 
 
-def _agy_command(argv: list[str]) -> None:
-    parser = argparse.ArgumentParser(prog=f"{_prog_name()} agy")
+# Tests and callers patch these module names; honor them before the registry
+# factory so one patch point keeps working per provider.
+_PATCHABLE_CLASSES = {"codex": "CodexAccountSwitcher", "agy": "AgyAccountSwitcher"}
+
+
+def _new_provider(spec, debug: bool = False):
+    cls = globals().get(_PATCHABLE_CLASSES.get(spec.id, ""))
+    if cls is not None:
+        return cls(debug=True) if debug else cls()
+    return spec.factory(debug=debug)
+
+
+def _print_provider_list(switcher, json_output: bool = False) -> None:
+    if hasattr(switcher, "list_accounts"):
+        switcher.list_accounts(json_output=json_output)
+    else:  # usage-only providers expose just the payload
+        print(json.dumps(switcher.list_payload(), indent=2))
+
+
+def _provider_command(spec, argv: list[str]) -> None:
+    """Handle ``ccswap <provider> <verb>`` for any registered provider.
+
+    Offers only the verbs the provider's capabilities allow. A provider with
+    its own parser (``spec.cli``, e.g. Codex with run/redeem) keeps it.
+    """
+    if spec.cli is not None:
+        spec.cli(argv)
+        return
+    caps = spec.capabilities
+    parser = argparse.ArgumentParser(prog=f"{_prog_name()} {spec.id}")
     commands = parser.add_subparsers(dest="action", required=True)
     for action in ("list", "status", "usage"):
         commands.add_parser(action).add_argument("--json", action="store_true")
     commands.add_parser("add")
-    switch = commands.add_parser("switch")
-    switch.add_argument("account", metavar="NUM|EMAIL")
-    switch.add_argument("--json", action="store_true")
+    if caps.switch:
+        switch = commands.add_parser("switch")
+        switch.add_argument("account", metavar="NUM|EMAIL",
+                            nargs="?" if caps.strategies else None)
+        if caps.strategies:
+            switch.add_argument("--strategy", choices=list(caps.strategies))
+        switch.add_argument("--json", action="store_true")
+    if caps.disable:
+        for action in ("disable", "enable"):
+            commands.add_parser(action).add_argument("account", metavar="NUM|EMAIL")
     remove = commands.add_parser("remove")
     remove.add_argument("account", metavar="NUM|EMAIL")
     remove.add_argument("--yes", action="store_true")
     args = parser.parse_args(argv)
-    switcher = AgyAccountSwitcher()
+    if args.action == "switch" and args.account is None and not caps.strategies:
+        parser.error("the following arguments are required: NUM|EMAIL")
+    switcher = _new_provider(spec)
+    if args.action in ("usage", "status") and not hasattr(
+        switcher, "usage_status" if args.action == "usage" else "status"
+    ):
+        parser.error(f"{spec.label} has no '{args.action}' command")
     try:
         if args.action == "add":
             switcher.add_account()
         elif args.action == "remove":
             switcher.remove_account(args.account, assume_yes=args.yes)
+        elif args.action in ("disable", "enable"):
+            switcher.set_account_disabled(args.account, args.action == "disable")
         elif args.action == "switch":
-            payload = switcher.switch_to(args.account, json_output=args.json)
+            if args.account is None:
+                payload = switcher.switch(strategy=args.strategy, json_output=args.json)
+            else:
+                payload = switcher.switch_to(args.account, json_output=args.json)
             if args.json:
                 print(json.dumps(payload, indent=2))
+        elif args.action == "list":
+            _print_provider_list(switcher, json_output=args.json)
         else:
-            method = {"list": switcher.list_accounts, "status": switcher.status,
-                      "usage": switcher.usage_status}[args.action]
+            method = switcher.status if args.action == "status" else switcher.usage_status
             method(json_output=args.json)
     except ClaudeSwitchError as exc:
         if getattr(args, "json", False):
@@ -800,7 +847,7 @@ def _agy_command(argv: list[str]) -> None:
             error(f"Error: {exc}")
         sys.exit(1)
     except OSError:
-        exc = ClaudeSwitchError("Cannot access Antigravity account storage")
+        exc = ClaudeSwitchError(f"Cannot access {spec.label} account storage")
         if getattr(args, "json", False):
             print(json.dumps(error_envelope(exc)))
         else:
@@ -976,63 +1023,57 @@ def _list_dispatch(claude_switcher: "ClaudeAccountSwitcher", args) -> dict | Non
     ``claude``/``codex``/``agy`` keys. Human mode prints one section per provider and
     never triggers Claude's interactive first-run inside the merged view.
     """
+    from ccswap import providers as registry
+
     provider = args.provider
-    if provider == "agy":
-        agy = AgyAccountSwitcher()
-        if args.json:
-            return agy.list_payload()
-        agy.list_accounts()
-        return None
     if provider == "claude":
         return claude_switcher.list_accounts(
             show_token_status=args.token_status, json_output=args.json
         )
-
-    codex_switcher = CodexAccountSwitcher(debug=args.debug)
-    if provider == "codex":
+    if provider != "all":
+        switcher = _new_provider(registry.get(provider), args.debug)
         if args.json:
-            return codex_switcher.list_payload()
-        codex_switcher.list_accounts(json_output=False)
+            return switcher.list_payload()
+        _print_provider_list(switcher)
         return None
 
     if args.json:
-        return _list_all_json(claude_switcher, codex_switcher, args)
+        return _list_all_json(claude_switcher, args)
 
-    print(bolded("Claude Code"))
-    if claude_switcher.sequence_file.exists():
-        claude_switcher.list_accounts(
-            show_token_status=args.token_status, json_output=False
-        )
-    else:
-        print(dimmed("  No Claude Code accounts."))
-    print()
-    print(bolded("Codex"))
-    codex_switcher.list_accounts(json_output=False)
-    print()
-    print(bolded("Antigravity"))
-    AgyAccountSwitcher().list_accounts()
+    for index, spec in enumerate(registry.PROVIDERS.values()):
+        if index:
+            print()
+        print(bolded(spec.label))
+        if spec.id != "claude":
+            _print_provider_list(_new_provider(spec, args.debug))
+        elif claude_switcher.sequence_file.exists():
+            claude_switcher.list_accounts(
+                show_token_status=args.token_status, json_output=False
+            )
+        else:
+            print(dimmed("  No Claude Code accounts."))
     return None
 
 
-def _list_all_json(claude_switcher, codex_switcher, args) -> dict:
+def _list_all_json(claude_switcher, args) -> dict:
     """Every provider's section plus ``providers[]``; one failure nulls only
     its own section. Raises the last error when every provider failed."""
     from ccswap import providers as registry
     from ccswap.json_output import provider_entry
 
-    sections = {
-        "claude": lambda: claude_switcher.list_accounts(
-            show_token_status=args.token_status, json_output=True
-        ),
-        "codex": codex_switcher.list_payload,
-        "agy": lambda: AgyAccountSwitcher().list_payload(),
-    }
+    def section(spec):
+        if spec.id == "claude":  # needs show_token_status
+            return claude_switcher.list_accounts(
+                show_token_status=args.token_status, json_output=True
+            )
+        return _new_provider(spec, args.debug).list_payload()
+
     out: dict = {}
     entries = []
     last_exc: Exception | None = None
     for pid, spec in registry.PROVIDERS.items():
         try:
-            out[pid] = sections[pid]()
+            out[pid] = section(spec)
             entries.append(provider_entry(spec, out[pid]))
         except Exception as exc:  # one provider must not sink the others
             last_exc = exc
@@ -1659,24 +1700,30 @@ def main() -> None:
     except Exception:
         pass  # theme is cosmetic; never block the CLI on it
 
+    from ccswap import providers as registry
+
+    # `ccswap claude <verb>` is the explicit spelling of the bare Claude
+    # commands; `list` is pinned to Claude since bare `list` covers every provider.
+    if argv and argv[0] == "claude":
+        argv = argv[1:]
+        if argv[:1] == ["list"] and not any(a.startswith("--provider") for a in argv):
+            argv = [*argv, "--provider", "claude"]
+    elif argv and argv[0] in registry.PROVIDERS:
+        _provider_command(registry.get(argv[0]), argv[1:])
+        return
+
     # `run` and `auto` keep their dedicated pre-dispatch parsers.
     if argv and argv[0] == "run":
         _run_command(argv[1:])
         return  # only reachable in tests where exec/exit is mocked
-    if argv and argv[0] == "codex":
-        _codex_command(argv[1:])
-        return
-    if argv and argv[0] == "agy":
-        _agy_command(argv[1:])
-        return
     if argv and argv[0] == "hub":
         _hub_command(argv[1:])
         return
     if argv and argv[0] == "auto":
         _auto_command(argv[1:])
         return  # only reachable in tests where sys.exit is mocked
-    if len(sys.argv) > 1 and sys.argv[1] == "config":
-        _config_command(sys.argv[2:])
+    if argv and argv[0] == "config":
+        _config_command(argv[1:])
         return
     if argv and argv[0] == "map":
         _map_command(argv[1:])
@@ -1798,9 +1845,9 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     )
     parser.add_argument(
         "--provider",
-        choices=["claude", "codex", "agy", "all"],
+        choices=[*registry.PROVIDERS, "all"],
         default="all",
-        metavar="{claude,codex,agy,all}",
+        metavar="{" + ",".join([*registry.PROVIDERS, "all"]) + "}",
         help=(
             "Which provider 'list' covers. 'all' (default) merges Claude Code "
             "and Codex with Antigravity; 'claude', 'codex' or 'agy' restricts to one. In --json mode a "
@@ -2048,7 +2095,7 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     if args.provider != "all" and not args.list:
         parser.error("--provider can only be used with 'list'")
 
-    if args.token_status and args.provider in ("codex", "agy"):
+    if args.token_status and args.provider not in ("claude", "all"):
         parser.error("--token-status applies only to Claude Code")
 
     if args.json and not (args.list or args.status or args.switch or args.switch_to):

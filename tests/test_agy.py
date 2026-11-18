@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ccswap import agy, cli, macos_keychain
+from ccswap import agy, cli, macos_keychain, providers
 
 
 def auth(email="one@example.com", **extra):
@@ -402,7 +402,7 @@ def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, 
     two_accounts(provider)
     capsys.readouterr()
     monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
-    cli._agy_command(["list", "--json"])
+    cli._provider_command(providers.get("agy"), ["list", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["schemaVersion"] == 1
     row = payload["accounts"][0]
@@ -411,7 +411,7 @@ def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, 
     assert row["usage"]["scoped"][1]["window"] == "5h"
     assert "resets_at" not in row["usage"]["scoped"][1]
     with pytest.raises(SystemExit) as raised:
-        cli._agy_command(["switch", "missing", "--json"])
+        cli._provider_command(providers.get("agy"), ["switch", "missing", "--json"])
     assert raised.value.code == 1
     output = capsys.readouterr()
     assert json.loads(output.out)["error"]["type"] == "AgyError"
@@ -438,12 +438,12 @@ def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, 
 
     monkeypatch.setattr(provider, "_invoke_usage", fail_usage)
     monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
-    cli._agy_command(["usage"])
+    cli._provider_command(providers.get("agy"), ["usage"])
     assert diagnostic in capsys.readouterr().out
     for _ in range(2):
-        cli._agy_command(["usage", "--json"])
+        cli._provider_command(providers.get("agy"), ["usage", "--json"])
         assert json.loads(capsys.readouterr().out)["accounts"][0]["error"] == diagnostic
-        cli._agy_command(["usage"])
+        cli._provider_command(providers.get("agy"), ["usage"])
         assert diagnostic in capsys.readouterr().out
     assert len(attempts) == 1
 
@@ -462,12 +462,12 @@ def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypa
     monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("missing CLI started"))
     monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
     for _ in range(2):
-        cli._agy_command(["usage", "--json"])
+        cli._provider_command(providers.get("agy"), ["usage", "--json"])
         diagnostic = json.loads(capsys.readouterr().out)["accounts"][0]["error"]
         assert "Antigravity CLI is not installed" in diagnostic
         assert "Install" in diagnostic
         assert "https://antigravity.google/docs/getting-started/" in diagnostic
-        cli._agy_command(["usage"])
+        cli._provider_command(providers.get("agy"), ["usage"])
         assert diagnostic in capsys.readouterr().out
     assert lookups == ["agy"]
 
