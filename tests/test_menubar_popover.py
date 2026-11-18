@@ -117,3 +117,24 @@ def test_shell_class_selectors_register():
     for sel in ("togglePopover:", "tick:", "refreshTick:", "releaseWeb:", "popoverDidClose:",
                 "userContentController:didReceiveScriptMessage:"):
         assert shell.instancesRespondToSelector_(sel)
+
+
+@pytest.mark.parametrize("pid", ["claude", "codex"])
+def test_rotate_accepts_null_strategy(pid):
+    for body in ({"action": "rotate", "provider": pid, "strategy": None},
+                 {"action": "rotate", "provider": pid}):
+        reply, calls = run(body)
+        assert reply["ok"] and calls == [("rotate", (pid, None), {})]
+
+
+def test_rotate_rejected_for_agy_without_strategies():
+    reply, calls = run({"action": "rotate", "provider": "agy"})
+    assert not reply["ok"] and calls == []
+
+
+def test_refresh_creds_is_claude_only():
+    reply, calls = run({"action": "refreshCreds"})
+    assert reply["ok"] and calls == [("refresh_creds", (), {})]
+    assert run({"action": "refreshCreds", "provider": "claude"})[0]["ok"]
+    reply, calls = run({"action": "refreshCreds", "provider": "codex"})
+    assert not reply["ok"] and calls == []

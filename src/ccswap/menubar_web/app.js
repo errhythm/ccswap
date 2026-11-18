@@ -127,12 +127,20 @@
       onclick: () => post({ action: "toggleAuto", provider: prov.id, enabled: !on }) });
   }
 
+  function failureRow(prov) {
+    const f = prov.autoSwitch && prov.autoSwitch.failure;
+    if (!f) return null;
+    return h("div", { class: "actions" }, h("span", { class: "err", text: f }),
+      h("button", { text: "Restart", onclick: () => post({ action: "restartEngine", provider: prov.id }) }));
+  }
+
   function overviewCard(prov) {
     const card = accent(h("section", { class: "card" }), prov);
     card.append(h("h3", {}, h("span", { class: "dot" }), h("span", { text: prov.label }),
       h("span", { class: "spacer" }), prov.refreshing ? h("span", { class: "muted", text: "refreshing" }) : null,
       autoPill(prov)));
     if (prov.error) card.append(h("div", { class: "err", text: prov.error }));
+    card.append(failureRow(prov));
     const accounts = prov.accounts || [];
     const active = accounts.find((a) => a.active);
     if (active) {
@@ -150,6 +158,8 @@
     const wrap = accent(h("div", {}), prov);
     const caps = prov.capabilities;
     if (prov.error) wrap.append(h("div", { class: "card err", text: prov.error }));
+    const fail = failureRow(prov);
+    if (fail) wrap.append(h("div", { class: "card" }, fail));
     for (const a of prov.accounts || []) {
       const card = h("section", { class: "card" });
       card.append(h("h3", {}, h("span", { text: label(a) }), h("span", { class: "spacer" }),
@@ -166,6 +176,9 @@
       wrap.append(card);
     }
     const bottom = h("div", { class: "actions" });
+    // No strategy key: the page sends a plain rotation (the shell reads it as None).
+    if ((caps.strategies || []).length) bottom.append(h("button", { text: "Next account", onclick: () => post({ action: "rotate", provider: prov.id }) }));
+    if (prov.id === "claude") bottom.append(h("button", { text: "Refresh credentials", onclick: () => post({ action: "refreshCreds" }) }));
     for (const s of caps.strategies || []) {
       bottom.append(h("button", { text: s, onclick: () => post({ action: "rotate", provider: prov.id, strategy: s }) }));
     }
@@ -227,6 +240,10 @@
     }
     const ci = s.claudeIntegrations || {};
     for (const key of Object.keys(ci)) wrap.append(toggle(`Claude ${key}`, ci[key], "toggleIntegration", { key }));
+    wrap.append(h("h4", { text: "Switch history" }));
+    const lines = Array.isArray(data.history) ? data.history : [];
+    for (const l of lines) wrap.append(h("div", { class: "muted", text: l }));
+    if (!lines.length) wrap.append(h("div", { class: "muted", text: "No switches logged yet" }));
     wrap.append(h("div", { class: "actions" }, h("button", { text: "Open log", onclick: () => post({ action: "openLog" }) })));
     return wrap;
   }
@@ -242,6 +259,9 @@
     if (!prov && tab !== "overview" && tab !== "settings") tab = "overview";
     view.replaceChildren();
     if (note && note.until > Date.now()) view.append(h("div", { class: "card " + (note.bad ? "err" : "note"), text: note.text }));
+    if (tab === "overview" && data.health && data.health.label) {
+      view.append(h("div", { class: "card " + (data.health.attention ? "err" : "muted"), text: data.health.label }));
+    }
     if (tab === "overview") for (const p of data.providers) view.append(overviewCard(p));
     else if (tab === "settings") view.append(settingsTab());
     else view.append(providerTab(prov));

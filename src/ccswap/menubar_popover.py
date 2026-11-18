@@ -19,7 +19,7 @@ BRIDGE_ACTIONS = frozenset({
     "ready", "refresh", "switch", "rotate", "toggleAuto", "restartEngine",
     "toggleDisabled", "remove", "addLogin", "addToken", "setTitleProvider",
     "setTitlePct", "setInterval", "setThreshold", "toggleName", "toggleScoped",
-    "setStyle", "toggleIntegration", "openLog", "quit",
+    "setStyle", "toggleIntegration", "refreshCreds", "openLog", "quit",
 })
 
 WEB_DIR = Path(__file__).with_name("menubar_web")
@@ -158,6 +158,10 @@ def dispatch(controller, body, confirm=None) -> dict | None:
             if key not in INTEGRATIONS:
                 return bad()
             reply["ok"] = bool(controller.toggle_claude_integration(key))
+        elif action == "refreshCreds":
+            if pid not in (None, "claude"):  # the controller method is Claude-only
+                return bad()
+            reply["ok"] = bool(controller.refresh_creds())
         elif action == "openLog":
             controller.open_log()
     except Exception as exc:  # never echo the message: it may hold a token

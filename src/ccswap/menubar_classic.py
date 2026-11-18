@@ -33,6 +33,7 @@ class MenuRow:
     tooltip: str = ""
     children: tuple["MenuRow", ...] = ()
     separator: bool = False
+    confirm: str = ""  # non-empty: the shell asks this before running the action
 
 
 _SEP = MenuRow("", separator=True)
@@ -72,6 +73,7 @@ def _manage_menu(pid, spec, state, controller) -> MenuRow:
             MenuRow(
                 f"{a[0]}  {a[5]}  ({a[1]})" if a[5] else f"{a[0]}  {a[1]}",
                 action=action, args=(pid, a[0], *extra(a)),
+                confirm=f"Remove {spec.label} account {a[0]} ({a[1]})?" if action == "remove" else "",
             )
             for a in accounts
         )
@@ -142,8 +144,17 @@ def menu_spec(controller) -> list[MenuRow]:
     """The whole menu, top to bottom."""
     payload = controller.payload()
     label, attention = controller.health()
-    rows = [MenuRow(label, tooltip="needs attention" if attention else ""), _SEP]
     auto = {e.get("id"): e.get("autoSwitch") for e in payload.get("providers") or []}
+    failed = next(
+        ((pid, f) for pid in PROVIDERS if (f := (auto.get(pid) or {}).get("failure")
+         or getattr(controller.states.get(pid), "engine_failure", None))),
+        None,
+    )
+    if failed:
+        rows = [MenuRow(label, action="restart_engine", args=(failed[0],), tooltip=str(failed[1]))]
+    else:
+        rows = [MenuRow(label)]
+    rows.append(_SEP)
     for pid, spec in PROVIDERS.items():
         caps = spec.capabilities
         state = controller.states.get(pid)
@@ -218,6 +229,21 @@ def _set_tooltip(item, text: str) -> None:
     ns_item = getattr(item, "_menuitem", None)
     if ns_item is not None and hasattr(ns_item, "setToolTip_"):
         ns_item.setToolTip_(text)
+
+
+def _activate(controller, row) -> bool:
+    """Run a clicked row's action; False when the user cancelled its confirmation."""
+    import rumps
+
+    if row.confirm and rumps.alert(
+        title="Remove account?", message=row.confirm, ok="Remove", cancel="Cancel"
+    ) != 1:
+        return False
+    if row.action == "add_token" and not row.args:
+        _ask_token(controller)
+    else:
+        getattr(controller, row.action)(*row.args)
+    return True
 
 
 def _ask_token(controller) -> None:
@@ -298,10 +324,7 @@ def run(controller) -> int:
                     controller.stop()
                     rumps.quit_application()
                     return
-                if row.action == "add_token" and not row.args:
-                    _ask_token(controller)
-                else:
-                    getattr(controller, row.action)(*row.args)
+                _activate(controller, row)
                 self.render()
             return cb
 

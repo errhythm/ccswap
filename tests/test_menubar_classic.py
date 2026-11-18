@@ -101,3 +101,32 @@ def test_title_shows_submenu_and_auto_toggles():
 def test_imports_without_rumps():
     code = "import sys, ccswap.menubar_classic; sys.exit('rumps' in sys.modules)"
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+def test_remove_asks_first_and_cancel_does_nothing(monkeypatch):
+    rows = mc.menu_spec(Fake())
+    (row,) = [r for r in _find(rows, "1  a@x.com") if r.action == "remove" and r.args[0] == "claude"]
+    assert row.confirm
+    answers = iter([0, 1])
+    asked = []
+    fake_rumps = SimpleNamespace(alert=lambda **kw: asked.append(kw) or next(answers))
+    monkeypatch.setitem(sys.modules, "rumps", fake_rumps)
+    calls = []
+    ctl = SimpleNamespace(remove=lambda *a: calls.append(a))
+    assert mc._activate(ctl, row) is False and calls == []
+    assert mc._activate(ctl, row) is True and calls == [("claude", 1)]
+    assert asked[0]["ok"] == "Remove" and asked[0]["cancel"] == "Cancel"
+
+
+def test_health_row_restarts_failed_engine():
+    f = Fake()
+    assert mc.menu_spec(f)[0].action is None
+    f.states["codex"].engine_failure = "engine died"
+    row = mc.menu_spec(f)[0]
+    assert (row.action, row.args, row.tooltip) == ("restart_engine", ("codex",), "engine died")
+    f.states["codex"].engine_failure = None
+    base = f.payload()
+    base["providers"][0]["autoSwitch"]["failure"] = "boom"
+    f.payload = lambda: base
+    row = mc.menu_spec(f)[0]
+    assert (row.action, row.args, row.tooltip) == ("restart_engine", ("claude",), "boom")
