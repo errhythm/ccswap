@@ -10,8 +10,8 @@
       proto[m] = function (...kids) { return orig.apply(this, kids.filter((k) => k != null)); };
     }
   }
-  const COLORS = { claude: "#E07A5F", codex: "#C9C6C1", agy: "#7FA8FF" };
-  const LOGOS = { claude: "logos/claude-ai-icon.svg", agy: "logos/antigravity.svg" };
+  const COLORS = { claude: "#D97757", codex: "#6C74FF", agy: "#7FA8FF" }; // taken from each official logo
+  const LOGOS = { claude: "logos/claude.svg", codex: "logos/codex.png", agy: "logos/antigravity.png" }; // sources: docs/provider-logos.md
   const TITLE_PCT = ["off", "5h", "7d", "both"];
   const REFRESH = [15, 30, 60, 120, 300, 600];
   const dark = window.matchMedia("(prefers-color-scheme: dark)");
@@ -112,13 +112,11 @@
   }
 
   // --- logos ---
-  function logoSrc(id) {
-    return id === "codex" ? (dark.matches ? "logos/codex_dark.svg" : "logos/codex_light.svg") : LOGOS[id];
-  }
+  const logoSrc = (id) => LOGOS[id];
   const colorOf = (id) => COLORS[id] || "var(--neutral)";
   function logo(id) {
     const src = logoSrc(id);
-    return src ? h("img", { src, alt: "" }) : h("span", { class: "dot", style: `background:${colorOf(id)}` });
+    return src ? h("img", { src, alt: "", "data-p": id }) : h("span", { class: "dot", style: `background:${colorOf(id)}` });
   }
   const ltile = (id, sm) => h("span", { class: "ltile" + (sm ? " sm" : "") }, logo(id));
   const accent = (el, id) => { el.style.setProperty("--accent", colorOf(id)); return el; };

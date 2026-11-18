@@ -102,30 +102,30 @@ def glyph_image(used_pct: float | None, size: float = 18.0):
     return img
 
 
-# Provider marks shipped with the popover page, used as monochrome template
-# images next to the ccswap glyph so the menu bar shows whose numbers these are.
-# Real-colour logos, (light menu bar, dark menu bar). CoreSVG can't draw Antigravity's masks or
-# Codex's compact arc commands, so those ship as PNGs rendered from the official SVGs.
+# Provider logos from each company's own published files (sources and hashes in
+# docs/provider-logos.md), one file per provider for both light and dark menu bars.
+# The scale makes up for transparent padding in the official files, which stay unmodified.
 _PROVIDER_LOGOS = {
-    "claude": ("claude-ai-icon.svg", "claude-ai-icon.svg"),
-    "codex": ("codex_light.png", "codex_dark.png"),
-    "agy": ("antigravity.png", "antigravity.png"),
+    "claude": ("claude.svg", 1.0),
+    "codex": ("codex.png", 1.15),
+    "agy": ("antigravity.png", 1.38),
 }
 _LOGO_DIR = BRAND_DIR.parent / "menubar_web" / "logos"
 
 
-def provider_logo(provider_id: str, dark: bool, size: float = 14.0):
-    """The provider's logo in its own colours for a light or dark menu bar, or None."""
-    names = _PROVIDER_LOGOS.get(provider_id)
-    if names is None:
+def provider_logo(provider_id: str, size: float = 14.0):
+    """The provider's logo in its own colours, drawn about ``size`` points across, or None."""
+    entry = _PROVIDER_LOGOS.get(provider_id)
+    if entry is None:
         return None
     from AppKit import NSImage
 
-    img = NSImage.alloc().initWithContentsOfFile_(str(_LOGO_DIR / names[dark]))
+    img = NSImage.alloc().initWithContentsOfFile_(str(_LOGO_DIR / entry[0]))
     if img is None:
         return None
     w, h = img.size()
-    img.setSize_((size * w / max(w, h), size * h / max(w, h)))  # keep the aspect ratio (Antigravity is 16x15)
+    side = size * entry[1]
+    img.setSize_((side * w / max(w, h), side * h / max(w, h)))
     return img
 
 
@@ -133,16 +133,17 @@ def status_image(used_pct: float | None, provider_id: str | None = None, size: f
     """The ccswap glyph, followed by the title provider's logo in colour when there is one.
 
     Without a logo this is the plain template glyph. With one, the image draws itself on every
-    paint: the glyph in the menu bar's text colour and the logo picked for the bar's appearance,
-    so a light/dark switch needs no repaint from us. It does not invert while the item is clicked.
+    paint, with the glyph in the menu bar's text colour, so a light/dark switch needs no
+    repaint from us. It does not invert while the item is clicked.
     """
     from AppKit import NSAppearance, NSColor, NSCompositingOperationSourceAtop, NSImage, NSRectFillUsingOperation
 
     glyph = glyph_image(used_pct, size)
     if provider_id not in _PROVIDER_LOGOS:
         return glyph
-    logos = {dark: provider_logo(provider_id, dark, size * 0.78) for dark in (False, True)}
-    if None in logos.values():
+    slot = size * 0.78
+    logo = provider_logo(provider_id, slot)
+    if logo is None:
         return glyph
 
     def tinted(white: float):  # the template glyph in the menu bar's text colour, drawn offscreen
@@ -158,12 +159,13 @@ def status_image(used_pct: float | None, provider_id: str | None = None, size: f
 
     glyphs = {False: tinted(0.0), True: tinted(1.0)}
     gap = size * 0.28
-    lw, lh = logos[True].size()
+    lw, lh = logo.size()
 
     def draw(_rect):
         dark = NSAppearance.currentDrawingAppearance().bestMatchFromAppearancesWithNames_(["NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"]) == "NSAppearanceNameDarkAqua"
         glyphs[dark].drawInRect_(((0, 0), (size, size)))
-        logos[dark].drawInRect_(((size + gap, (size - lh) / 2), (lw, lh)))
+        # centred in its slot; a scaled-up logo only spills its own transparent padding
+        logo.drawInRect_(((size + gap + (slot - lw) / 2, (size - lh) / 2), (lw, lh)))
         return True
 
-    return NSImage.imageWithSize_flipped_drawingHandler_((size + gap + lw, size), False, draw)
+    return NSImage.imageWithSize_flipped_drawingHandler_((size + gap + slot, size), False, draw)

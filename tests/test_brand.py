@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 from ccswap import brand
 
@@ -43,11 +44,16 @@ def test_status_image_adds_the_provider_logo_in_colour(pid):
     plain = brand.glyph_image(40, 18)
     img = brand.status_image(40, pid, 18)
     assert not img.isTemplate() and img.size()[0] > plain.size()[0]  # glyph plus the logo beside it
-    assert all(brand.provider_logo(pid, dark) is not None for dark in (False, True))
+    assert brand.provider_logo(pid) is not None
 
 
-def test_codex_logo_follows_the_menu_bar_appearance():
-    assert brand._PROVIDER_LOGOS["codex"] == ("codex_light.png", "codex_dark.png")
+def test_provider_logos_are_the_pinned_official_files():
+    # docs/provider-logos.md lists each file's source; a changed file must update that table
+    import hashlib
+    doc = (Path(brand.__file__).parents[3] / "docs" / "provider-logos.md").read_text()
+    for name, _scale in brand._PROVIDER_LOGOS.values():
+        digest = hashlib.sha256((brand._LOGO_DIR / name).read_bytes()).hexdigest()
+        assert f"`{name}`" in doc and digest in doc, name
 
 
 def test_status_image_without_a_known_provider_is_the_glyph():

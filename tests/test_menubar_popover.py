@@ -143,13 +143,11 @@ def test_refresh_creds_is_claude_only():
 def test_provider_logos_ship_and_are_local():
     web = Path(mp.__file__).with_name("menubar_web")
     js = (web / "app.js").read_text()
-    for name in ("claude-ai-icon", "codex_dark", "codex_light", "antigravity"):
-        assert (web / "logos" / f"{name}.svg").is_file()
-        assert name in js or name.startswith("codex")
-    assert "logos/codex_dark.svg" in js and "logos/codex_light.svg" in js
+    for name in ("claude.svg", "codex.png", "antigravity.png"):
+        assert (web / "logos" / name).is_file() and f"logos/{name}" in js
     assert (web / "mark.svg").is_file()
     # every file the page loads sits under the read-access root
-    for ref in re.findall(r'"((?:logos/|mark)[^"]+\.svg)"', js + (web / "index.html").read_text()):
+    for ref in re.findall(r'"((?:logos/|mark)[^"]+\.(?:svg|png))"', js + (web / "index.html").read_text()):
         assert (web / ref).is_file()
 
 

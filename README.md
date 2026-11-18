@@ -143,3 +143,5 @@ If ccswap saved you from a rate limit, a ⭐ on [GitHub](https://github.com/errh
 `ccswap` began as a fork of [claude-swap (`cswap`)](https://github.com/realiti4/claude-swap) by Onur Cetinkol, and still carries the original MIT license and credit for that. Since then it's grown into its own project: no more tracking upstream, no `cswap` compatibility, its own package and release line, and Codex and Antigravity support. It's MIT-licensed too, so fork it, file issues, send PRs, whatever's useful to you.
 
 [LICENSE](https://github.com/errhythm/ccswap/blob/main/LICENSE) keeps Onur Cetinkol's original copyright notice next to ccswap's.
+
+The Claude, Codex and Antigravity logos in the menu bar belong to Anthropic, OpenAI and Google. ccswap uses them only to show which provider an account belongs to and isn't affiliated with any of them. Sources are in [provider logos](https://github.com/errhythm/ccswap/blob/main/docs/provider-logos.md).
