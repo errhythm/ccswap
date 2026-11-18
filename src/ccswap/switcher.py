@@ -6614,6 +6614,10 @@ class ClaudeAccountSwitcher:
             payload["unclaimedCredentials"] = sorted(unclaimed)
         return payload
 
+    def list_payload(self) -> dict:
+        """The schema-v1 section; JSON mode never prints or prompts."""
+        return self.list_accounts(json_output=True)
+
     def list_accounts(
         self,
         show_token_status: bool = False,
