@@ -415,7 +415,7 @@ def test_payload_keys_and_provider_entries(env):
     assert set(p["title"]) == {"setting", "resolved", "text"}
     assert set(p["settings"]) == {
         "style", "titleProvider", "titlePct", "showAccountName", "titleScoped",
-        "refreshInterval", "threshold", "claudeIntegrations",
+        "refreshInterval", "threshold", "strategy", "claudeIntegrations",
     }
     assert p["settings"]["claudeIntegrations"] == {"statusline": False, "mod": False}
     assert [e["id"] for e in p["providers"]] == ["claude", "codex", "agy"]
@@ -550,3 +550,14 @@ def test_stop_with_wait_joins_engine_threads(env):
     threading.Timer(0.2, release.set).start()
     ctl.stop(wait=5)
     assert finished == [True]  # stop() waited for the engine thread
+
+
+def test_payload_carries_plan_and_strategy(env):
+    from types import SimpleNamespace as NS
+
+    assert mc._plan(NS(subscription_plan={"plan": {"tier": "default_claude_max_5x"}}, org_name="Acme"), "Claude Code")
+    assert mc._plan(NS(subscription_plan=None, org_name="Codex Plus"), "Codex") == "Plus"
+    assert mc._plan(NS(subscription_plan=None, org_name="Acme"), "Codex") is None
+    p = refreshed(env).payload()
+    assert p["settings"]["strategy"] in ("best", "consume-first")
+    assert all("plan" in a for prov in p["providers"] for a in prov["accounts"])

@@ -2,6 +2,14 @@
 // Page for the ccswap menu bar popover. All user strings go through textContent.
 // The logos in logos/ are the providers' own marks, used only to identify the service.
 (function () {
+  // The DOM turns a null child into the text "null"; conditional children are
+  // written as `cond ? el : null` throughout, so drop them at the source.
+  for (const proto of [Element.prototype, DocumentFragment.prototype]) {
+    for (const m of ["append", "prepend", "replaceChildren"]) {
+      const orig = proto[m];
+      proto[m] = function (...kids) { return orig.apply(this, kids.filter((k) => k != null)); };
+    }
+  }
   const COLORS = { claude: "#E07A5F", codex: "#C9C6C1", agy: "#7FA8FF" };
   const LOGOS = { claude: "logos/claude-ai-icon.svg", agy: "logos/antigravity.svg" };
   const TITLE_PCT = ["off", "5h", "7d", "both"];
@@ -120,7 +128,7 @@
 
   // --- tooltip + rings ---
   const tip = () => document.getElementById("tip");
-  function showTip(x, ev) {
+  function showTip(x, anchor) {
     const w = x.w, t = tip();
     const name = x.kind === "5h" ? (x.model ? x.label : "5-hour session") : (x.model ? x.label : "Weekly · all models");
     const ro = runsOut(w);
@@ -129,19 +137,20 @@
       : "No active window";
     t.replaceChildren(h("b", { class: level(w.pct), text: `${name}` }), h("b", { class: level(w.pct), text: `${round(w.pct)}%` }), h("div", { text: line }));
     t.style.display = "block";
-    moveTip(ev);
+    placeTip(anchor);
   }
-  function moveTip(ev) {
-    const t = tip();
-    const x = Math.max(6, Math.min(ev.clientX + 10, window.innerWidth - t.offsetWidth - 6));
-    const y = Math.max(6, Math.min(ev.clientY + 26, window.innerHeight - t.offsetHeight - 6));
-    t.style.left = x + "px";
-    t.style.top = y + "px";
+  // left of the ring, vertically centred on it; flips below when there is no room on the left
+  function placeTip(anchor) {
+    const t = tip(), r = anchor.getBoundingClientRect();
+    let x = r.left - t.offsetWidth - 8, y = r.top + r.height / 2 - t.offsetHeight / 2;
+    if (x < 6) { x = Math.min(window.innerWidth - t.offsetWidth - 6, r.left); y = r.bottom + 6; }
+    t.style.left = Math.max(6, x) + "px";
+    t.style.top = Math.max(6, Math.min(y, window.innerHeight - t.offsetHeight - 6)) + "px";
   }
 
   // outer = weekly, inner = 5h; each arc is its own element with a wider invisible hit area
   function ring(outer, inner) {
-    const S = 46, C = S / 2;
+    const S = 54, C = S / 2;
     const box = h("div", { class: "ring" });
     const s = svg("svg", { viewBox: `0 0 ${S} ${S}` });
     const centre = h("div", { class: "c" });
@@ -153,7 +162,7 @@
     };
     const rest = () => { box.className = "ring"; setCentre(best, best ? (best.kind === "5h" ? "5h" : "wk") : ""); tip().style.display = "none"; };
     const arcs = [];
-    for (const [x, r, cls, sw, cls2, word] of [[outer, 20.5, "out", 3.5, "ho", "weekly"], [inner, 14.5, "in", 3.5, "hi", "5h"]]) {
+    for (const [x, r, cls, sw, cls2, word] of [[outer, 24.5, "out", 4, "ho", "weekly"], [inner, 17.5, "in", 4, "hi", "5h"]]) {
       s.append(svg("circle", { class: "t", cx: C, cy: C, r, "stroke-width": sw }));
       if (!x) continue;
       const used = Math.min(100, Math.max(0, x.w.pct));
@@ -161,8 +170,7 @@
       const arc = svg("circle", { class: `a ${cls} ${level(x.w.pct)}`, cx: C, cy: C, r, "stroke-width": sw, pathLength: 100,
         "stroke-dasharray": `${Math.max(used, 2)} 100`, visibility: visible ? "visible" : "hidden" });
       const hit = svg("circle", { class: "hit", cx: C, cy: C, r });
-      hit.addEventListener("mouseenter", (ev) => { box.className = "ring " + cls2; setCentre(x, word); showTip(x, ev); });
-      hit.addEventListener("mousemove", moveTip);
+      hit.addEventListener("mouseenter", () => { box.className = "ring " + cls2; setCentre(x, word); showTip(x, box); });
       hit.addEventListener("mouseleave", rest);
       arcs.push(arc, hit);
     }
@@ -209,11 +217,9 @@
   function otherRow(prov, acct) {
     const caps = prov.capabilities;
     const manage = caps.disable && tab === prov.id;
-    const row = h("div", { class: "acct" },
-      h("span", { class: "em", title: label(acct), text: label(acct) + (acct.disabled ? " (disabled)" : "") }),
-      miniBars(acct), switchButton(prov, acct));
-    if (!manage) return row;
-    return h("div", {}, row, h("div", { class: "actions" },
+    const email = h("span", { class: "em", title: label(acct), text: label(acct) + (acct.disabled ? " (disabled)" : "") });
+    if (!manage) return h("div", { class: "acct" }, email, miniBars(acct), switchButton(prov, acct));
+    return h("div", { class: "acctwrap" }, h("div", { class: "acct" }, email), h("div", { class: "actions" }, miniBars(acct), h("span", { class: "spacer" }), switchButton(prov, acct),
       h("button", { class: "btn", text: acct.disabled ? "Enable" : "Disable",
         onclick: () => post({ action: "toggleDisabled", provider: prov.id, number: acct.number, disabled: !acct.disabled }) }),
       h("button", { class: "btn", text: "Remove", onclick: () => post({ action: "remove", provider: prov.id, number: acct.number }) })));
@@ -423,7 +429,7 @@
     const any = data.providers.some(autoOn);
     head.replaceChildren(h("span", { class: "tile" }, h("img", { src: "mark.svg", alt: "" })), h("span", { class: "title", text: "ccswap" }),
       h("span", { class: "spacer" }),
-      any ? autoChip(`Auto · ${round(data.settings.threshold)}%`, () => { tab = "settings"; draw(); }) : null,
+      any ? autoChip(`Auto · ${data.settings.strategy ? data.settings.strategy + " · " : ""}${round(data.settings.threshold)}%`, () => { tab = "settings"; draw(); }) : null,
       h("button", { class: "ib", title: "Refresh", "aria-label": "Refresh", onclick: () => post({ action: "refresh" }) }, icon("refresh")));
   }
 

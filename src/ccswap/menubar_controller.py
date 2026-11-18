@@ -14,7 +14,7 @@ Payload (``build_payload``), pushed to the popover page as JSON::
      "health": {"label": str, "attention": bool},
      "title": {"setting": str, "resolved": str, "text": str},
      "settings": {"style", "titleProvider", "titlePct", "showAccountName",
-                  "titleScoped", "refreshInterval", "threshold",
+                  "titleScoped", "refreshInterval", "threshold", "strategy",
                   "claudeIntegrations": {"statusline": bool, "mod": bool}},
      "history": [str, ...],                  # Claude switch log lines
      "providers": [
@@ -25,7 +25,7 @@ Payload (``build_payload``), pushed to the popover page as JSON::
 
 ``section.accounts[]`` rows: number, email, alias, active, disabled,
 **json_output.usage_row_fields(...) (so ``windows`` and ``windowsSource``),
-plus ``note`` (menubar.menu_note of the sentinel) and ``loginNote``
+plus ``note`` (menubar.menu_note of the sentinel), ``plan`` (short plan name or null) and ``loginNote``
 (oauth.format_login_expiry). Built from the controller's snapshots, never
 from ``list_payload()`` (which fetches).
 """
@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from ccswap import oauth
+from ccswap import oauth, subscription
 from ccswap.exceptions import ClaudeSwitchError, CredentialReadError
 from ccswap.json_output import provider_entry, usage_row_fields
 from ccswap.menubar import (
@@ -395,6 +395,13 @@ class MenuBarController:
     def payload(self) -> dict:
         return build_payload(self)
 
+    def strategy(self) -> str:
+        """Auto-switch strategy from core settings ("best" when unreadable)."""
+        try:
+            return load_settings(self.backup_root).strategy
+        except Exception:
+            return "best"
+
     def threshold(self) -> int:
         """Current auto-switch threshold from core settings (0 when unreadable)."""
         try:
@@ -718,7 +725,19 @@ def _rolled_usage(usage: dict | None, now: float) -> dict | None:
     return out
 
 
-def _account_row(acc, now: float) -> dict:
+def _plan(acc, provider_label: str) -> str | None:
+    """Short plan name for the card chip: Claude's stored plan record, else a
+    label like "Codex Plus" with the provider name dropped."""
+    record = acc.subscription_plan
+    if isinstance(record, dict) and isinstance(record.get("plan"), dict):
+        return subscription.plan_label(record["plan"])
+    org = acc.org_name or ""
+    if org.startswith(provider_label + " "):
+        return org[len(provider_label) + 1:] or None
+    return None
+
+
+def _account_row(acc, now: float, provider_label: str = "") -> dict:
     entry = acc.usage
     quarantined = entry.sentinel == USAGE_RELOGIN_REQUIRED
     return {
@@ -737,6 +756,7 @@ def _account_row(acc, now: float) -> dict:
         ),
         "note": menu_note(SENTINEL_NOTES.get(entry.sentinel, entry.sentinel)) if entry.sentinel else None,
         "loginNote": oauth.format_login_expiry(acc.login_expires_at, quarantined, now),
+        "plan": _plan(acc, provider_label),
     }
 
 
@@ -753,7 +773,7 @@ def build_payload(controller: MenuBarController) -> dict:
         if snap is not None:
             section = {
                 "activeAccountNumber": int(snap.active_number) if snap.active_number else None,
-                "accounts": [_account_row(acc, now) for acc in snap.accounts],
+                "accounts": [_account_row(acc, now, spec.label) for acc in snap.accounts],
             }
         caps = spec.capabilities
         entry = provider_entry(spec, section, state.error)
@@ -788,6 +808,7 @@ def build_payload(controller: MenuBarController) -> dict:
             "titleScoped": settings.title_scoped,
             "refreshInterval": settings.refresh_interval,
             "threshold": controller.threshold(),
+            "strategy": controller.strategy(),
             "claudeIntegrations": {
                 short: bool(controller._claude_state.get(key))
                 for short, key in CLAUDE_INTEGRATIONS.items()
