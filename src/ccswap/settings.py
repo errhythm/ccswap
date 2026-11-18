@@ -977,6 +977,16 @@ def _import_legacy_menubar(backup_root: Path) -> MenuBarConfig | None:
     return config
 
 
+def _unreadable(path: Path) -> bool:
+    """The file exists but is not a JSON object (``_read_raw`` returns {} for both that and a real ``{}``)."""
+    try:
+        return not isinstance(json.loads(path.read_text(encoding="utf-8")), dict)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+
+
 def load_menubar_settings(backup_root: Path) -> MenuBarConfig:
     """Load the menubar section; a bad value falls back to its default.
 
@@ -988,7 +998,7 @@ def load_menubar_settings(backup_root: Path) -> MenuBarConfig:
     section = raw.get("menubar")
     if isinstance(section, dict):
         return _menubar_from_section(section)
-    if not raw and path.exists() and path.stat().st_size:
+    if not raw and _unreadable(path):
         # Unreadable settings.json: defaults, like every other section. The old
         # file may predate changes made since, so it is not a safe stand-in.
         return MenuBarConfig()

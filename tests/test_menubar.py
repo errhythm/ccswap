@@ -1125,3 +1125,9 @@ def test_antigravity_weekly_title_rolls_after_its_reset():
     past = {"scoped": [{"name": "G · weekly", "window": "weekly", "pct": 80.0,
                         "resets_at": "2020-01-01T00:00:00+00:00"}]}
     assert "80%" not in menubar.format_title("a@x.io", past, s)
+
+
+def test_empty_settings_json_still_imports_the_old_file(tmp_path: Path):
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True}))
+    (tmp_path / "settings.json").write_text("{}", encoding="utf-8")
+    assert menubar.MenuBarSettings.load(tmp_path).auto_switch_enabled is True
