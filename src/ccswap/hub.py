@@ -75,7 +75,8 @@ def _account_id(provider: str, acc: AccountSnapshot) -> str:
 
 
 def _hub_accounts(snaps: dict[str, AccountsSnapshot | None]):
-    for provider in ("claude", "codex"):
+    # Served: only providers with a usage URL. Antigravity is snapshotted but has none.
+    for provider in _USAGE_URLS:
         snap = snaps.get(provider)
         for acc in snap.accounts if snap else ():
             # API-key slots have no subscription usage to show.
@@ -296,16 +297,14 @@ def make_handler(key: str, snapshots: Snapshots) -> type[BaseHTTPRequestHandler]
 
 
 def default_snapshots(debug: bool = False) -> Snapshots:
-    from ccswap.codex import CodexAccountSwitcher
-    from ccswap.switcher import ClaudeAccountSwitcher
+    from ccswap import providers
 
-    claude = ClaudeAccountSwitcher(debug=debug)
-    codex = CodexAccountSwitcher(debug=debug)
+    switchers = {pid: spec.factory(debug=debug) for pid, spec in providers.PROVIDERS.items()}
 
     def take() -> dict[str, AccountsSnapshot | None]:
         out: dict[str, AccountsSnapshot | None] = {}
         # fetch=None: the usage store paces the network exactly as `ccswap list`.
-        for name, switcher in (("claude", claude), ("codex", codex)):
+        for name, switcher in switchers.items():
             try:
                 out[name] = switcher.accounts_snapshot(fetch=None)
             except Exception:
