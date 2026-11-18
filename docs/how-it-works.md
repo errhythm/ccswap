@@ -45,7 +45,3 @@ The log file, `claude-swap.log`, is in the backup directory too. Add `--debug` t
 - Restart any running `ccswap auto`, menu bar, or TUI instance after changing the backend.
 - Use file mode only when Claude Code will not run with the Keychain unlocked; `ccswap status` warns about residual items that would override the file and gives their removal commands.
 - `ccswap run` (session mode) refuses with the file backend, because session profiles keep their credentials in the Keychain.
-
-## Origins
-
-ccswap began as a fork of [realiti4/claude-swap](https://github.com/realiti4/claude-swap). The last merge took claude-swap through `7fecb86` (2026-11-15) and landed on 2026-11-18. ccswap doesn't track that project any more and isn't compatible with `cswap`.
