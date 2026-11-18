@@ -140,7 +140,8 @@
       h("span", { class: "spacer" }), prov.refreshing ? h("span", { class: "muted", text: "refreshing" }) : null,
       autoPill(prov)));
     if (prov.error) card.append(h("div", { class: "err", text: prov.error }));
-    card.append(failureRow(prov));
+    const fail = failureRow(prov);
+    if (fail) card.append(fail); // append(null) would print "null"
     const accounts = prov.accounts || [];
     const active = accounts.find((a) => a.active);
     if (active) {
