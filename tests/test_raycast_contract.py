@@ -34,3 +34,21 @@ def test_failed_refresh_keeps_last_good_usage():
 
 def test_codex_weekly_window_name():
     assert usage_to_json({"weekly": {"pct": 42.0}})["weekly"]["pct"] == 42.0
+
+
+def test_providers_entry_keys_and_v1_row_keys_unchanged():
+    from ccswap import providers
+    from ccswap.json_output import provider_entry
+
+    entry = provider_entry(providers.get("claude"), {"activeAccountNumber": 1, "accounts": []})
+    assert list(entry) == ["id", "label", "schemaVersion", "capabilities",
+                           "activeAccountNumber", "accounts", "error"]
+    assert list(entry["capabilities"]) == [
+        "switch", "strategies", "disable", "autoSwitch", "restartAfterSwitch", "sessionMode"]
+    failed = provider_entry(providers.get("agy"), None, "boom")
+    assert failed["accounts"] == [] and failed["activeAccountNumber"] is None
+    assert failed["error"] == "boom"
+    row = account_row(1, "a@b.c", "Org", "uuid", True, {"five_hour": {"pct": 1.0}})
+    # Raycast reads these v1 keys; windows/windowsSource are additive.
+    assert {"number", "email", "organizationName", "active", "usage"} <= set(row)
+    assert "windows" in row and "windowsSource" in row

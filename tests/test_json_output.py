@@ -1004,3 +1004,65 @@ def test_scoped_five_hour_window_carries_window_and_no_pace():
     out = usage_to_json(usage, fetched_at=1_800_000_000.0)["scoped"]
     assert out[0]["window"] == "5h" and "expectedPct" not in out[0]
     assert out[1]["window"] == "weekly" and "expectedPct" in out[1]
+
+
+class TestUsageWindows:
+    def test_claude_five_hour_weekly_and_model(self):
+        from ccswap.json_output import usage_windows
+
+        usage = {
+            "five_hour": {"pct": 19.0, "resets_at": "2026-11-18T12:00:00Z"},
+            "seven_day": {"pct": 40.0, "resets_at": "2026-11-23T12:00:00Z"},
+            "scoped": [{"name": "Fable", "pct": 63.0}],
+        }
+        w = {x["id"]: x for x in usage_windows(usage)}
+        assert w["5h"]["pct"] == 19.0 and w["5h"]["durationS"] == 18000
+        assert w["5h"]["scope"] is None and w["5h"]["resetsAt"] == "2026-11-18T12:00:00Z"
+        assert w["7d"]["durationS"] == 604800
+        assert w["model:Fable"]["scope"] == {"model": "Fable"}
+        assert w["model:Fable"]["label"] == "Fable" and w["model:Fable"]["durationS"] == 604800
+
+    def test_claude_null_pct_survives(self):
+        from ccswap.json_output import usage_windows
+
+        (win,) = usage_windows({"five_hour": {"pct": None}})
+        assert win["pct"] is None
+
+    def test_codex_weekly_only(self):
+        from ccswap.json_output import usage_windows
+
+        (win,) = usage_windows({"weekly": {"pct": 5.0}})
+        assert (win["id"], win["label"], win["durationS"]) == ("weekly", "Weekly", 604800)
+
+    def test_codex_five_hour_and_weekly(self):
+        from ccswap.json_output import usage_windows
+
+        ids = [x["id"] for x in usage_windows(
+            {"five_hour": {"pct": 1.0}, "weekly": {"pct": 2.0}})]
+        assert ids == ["5h", "weekly"]
+
+    def test_agy_buckets_keep_group_and_bucket(self):
+        from ccswap.json_output import usage_windows
+
+        usage = {"scoped": [
+            {"name": "Pro · 5h", "group": "Pro", "bucket_id": "b1", "bucket_name": "Flash",
+             "window": "5h", "pct": 12.0, "resets_at": "2026-11-18T12:00:00Z"},
+            {"name": "Pro · weekly", "group": "Pro", "bucket_id": "b1", "bucket_name": "Flash",
+             "window": "weekly", "pct": 30.0, "resets_at": "2026-11-23T12:00:00Z"},
+        ]}
+        five, week = usage_windows(usage)
+        assert five["id"] == "b1/5h" and five["label"] == "Pro · 5h"
+        assert five["scope"] == {"group": "Pro", "bucket": "Flash"}
+        assert five["durationS"] == 18000 and "expectedPct" not in five
+        assert week["id"] == "b1/weekly" and week["durationS"] == 604800
+
+    def test_rows_carry_windows_and_source(self):
+        from ccswap.json_output import usage_row_fields
+
+        fresh = usage_row_fields({"five_hour": {"pct": 1.0}}, usage_fetched_at=1.0)
+        assert fresh["windowsSource"] == "usage" and fresh["windows"][0]["id"] == "5h"
+        stale = usage_row_fields(
+            None, usage_fetched_at=1.0, last_good_usage={"five_hour": {"pct": 2.0}})
+        assert stale["windowsSource"] == "lastGood" and stale["windows"][0]["pct"] == 2.0
+        none = usage_row_fields("token expired")
+        assert none["windows"] == [] and none["windowsSource"] is None

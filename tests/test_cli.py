@@ -1244,11 +1244,36 @@ class TestJsonOutputCli:
             codex_cls.return_value.list_payload.return_value = codex_payload
             cli.main()
 
-        assert json.loads(capsys.readouterr().out) == {
+        out = json.loads(capsys.readouterr().out)
+        # `providers` is the additive registry view; the v1 sections stay as-is.
+        assert [p["id"] for p in out.pop("providers")] == ["claude", "codex", "agy"]
+        assert out == {
             "claude": claude_payload,
             "codex": codex_payload,
             "agy": {"schemaVersion": 1, "provider": "agy", "activeAccountNumber": None, "accounts": []},
         }
+
+    def test_list_json_failing_provider_is_null_with_error(self, capsys):
+        claude_payload = {"schemaVersion": 1, "activeAccountNumber": 1,
+                          "accounts": [{"number": 1}]}
+        with patch("ccswap.cli.ClaudeAccountSwitcher") as claude_cls, \
+             patch("ccswap.cli.CodexAccountSwitcher") as codex_cls, \
+             patch.object(sys, "argv", ["claude-swap", "--list", "--json"]), \
+             patch("os.geteuid", return_value=1000, create=True), \
+             patch("ccswap.update_check.check_for_update", return_value=None):
+            claude_cls.return_value.list_accounts.return_value = claude_payload
+            codex_cls.return_value.list_payload.side_effect = RuntimeError("codex broke")
+            cli.main()  # exit 0: claude and agy still listed
+
+        out = json.loads(capsys.readouterr().out)
+        assert out["codex"] is None and out["claude"] == claude_payload
+        by_id = {p["id"]: p for p in out["providers"]}
+        assert by_id["codex"]["error"] == "codex broke"
+        assert by_id["codex"]["accounts"] == []
+        assert by_id["codex"]["activeAccountNumber"] is None
+        assert by_id["claude"]["error"] is None
+        assert by_id["claude"]["accounts"] == [{"number": 1}]
+        assert by_id["agy"]["error"] is None
 
     def test_switch_json_forwarded_and_serialized(self, capsys):
         payload = {"schemaVersion": 1, "switched": True}

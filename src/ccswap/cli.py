@@ -996,11 +996,7 @@ def _list_dispatch(claude_switcher: "ClaudeAccountSwitcher", args) -> dict | Non
         return None
 
     if args.json:
-        claude_payload = claude_switcher.list_accounts(
-            show_token_status=args.token_status, json_output=True
-        )
-        return {"claude": claude_payload, "codex": codex_switcher.list_payload(),
-                "agy": AgyAccountSwitcher().list_payload()}
+        return _list_all_json(claude_switcher, codex_switcher, args)
 
     print(bolded("Claude Code"))
     if claude_switcher.sequence_file.exists():
@@ -1016,6 +1012,36 @@ def _list_dispatch(claude_switcher: "ClaudeAccountSwitcher", args) -> dict | Non
     print(bolded("Antigravity"))
     AgyAccountSwitcher().list_accounts()
     return None
+
+
+def _list_all_json(claude_switcher, codex_switcher, args) -> dict:
+    """Every provider's section plus ``providers[]``; one failure nulls only
+    its own section. Raises the last error when every provider failed."""
+    from ccswap import providers as registry
+    from ccswap.json_output import provider_entry
+
+    sections = {
+        "claude": lambda: claude_switcher.list_accounts(
+            show_token_status=args.token_status, json_output=True
+        ),
+        "codex": codex_switcher.list_payload,
+        "agy": lambda: AgyAccountSwitcher().list_payload(),
+    }
+    out: dict = {}
+    entries = []
+    last_exc: Exception | None = None
+    for pid, spec in registry.PROVIDERS.items():
+        try:
+            out[pid] = sections[pid]()
+            entries.append(provider_entry(spec, out[pid]))
+        except Exception as exc:  # one provider must not sink the others
+            last_exc = exc
+            out[pid] = None
+            entries.append(provider_entry(spec, None, str(exc) or type(exc).__name__))
+    if last_exc is not None and all(v is None for v in out.values()):
+        raise last_exc
+    out["providers"] = entries
+    return out
 
 
 def _gate_banner(settings) -> str:

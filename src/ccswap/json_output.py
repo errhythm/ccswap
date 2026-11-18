@@ -197,6 +197,48 @@ def usage_to_json(usage: dict, fetched_at: float | None = None) -> dict:
     return out
 
 
+_DURATION_5H_S = 5 * 3600
+_DURATION_7D_S = 7 * 24 * 3600
+
+
+def usage_windows(usage: dict, fetched_at: float | None = None) -> list[dict]:
+    """Every quota window of an internal usage dict as one uniform list.
+
+    Reads the internal dict, not ``usage_to_json``: the JSON scoped rows drop
+    Antigravity's ``group`` and ``bucket_id``. ``spend`` and ``credits`` have no
+    fixed period, so they stay in ``usage``.
+    """
+    out: list[dict] = []
+
+    def add(wid: str, label: str, entry: dict, duration: int, scope: dict | None) -> None:
+        body = (
+            _window_to_json(entry)
+            if duration == _DURATION_5H_S
+            else _weekly_window_to_json(entry, fetched_at)
+        )
+        out.append(
+            {"id": wid, "label": label, "pct": body.pop("pct"), **body,
+             "durationS": duration, "scope": scope}
+        )
+
+    if "five_hour" in usage:
+        add("5h", "5h", usage["five_hour"], _DURATION_5H_S, None)
+    if "seven_day" in usage:
+        add("7d", "7d", usage["seven_day"], _DURATION_7D_S, None)
+    if "weekly" in usage:
+        add("weekly", "Weekly", usage["weekly"], _DURATION_7D_S, None)
+    for entry in usage.get("scoped", ()):
+        duration = _DURATION_5H_S if entry.get("window") == "5h" else _DURATION_7D_S
+        if "group" in entry:
+            window = entry.get("window", "weekly")
+            add(f"{entry['bucket_id']}/{window}", entry["name"], entry, duration,
+                {"group": entry["group"], "bucket": entry.get("bucket_name")})
+        else:
+            add(f"model:{entry['name']}", entry["name"], entry, duration,
+                {"model": entry["name"]})
+    return out
+
+
 def _is_number(value: object) -> bool:
     return (
         isinstance(value, (int, float))
@@ -519,6 +561,16 @@ def usage_row_fields(
     (``UsageEntry.decision_value()``)."""
     status, usage = usage_fields(usage_entry, usage_fetched_at)
     row: dict = {"usageStatus": status, "usage": usage}
+    # Same source rule as the row itself: decision-grade first, then last-good.
+    if isinstance(usage_entry, dict):
+        row["windows"] = usage_windows(usage_entry, usage_fetched_at)
+        row["windowsSource"] = "usage"
+    elif isinstance(last_good_usage, dict) and usage_fetched_at is not None:
+        row["windows"] = usage_windows(last_good_usage, usage_fetched_at)
+        row["windowsSource"] = "lastGood"
+    else:
+        row["windows"] = []
+        row["windowsSource"] = None
     if usage is not None:
         row.update(usage_freshness_fields(usage_fetched_at, usage_age_s))
     else:
@@ -529,6 +581,28 @@ def usage_row_fields(
         )
         row.update(usage_failure_fields(status, last_error, backoff_until))
     return row
+
+
+def provider_entry(spec, section: dict | None, error: str | None = None) -> dict:
+    """One ``providers[]`` item; a failed provider has no section."""
+    caps = spec.capabilities
+    section = section or {}
+    return {
+        "id": spec.id,
+        "label": spec.label,
+        "schemaVersion": SCHEMA_VERSION,
+        "capabilities": {
+            "switch": caps.switch,
+            "strategies": list(caps.strategies),
+            "disable": caps.disable,
+            "autoSwitch": caps.auto_switch,
+            "restartAfterSwitch": caps.restart_after_switch,
+            "sessionMode": caps.session_mode,
+        },
+        "activeAccountNumber": section.get("activeAccountNumber"),
+        "accounts": section.get("accounts", []),
+        "error": error,
+    }
 
 
 def error_envelope(exc: Exception) -> dict:
