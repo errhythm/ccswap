@@ -501,8 +501,10 @@ def _scoped_max(usage: dict | str | None, duration: str) -> float | None:
     """
     if not isinstance(usage, dict):
         return None
+    now = time.time()
+    windows = [_rolled_scoped_window(w, now) for w in usage.get("scoped") or []]
     pcts = [
-        w["pct"] for w in usage.get("scoped") or []
+        w["pct"] for w in windows
         if isinstance(w, dict) and w.get("window") == duration and isinstance(w.get("pct"), (int, float))
     ]
     return max(pcts) if pcts else None

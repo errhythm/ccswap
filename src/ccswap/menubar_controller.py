@@ -36,7 +36,7 @@ import logging
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -624,8 +624,8 @@ class MenuBarController:
     def set_auto(self, provider_id: str, enabled: bool) -> bool:
         if provider_id not in self.states or not self._supports_engine(provider_id):
             return False
-        setattr(self.settings, AUTO_FIELDS[provider_id], bool(enabled))
-        self.settings.save(self.backup_root)
+        if not self._save_setting(AUTO_FIELDS[provider_id], bool(enabled)):
+            return False
         if enabled:
             self._start_engine(provider_id)
         else:
@@ -662,16 +662,29 @@ class MenuBarController:
         }.get(field)
         if valid is None or not valid():
             return False  # a bad value from a shell is a bug, not user input to alert about
-        setattr(self.settings, field, value)
-        self.settings.save(self.backup_root)
+        if not self._save_setting(field, value):
+            return False
         if field == "refresh_interval" and self.on_interval_changed:
             self.on_interval_changed(value)
+        return True
+
+    def _save_setting(self, field: str, value) -> bool:
+        """Persist first, then apply in memory, so the file and the menu never disagree."""
+        candidate = replace(self.settings, **{field: value})
+        try:
+            candidate.save(self.backup_root)
+        except (ClaudeSwitchError, OSError) as e:
+            self.alert(APP, f"Couldn't save the setting: {e}")
+            return False
+        setattr(self.settings, field, value)
         return True
 
     def toggle_claude_integration(self, key: str) -> bool:
         key = CLAUDE_INTEGRATIONS.get(key, key)
         if key not in self._claude_state or self._claude_busy:
             return False
+        if self._claude_state[key] is None:
+            return False  # state unknown (still checking, or the check failed): don't guess
         self._start_claude_work(key, not self._claude_state[key])
         return True
 

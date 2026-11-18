@@ -983,9 +983,15 @@ def load_menubar_settings(backup_root: Path) -> MenuBarConfig:
     With no menubar section yet, settings from an older ccswap's
     ``menubar_settings.json`` are imported once.
     """
-    section = _read_raw(settings_path(backup_root)).get("menubar")
+    path = settings_path(backup_root)
+    raw = _read_raw(path)
+    section = raw.get("menubar")
     if isinstance(section, dict):
         return _menubar_from_section(section)
+    if not raw and path.exists() and path.stat().st_size:
+        # Unreadable settings.json: defaults, like every other section. The old
+        # file may predate changes made since, so it is not a safe stand-in.
+        return MenuBarConfig()
     return _import_legacy_menubar(backup_root) or MenuBarConfig()
 
 
@@ -1261,7 +1267,9 @@ def unset_setting(backup_root: Path, dotted_key: str) -> bool:
         return False
     raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
     del section[spec.json_key]
-    if not section:
+    # An empty menubar section stays: its absence means "import the old
+    # menubar_settings.json", which would bring back values just cleared.
+    if not section and spec.section != "menubar":
         del raw[spec.section]
     atomic_write_json(path, raw)
     return True

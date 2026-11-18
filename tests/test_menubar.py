@@ -1099,3 +1099,29 @@ def test_format_title_attention_prefix():
     assert menubar.format_title(None, None, settings, attention=True) == "⚠ ⇄"
     assert menubar.format_title("loc@papaya.asia", _USAGE, settings, attention=True).startswith("⚠ ⇄ ")
     assert not menubar.format_title("loc@papaya.asia", _USAGE, settings).startswith("⚠")
+
+
+def test_clearing_every_menubar_key_does_not_reimport_the_old_file(tmp_path: Path):
+    from ccswap import settings
+
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True, "title_pct": "5h"}))
+    assert menubar.MenuBarSettings.load(tmp_path).auto_switch_enabled is True  # imported once
+    settings.set_setting(tmp_path, "menubar.autoSwitch", "false")
+    settings.unset_setting(tmp_path, "menubar.titlePct")
+    settings.unset_setting(tmp_path, "menubar.autoSwitch")
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.auto_switch_enabled is False and s.title_pct == "both"
+
+
+def test_corrupt_settings_json_does_not_fall_back_to_the_old_file(tmp_path: Path):
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True}))
+    (tmp_path / "settings.json").write_text("{ broken", encoding="utf-8")
+    assert menubar.MenuBarSettings.load(tmp_path) == menubar.MenuBarSettings()
+    assert (tmp_path / "settings.json").read_text() == "{ broken"  # never overwritten
+
+
+def test_antigravity_weekly_title_rolls_after_its_reset():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="7d")
+    past = {"scoped": [{"name": "G · weekly", "window": "weekly", "pct": 80.0,
+                        "resets_at": "2020-01-01T00:00:00+00:00"}]}
+    assert "80%" not in menubar.format_title("a@x.io", past, s)

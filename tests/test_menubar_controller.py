@@ -513,3 +513,21 @@ def test_health_change_requests_repaint(env):
     ctl = env.ctl
     assert ctl.tick() is True  # first reading of the health row
     assert ctl.tick() is False
+
+
+def test_failed_save_leaves_memory_and_engines_untouched(env):
+    # A corrupt settings.json makes every save raise; the toggle must not half-apply.
+    (env.root / "settings.json").write_text("{ broken", encoding="utf-8")
+    ctl = env.ctl
+    assert ctl.set_auto("claude", True) is False
+    assert ctl.settings.auto_switch_enabled is False
+    assert ctl.states["claude"].engine is None
+    assert ctl.set_display("title_provider", "auto") is False
+    assert ctl.settings.title_provider == "claude"
+    assert len(env.alerts) == 2 and "Couldn't save" in env.alerts[0][1]
+
+
+def test_unknown_integration_state_is_not_toggled(env):
+    ctl = env.ctl
+    ctl._claude_state["claude.statusline"] = None
+    assert ctl.toggle_claude_integration("statusline") is False
