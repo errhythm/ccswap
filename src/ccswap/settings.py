@@ -23,6 +23,7 @@ import logging
 import math
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -217,6 +218,22 @@ class SettingSpec:
         return getattr(_SECTION_DEFAULT_SOURCES[self.section](), self.field)
 
 
+class _ViewChoices(Sequence):
+    """"combined" plus every registered provider id, read at use time.
+
+    The registry imports models -> usage_store -> settings, so it cannot be
+    imported here at module level.
+    """
+
+    def __getitem__(self, index):
+        from ccswap import providers
+
+        return ("combined", *providers.PROVIDERS)[index]
+
+    def __len__(self) -> int:
+        return len(self[:])
+
+
 # settings.json uses camelCase (matching the repo's other JSON artifacts);
 # dataclass fields stay snake_case.
 SETTING_SPECS: dict[str, SettingSpec] = {
@@ -298,7 +315,7 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         ),
         SettingSpec(
             "ui", "view", "view", "choice",
-            choices=("combined", "claude", "codex", "agy"),
+            choices=_ViewChoices(),
             help="Dashboard view: all providers, or only one",
         ),
         SettingSpec(

@@ -19,17 +19,46 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
 from typing import Callable
 
-from ccswap import oauth, printer, usage_store
+from ccswap import oauth, printer, providers as registry, usage_store
 from ccswap.exceptions import ClaudeSwitchError
 from ccswap.models import AccountSnapshot, AccountsSnapshot
 from ccswap.snapshot_source import SnapshotSource
 from ccswap.switcher import SENTINEL_NOTES, last_seen_note
 
 
-PROVIDERS = ("claude", "codex", "agy")
-PROVIDER_LABELS = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}
+class _RegistryIds(Sequence):
+    """Live view of the provider registry's ids, in display order."""
+
+    def __getitem__(self, index):
+        return tuple(registry.PROVIDERS)[index]
+
+    def __len__(self) -> int:
+        return len(registry.PROVIDERS)
+
+
+class _RegistryLabels(Mapping):
+    """Live id -> label view of the provider registry."""
+
+    def __getitem__(self, key: str) -> str:
+        return registry.PROVIDERS[key].label
+
+    def __iter__(self):
+        return iter(registry.PROVIDERS)
+
+    def __len__(self) -> int:
+        return len(registry.PROVIDERS)
+
+
+# Views, not copies: a provider registered later (or patched in a test) shows up.
+PROVIDERS = _RegistryIds()
+PROVIDER_LABELS = _RegistryLabels()
+
+
+def capabilities(provider: str) -> registry.Capabilities:
+    return registry.get(provider).capabilities
 
 # Plan labels and the personal fallback are not an account's identity.
 # Organization names are, so masking leaves only the generic tags alone.
