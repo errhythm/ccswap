@@ -7,9 +7,11 @@ import { join } from "node:path";
 
 export const SCHEMA_VERSION = 1;
 
-export type Provider = "claude" | "codex";
+export type Provider = string;
 
 export type UsageWindow = { pct: number | null; countdown?: string };
+
+export type AccountWindow = UsageWindow & { id?: string; label: string };
 
 export type Account = {
   number: number;
@@ -19,11 +21,32 @@ export type Account = {
   active: boolean;
   disabled?: boolean;
   usage: { fiveHour?: UsageWindow; sevenDay?: UsageWindow; weekly?: UsageWindow } | null;
+  windows?: AccountWindow[];
 };
 
-export type Accounts = Record<Provider, Account[]>;
+export type ProviderData = {
+  id: Provider;
+  label: string;
+  strategies: string[];
+  restartAfterSwitch: boolean;
+  accounts: Account[];
+  error?: string;
+};
 
-type Section = { schemaVersion?: number; accounts?: (Account & { lastGoodUsage?: Account["usage"] })[] };
+type Row = Account & { lastGoodUsage?: Account["usage"] };
+type Section = { schemaVersion?: number; accounts?: Row[] };
+type Entry = Section & {
+  id: string;
+  label?: string;
+  capabilities?: { strategies?: string[]; restartAfterSwitch?: boolean };
+  error?: string | null;
+};
+
+// Older ccswap has no providers[]: these are what its two keys always meant.
+const LEGACY: ProviderData[] = [
+  { id: "claude", label: "Claude Code", strategies: ["best"], restartAfterSwitch: false, accounts: [] },
+  { id: "codex", label: "Codex", strategies: ["best"], restartAfterSwitch: true, accounts: [] },
+];
 
 // Raycast does not load the login shell, so PATH lacks where uv, pipx and Homebrew install ccswap.
 export function resolveBinary(preferred?: string): string | undefined {
@@ -33,23 +56,31 @@ export function resolveBinary(preferred?: string): string | undefined {
   return candidates.find((path) => existsSync(path));
 }
 
-export function parseList(stdout: string): Accounts {
-  const data = JSON.parse(stdout) as { error?: { message: string } } & Partial<Record<Provider, Section | null>>;
+function rows(section: Section): Account[] {
+  if (section.schemaVersion !== undefined && section.schemaVersion !== SCHEMA_VERSION) {
+    throw new Error(`ccswap JSON schema ${section.schemaVersion} is not supported. Update this extension.`);
+  }
+  // A failed refresh leaves usage null; the last good reading still beats a blank row.
+  return (section.accounts ?? []).map(({ lastGoodUsage, ...a }) => ({ ...a, usage: a.usage ?? lastGoodUsage ?? null }));
+}
+
+export function parseList(stdout: string): ProviderData[] {
+  const data = JSON.parse(stdout) as { error?: { message: string }; providers?: Entry[] } & Record<string, unknown>;
   if (data.error) throw new Error(data.error.message);
-  const out: Accounts = { claude: [], codex: [] };
-  for (const provider of ["claude", "codex"] as const) {
-    const section = data[provider];
-    if (!section) continue;
-    if (section.schemaVersion !== undefined && section.schemaVersion !== SCHEMA_VERSION) {
-      throw new Error(`ccswap JSON schema ${section.schemaVersion} is not supported. Update this extension.`);
-    }
-    // A failed refresh leaves usage null; the last good reading still beats a blank row.
-    out[provider] = (section.accounts ?? []).map(({ lastGoodUsage, ...a }) => ({
-      ...a,
-      usage: a.usage ?? lastGoodUsage ?? null,
+  if (data.providers) {
+    return data.providers.map((e) => ({
+      id: e.id,
+      label: e.label ?? e.id,
+      strategies: e.capabilities?.strategies ?? [],
+      restartAfterSwitch: e.capabilities?.restartAfterSwitch ?? false,
+      accounts: e.error ? [] : rows(e),
+      error: e.error ?? undefined,
     }));
   }
-  return out;
+  return LEGACY.map((p) => {
+    const section = data[p.id] as Section | null | undefined;
+    return { ...p, accounts: section ? rows(section) : [] };
+  });
 }
 
 export function errorMessage(stdout: string, stderr: string): string | undefined {
@@ -73,14 +104,30 @@ export function run(bin: string, args: string[]): Promise<string> {
   });
 }
 
-export function listAccounts(bin: string): Promise<Accounts> {
+export function listAccounts(bin: string): Promise<ProviderData[]> {
   return run(bin, ["list", "--json"]).then(parseList);
 }
 
+export function canBest(provider: Pick<ProviderData, "strategies">): boolean {
+  return provider.strategies.includes("best");
+}
+
+// Claude keeps the bare form so the extension still works with older ccswap.
 export function switchArgs(provider: Provider, number?: number): string[] {
   const target = number === undefined ? ["--strategy", "best"] : [String(number)];
-  const base = provider === "codex" ? ["codex", "switch"] : ["switch"];
+  const base = provider === "claude" ? ["switch"] : [provider, "switch"];
   return [...base, ...target, "--json"];
+}
+
+// Windows from older ccswap come from the fixed usage keys.
+export function windowsOf(account: Account): AccountWindow[] {
+  if (account.windows) return account.windows;
+  const u = account.usage;
+  const old: [string, UsageWindow | undefined][] = [
+    ["5h", u?.fiveHour],
+    ["7d", u?.sevenDay ?? u?.weekly],
+  ];
+  return old.flatMap(([label, w]) => (w ? [{ label, ...w }] : []));
 }
 
 export function label(account: Account): string {
