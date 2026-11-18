@@ -149,6 +149,17 @@
   }
 
   // outer = weekly, inner = 5h; each arc is its own element with a wider invisible hit area
+  // The centre must stay inside the inner ring's hole (inner radius minus half its stroke);
+  // shrink the text until it fits, since the real width depends on the system font.
+  const HOLE = 2 * (17.5 - 2) - 6; // px of usable width/height, with a little air
+  function fitCentre(c) {
+    if (!c.isConnected) return requestAnimationFrame(() => c.isConnected && fitCentre(c));
+    c.style.transform = "";
+    const r = document.createRange(); r.selectNodeContents(c);
+    const b = r.getBoundingClientRect();
+    const k = Math.min(1, HOLE / Math.max(b.width, 1), HOLE / Math.max(b.height, 1));
+    if (k < 1) c.style.transform = `scale(${k.toFixed(3)})`;
+  }
   function ring(outer, inner) {
     const S = 54, C = S / 2;
     const box = h("div", { class: "ring" });
@@ -158,7 +169,10 @@
     const setCentre = (x, text) => {
       centre.className = "c " + (x ? level(x.w.pct) : "");
       centre.style.color = x ? "var(--level)" : "";
-      centre.replaceChildren(x ? `${round(x.w.pct)}%` : "–", h("small", { text: x ? text : "" }));
+      centre.replaceChildren(
+        h("span", { class: "n" }, x ? String(round(x.w.pct)) : "–", x ? h("span", { class: "u", text: "%" }) : null),
+        h("small", { text: x ? text : "" }));
+      fitCentre(centre);
     };
     const rest = () => { box.className = "ring"; setCentre(best, best ? (best.kind === "5h" ? "5h" : "wk") : ""); tip().style.display = "none"; };
     const arcs = [];
