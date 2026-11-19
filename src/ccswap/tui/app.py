@@ -25,6 +25,7 @@ from ccswap.models import AccountSnapshot, AccountsSnapshot, org_tag_shown
 from ccswap.settings import (
     load_settings,
     load_ui_settings,
+    parse_model_names,
     parse_model_thresholds,
     set_setting,
     unset_setting,
@@ -468,12 +469,21 @@ class CswapApp(App):
     def do_switch_best(self, provider: str) -> None:
         if "best" not in capabilities(provider).strategies:
             return
+        kwargs: dict = {}
+        if provider == "claude":
+            # like `ccswap switch --strategy`: autoswitch.model steers the pick
+            models = parse_model_names(
+                load_settings(self.switcher_for("claude").backup_dir).model
+            )
+            if models:
+                kwargs.update(models=models, model_source="autoswitch.model")
         self._start_action(
             self.gettext("Switch (best)"),
             partial(
                 self.switcher_for(provider).switch,
                 strategy="best",
                 json_output=True,
+                **kwargs,
             ),
         )
 

@@ -167,8 +167,15 @@ class FakeSwitcher:
             "reason": "requested",
         }
 
-    def switch(self, strategy: str | None = None, json_output: bool = False) -> dict:
+    def switch(
+        self,
+        strategy: str | None = None,
+        json_output: bool = False,
+        models: tuple[str, ...] = (),
+        model_source: str | None = None,
+    ) -> dict:
         self.calls.append(("switch", strategy))
+        self.switch_kwargs = {"models": models, "model_source": model_source}
         return {"switched": False, "from": None, "to": None, "reason": "no-better-target"}
 
     def remove_account(self, identifier: str, assume_yes: bool = False) -> None:
@@ -987,6 +994,28 @@ class TestRunAction:
 # ---------------------------------------------------------------------------
 # Pilot tests (async)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestSwitchBestModel:
+    @pytest.mark.parametrize("model", ["", "sonnet"])
+    async def test_b_passes_autoswitch_model_only_when_set(self, tmp_path, model):
+        if model:
+            (tmp_path / "settings.json").write_text(
+                json.dumps({"autoswitch": {"model": model}})
+            )
+        fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        app = make_app(fake)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            app.do_switch_best("claude")
+            await settle(pilot)
+            assert ("switch", "best") in fake.calls
+            assert fake.switch_kwargs == (
+                {"models": ("sonnet",), "model_source": "autoswitch.model"}
+                if model
+                else {"models": (), "model_source": None}
+            )
 
 
 @pytest.mark.asyncio
