@@ -15,6 +15,8 @@ import os
 import sys
 from pathlib import Path
 
+from ccswap.menubar_controller import STYLE_LATER
+
 # Messages the page may post; anything else is dropped.
 BRIDGE_ACTIONS = frozenset({
     "ready", "refresh", "switch", "rotate", "toggleAuto", "restartEngine",
@@ -504,9 +506,9 @@ def _make_shell_class():
                 NSApplication.sharedApplication().terminate_(None)
                 return
             if action == "setStyle" and reply["ok"]:
-                self.controller.stop(wait=10)  # let a switch in progress finish before the exec
-                self.controller.join_workers()
-                os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
+                if self.controller.quiesce():  # nothing mid-way through a credential write
+                    os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
+                reply = {**reply, "ok": False, "error": STYLE_LATER}
             if self.web is not None:
                 self.web.evaluateJavaScript_completionHandler_(
                     f"ccswap.reply&&ccswap.reply({json.dumps(reply)})", None

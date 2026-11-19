@@ -245,10 +245,13 @@ def _activate(controller, row) -> bool:
     if row.action == "add_token" and not row.args:
         _ask_token(controller)
     elif getattr(controller, row.action)(*row.args) and row.args[:1] == ("style",):
-        # The style is saved; start again in it, as the popover's setStyle does.
-        controller.stop(wait=10)
-        controller.join_workers()
-        os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
+        # The style is saved; start again in it, as the popover's setStyle
+        # does, once nothing is mid-way through a credential write.
+        if controller.quiesce():
+            os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
+        from ccswap.menubar_controller import APP, STYLE_LATER
+
+        controller.alert(APP, STYLE_LATER)
     return True
 
 

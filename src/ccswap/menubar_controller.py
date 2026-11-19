@@ -74,6 +74,8 @@ Notify = Callable[[str, str, str], None]  # title, subtitle, message
 Alert = Callable[[str, str], None]  # title, message
 
 APP = "ccswap"
+STYLE_LATER = ("A refresh or switch is still running, so the menu bar didn't restart. "
+               "The new style applies the next time it starts.")
 STYLE_CHOICES = ("popover", "classic")
 REFRESH_MIN_S, REFRESH_MAX_S = 15, 3600  # same bounds as settings menubar.refreshInterval
 # Settings flag that turns a provider's hosted engine on (names kept for back-compat).
@@ -246,7 +248,7 @@ class MenuBarController:
             if self._auto_enabled(pid):
                 self._start_engine(pid)
 
-    def stop(self, wait: float = 0) -> None:
+    def stop(self, wait: float = 0) -> bool:
         """Stop every engine (quit, or before a style re-exec).
 
         ``wait`` seconds bounds how long to join the engine threads; a re-exec
@@ -258,17 +260,24 @@ class MenuBarController:
         deadline = time.monotonic() + wait
         for thread in threads:
             thread.join(max(0.0, deadline - time.monotonic()))
+        return not any(t.is_alive() for t in threads)
 
     def _track(self, thread) -> None:
         if isinstance(thread, threading.Thread):
             self._workers = [t for t in self._workers if t.is_alive()] + [thread]
 
-    def join_workers(self, wait: float = 60) -> None:
-        """Before a re-exec: let refresh and integration workers finish. One
-        may be between spending a refresh token and saving its replacement."""
+    def quiesce(self, wait: float = 60) -> bool:
+        """Before a re-exec: True once no thread can still be writing
+        credentials. Refresh and integration workers go first (one may be
+        between spending a refresh token and saving its replacement); only
+        then are the engines stopped and joined. False means something is
+        still running and the process must not be replaced."""
         deadline = time.monotonic() + wait
         for thread in self._workers:
             thread.join(max(0.0, deadline - time.monotonic()))
+        if any(t.is_alive() for t in self._workers):
+            return False  # engines untouched: the menu bar carries on as it was
+        return self.stop(wait=max(0.0, deadline - time.monotonic()))
 
     # ---- refresh plumbing -----------------------------------------------------
     def refresh(self, provider_id: str | None = None, full: bool = False) -> None:

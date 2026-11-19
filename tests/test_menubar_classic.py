@@ -140,11 +140,12 @@ def test_paint_glyph_falls_back_when_the_image_cannot_be_built():
 def test_use_popover_saves_then_restarts_in_the_popover(monkeypatch):
     monkeypatch.setitem(sys.modules, "rumps", SimpleNamespace(alert=lambda **kw: 1))
     row = mc.MenuRow("Use popover", action="set_display", args=("style", "popover"))
-    execs, stops = [], []
+    execs, alerts, quiet = [], [], [False]
     monkeypatch.setattr(mc.os, "execv", lambda path, argv: execs.append(argv))
-    ctl = SimpleNamespace(set_display=lambda *a: False, stop=lambda wait: stops.append(wait),
-                          join_workers=lambda: stops.append("workers"))
+    ctl = SimpleNamespace(set_display=lambda *a: False, quiesce=lambda: quiet[0],
+                          alert=lambda *a: alerts.append(a))
     assert mc._activate(ctl, row) and execs == []  # the save failed: stay
     ctl.set_display = lambda *a: True
-    assert mc._activate(ctl, row)
-    assert stops == [10, "workers"] and execs == [[sys.executable, "-m", "ccswap", "menubar"]]
+    assert mc._activate(ctl, row) and execs == [] and len(alerts) == 1  # still busy: no restart
+    quiet[0] = True
+    assert mc._activate(ctl, row) and execs == [[sys.executable, "-m", "ccswap", "menubar"]]

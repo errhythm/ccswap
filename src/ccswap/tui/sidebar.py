@@ -82,18 +82,6 @@ def _eta(raw: dict, fetched_at: float | None) -> float | None:
     return at
 
 
-def _watched(provider: str, label: str, models: tuple[str, ...], windows: tuple[str, ...]) -> bool:
-    """Whether the auto-switch engine looks at this window: Claude's
-    ``autoswitch.windows`` picks 5h/7d, and a per-model window counts only
-    when ``autoswitch.model`` names it (or says "all")."""
-    if label in ("5h", "7d"):
-        return provider != "claude" or label in windows
-    if label == "wk":
-        return True
-    wanted = {m.lower() for m in models}
-    return provider == "claude" and ("all" in wanted or label.lower() in wanted)
-
-
 def up_next(
     provider: str,
     switcher,
@@ -113,11 +101,22 @@ def up_next(
     active = next((a for a in snap.accounts if a.is_active), None)
     if active is None:
         return UpNext(provider, note="no active managed login")
+    from ccswap.oauth import relevant_windows
+
+    # The windows the engine decides on (autoswitch.windows and .model for
+    # Claude; Codex's engine passes neither), so a display-only row such as
+    # an unwatched Fable limit is never named as the trigger.
+    watched = {
+        label.lower()
+        for label, _pct, _reset in relevant_windows(
+            active.usage.last_good, *((models, windows) if provider == "claude" else ())
+        )
+    }
     tightest = None  # (pct - gate, window, gate)
     for window in account_windows(active.usage.last_good):
         if window.pct is None or window.label == "$$":
             continue
-        if not _watched(provider, window.label, models, windows):
+        if ("weekly" if window.label == "wk" else window.label.lower()) not in watched:
             continue
         gate = gate_for("Weekly" if window.label == "wk" else window.label)
         gate = DEFAULT_GATE_PCT if gate is None else gate
