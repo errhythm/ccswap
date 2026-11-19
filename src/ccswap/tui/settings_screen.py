@@ -223,6 +223,7 @@ class SettingsScreen(Screen):
         self._section = 0  # the section whose rows are shown
         self._pane = "rows"  # or "sections": where ↑/↓ and ←/→ act
         self._editing: str | None = None  # the row whose value ←/→ step
+        self._session_view = "combined"
         self._before: tuple | None = None  # (value, key was in the file) to restore
         self._changed = False
 
@@ -280,9 +281,13 @@ class SettingsScreen(Screen):
             "setting:view": (view_labels[app._saved_view], None),
             "setting:mask": (tr("on") if app.mask_accounts else tr("off"), app.mask_accounts),
             "setting:threshold": (f"{shared:g}%", None),
-            "setting:threshold5h": (_gate_label(app._threshold_5h, shared, tr), None),
-            "setting:threshold7d": (_gate_label(app._threshold_7d, shared, tr), None),
-            "setting:fable": (_gate_label(_fable_pct(app._model_thresholds), shared, tr), None),
+            # "inherit" shows what the engine falls back to (weeklyThreshold too).
+            "setting:threshold5h": (_gate_label(app._threshold_5h, app.inherited_gate("5h"), tr), None),
+            "setting:threshold7d": (_gate_label(app._threshold_7d, app.inherited_gate("7d"), tr), None),
+            "setting:fable": (
+                _gate_label(_fable_pct(app._model_thresholds), app.inherited_gate("Fable"), tr),
+                None,
+            ),
             "setting:strategy": (app._strategy_name, None),
             **{
                 f"claude:{key}": (
@@ -298,9 +303,10 @@ class SettingsScreen(Screen):
         app = self.app
         shared = app.threshold_pct if app.threshold_pct is not None else DEFAULT_THRESHOLD_PCT
 
-        def optional(key: str, value: float | str | None) -> str:
+        def optional(key: str, value: float | str | None, inherits: float | None = None) -> str:
             if value is None:
-                return f"ccswap config unset {key}"
+                note = f"   # inherits {inherits:g}%" if inherits is not None else ""
+                return f"ccswap config unset {key}{note}"
             return f"ccswap config set {key} {value:g}" if isinstance(value, float) else (
                 f"ccswap config set {key} {value}"
             )
@@ -315,9 +321,17 @@ class SettingsScreen(Screen):
             "setting:view": f"ccswap config set ui.view {app._saved_view}",
             "setting:mask": f"ccswap config set ui.mask {'on' if app.mask_accounts else 'off'}",
             "setting:threshold": f"ccswap config set autoswitch.threshold {shared:g}",
-            "setting:threshold5h": optional("autoswitch.threshold5h", app._threshold_5h),
-            "setting:threshold7d": optional("autoswitch.threshold7d", app._threshold_7d),
-            "setting:fable": optional("autoswitch.modelThresholds", app._model_thresholds),
+            "setting:threshold5h": optional(
+                "autoswitch.threshold5h", app._threshold_5h, app.inherited_gate("5h")
+            ),
+            "setting:threshold7d": optional(
+                "autoswitch.threshold7d", app._threshold_7d, app.inherited_gate("7d")
+            ),
+            "setting:fable": optional(
+                "autoswitch.modelThresholds",
+                app._model_thresholds,
+                app.inherited_gate("Fable") if _fable_pct(app._model_thresholds) is None else None,
+            ),
             "setting:strategy": f"ccswap config set autoswitch.strategy {app._strategy_name}",
         }.get(action_id)
 
@@ -339,6 +353,9 @@ class SettingsScreen(Screen):
         item = event.item
         if isinstance(item, MenuItem) and (section := section_of(item.action_id)) >= 0:
             self._section = section
+        if item is not None and self._pane == "sections":  # a click on a row
+            self._pane = "rows"
+            self._sync_keys()
         self._show_section()
 
     def _show_section(self) -> None:
@@ -440,8 +457,11 @@ class SettingsScreen(Screen):
             text.append("\n" + help_text, style=palette.muted)
         command = self.config_command(item.action_id)
         if command:
+            command, _sep, note = command.partition("   # ")
             text.append("\n\n$ ", style=palette.dim)
             text.append(command, style=palette.foreground)
+            if note:
+                text.append("   # " + note, style=palette.dim)
         help_widget.update(text)
 
     def on_click(self, event) -> None:
@@ -632,6 +652,7 @@ class SettingsScreen(Screen):
         else:
             self._editing = item.action_id
             self._before = (self._saved_value(item.action_id), self._in_file(item.action_id))
+            self._session_view = self.app._view  # the tab, which a view edit moves
             self._changed = False
             self._set_row_editing(True)
 
@@ -659,6 +680,7 @@ class SettingsScreen(Screen):
             app.apply_theme(value)
         elif key == "view":
             app.apply_view(value)
+            app.apply_view(self._session_view, persist=False)  # and the tab it had
         elif key == "threshold":
             app.apply_threshold(value)
         elif key == "threshold5h":
@@ -740,9 +762,9 @@ class SettingsScreen(Screen):
         elif key == "mask":
             app.apply_mask(not app.mask_accounts)
         elif key == "strategy":
-            # An AutoScreen is never mounted under Settings (it is reached
-            # from the dashboard and popped first), so no live engine needs
-            # the new value; the next AutoScreen re-reads the file.
+            # app.open_settings refuses while an AutoScreen is open, so no
+            # live engine needs the new value; the next AutoScreen re-reads
+            # the file.
             order = ("best", "consume-first")
             app.apply_strategy(order[(order.index(app._strategy_name) + delta) % len(order)])
         self._relabel()

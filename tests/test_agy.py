@@ -593,6 +593,8 @@ async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider
         assert Path(screenshot).is_file()
         await pilot.press("enter")
         await settle(pilot)
+        await pilot.press("y")  # Antigravity restarts: Switch asks first
+        await settle(pilot)
         assert read_native()["id_token_email"] == "one@example.com"
         app.do_switch_best("agy")
         app.do_toggle_disabled("agy", "1")

@@ -260,16 +260,27 @@ class Sidebar(Vertical):
             self._compute_once(providers, snapshots)
         except Exception:  # one bad record must not freeze the sidebar for the session
             self._computing = False
+            if self._rerun:  # a request that came in meanwhile still runs
+                try:
+                    self.app.call_from_thread(self.update_panels)
+                except RuntimeError:  # the app closed meanwhile
+                    pass
 
     def _compute_once(self, providers: tuple[str, ...], snapshots: dict) -> None:
-        from ccswap.settings import load_settings, parse_model_names
+        from ccswap.settings import gate_thresholds, load_settings, parse_model_names
 
         app: "CswapApp" = self.app  # type: ignore[assignment]
         root = app.switcher_for("claude").backup_dir
         try:
-            models = parse_model_names(load_settings(root).model)
+            settings = load_settings(root)
+            models = parse_model_names(settings.model)
+            gates = gate_thresholds(settings)  # what the engines gate on
+
+            def gate_for(label: str) -> float:
+                key = label.lower()
+                return gates.for_label("7d" if key in ("weekly", "wk") else key)
         except Exception:
-            models = ()
+            models, gate_for = (), app.bar_threshold
         rows = [
             up_next(
                 provider,
@@ -277,7 +288,7 @@ class Sidebar(Vertical):
                 snapshots.get(provider),
                 strategy=app._strategy_name,
                 models=models if provider == "claude" else (),
-                gate_for=app.bar_threshold,
+                gate_for=gate_for,
             )
             for provider in providers
         ]

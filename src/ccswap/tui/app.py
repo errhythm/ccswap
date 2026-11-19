@@ -24,10 +24,11 @@ from ccswap.agy import AgyAccountSwitcher
 from ccswap.i18n import localize_bindings, mark, translator
 from ccswap.models import AccountSnapshot, AccountsSnapshot, org_tag_shown
 from ccswap.settings import (
+    AutoSwitchSettings,
+    gate_thresholds,
     load_settings,
     load_ui_settings,
     parse_model_names,
-    parse_model_thresholds,
     set_setting,
     unset_setting,
     with_model_threshold,
@@ -145,12 +146,15 @@ class CswapApp(App):
         # bars everywhere. Missing/invalid settings fall back to the default.
         try:
             settings = load_settings(switcher.backup_dir)
+            # The rest of autoswitch (weeklyThreshold, model) that gates read.
+            self._auto_settings = settings
             self.threshold_pct: float | None = settings.threshold
             self._strategy_name = settings.strategy
             self._threshold_5h: float | None = settings.threshold_5h
             self._threshold_7d: float | None = settings.threshold_7d
             self._model_thresholds: str | None = settings.model_thresholds
         except Exception:
+            self._auto_settings = AutoSwitchSettings()
             self.threshold_pct = None
             self._strategy_name = "best"
             self._threshold_5h = None
@@ -755,17 +759,47 @@ class CswapApp(App):
                 severity="warning",
             )
 
+    def _gate_settings(self) -> AutoSwitchSettings:
+        """The saved autoswitch settings with this session's edits applied."""
+        return replace(
+            self._auto_settings,
+            threshold=self.threshold_pct if self.threshold_pct is not None else self._auto_settings.threshold,
+            threshold_5h=self._threshold_5h,
+            threshold_7d=self._threshold_7d,
+            model_thresholds=self._model_thresholds,
+        )
+
     def bar_threshold(self, label: str) -> float | None:
-        """Tick for one usage row: an explicit gate, else the shared threshold."""
+        """The gate the engines use for one usage row (settings.gate_thresholds:
+        a window's own gate, then weeklyThreshold for weekly ones, then the
+        shared threshold). Codex's weekly window ("Weekly"/"wk") is the 7d gate."""
+        if self.threshold_pct is None:
+            return None
         key = label.lower()
-        if key == "5h" and self._threshold_5h is not None:
-            return self._threshold_5h
-        if key == "7d" and self._threshold_7d is not None:
-            return self._threshold_7d
-        for name, pct in parse_model_thresholds(self._model_thresholds):
-            if name.lower() == key:
-                return pct
-        return self.threshold_pct
+        key = "7d" if key in ("weekly", "wk") else key
+        return gate_thresholds(self._gate_settings()).for_label(key)
+
+    def inherited_gate(self, label: str) -> float:
+        """What a 5h / 7d / model gate falls back to while it is unset."""
+        settings = self._gate_settings()
+        if label == "5h":
+            settings = replace(settings, threshold_5h=None)
+        elif label == "7d":
+            settings = replace(settings, threshold_7d=None)
+        else:
+            settings = replace(
+                settings, model_thresholds=with_model_threshold(settings.model_thresholds, label, None)
+            )
+        return gate_thresholds(settings).for_label(label)
+
+    def open_settings(self) -> None:
+        """Settings, from the menu, `,` or the palette. Never over an auto view:
+        its engine would not see the changes, and leaving it restores its own."""
+        from ccswap.tui.settings_screen import SettingsScreen
+
+        if any(isinstance(s, (AutoScreen, SettingsScreen)) for s in self.screen_stack):
+            return
+        self.push_screen(SettingsScreen())
 
     def apply_threshold(self, value: float) -> None:
         """Update bar ticks immediately and persist the shared auto setting."""
@@ -855,6 +889,12 @@ class CswapApp(App):
         """
         self.mask_accounts = bool(on)
         self._sync_mask_binding()
+        # Every path (m, the Settings row, the palette): open menus that list
+        # accounts relabel too.
+        for screen in self.screen_stack:
+            refresh = getattr(screen, "refresh_masked_labels", None)
+            if refresh is not None:
+                refresh()
         try:
             set_setting(
                 self.switcher_for("claude").backup_dir,
@@ -894,7 +934,3 @@ class CswapApp(App):
             else self.gettext("Account info visible"),
             timeout=2,
         )
-        for screen in self.screen_stack:
-            refresh = getattr(screen, "refresh_masked_labels", None)
-            if refresh is not None:
-                refresh()

@@ -252,7 +252,7 @@ async def test_switch_screen_refilters_and_keeps_a_valid_cursor(tmp_path):
             ("codex", "1"), ("codex", "2"), ("codex", "3"),
         ]
         assert isinstance(listview.highlighted_child, AccountItem)
-        await pilot.press("enter")
+        await pilot.press("enter", "y")  # Codex asks first
         await settle(pilot)
         assert codex.calls and codex.calls[-1][0] == "switch_to"
     assert _saved(tmp_path) is None
@@ -357,7 +357,7 @@ async def test_settings_rows_show_values_hints_and_config_line(tmp_path):
         await pilot.press("down")  # weekly gate inherits: the unset line
         await settle(pilot)
         assert str(screen.query_one("#setting-help").render()).endswith(
-            "$ ccswap config unset autoswitch.threshold7d"
+            "$ ccswap config unset autoswitch.threshold7d   # inherits 90%"
         )
         await pilot.press(*["up"] * 3)  # Mask account info: an on/off row
         await settle(pilot)
@@ -954,3 +954,209 @@ async def test_question_mark_on_an_account_row_explains_switching(tmp_path):
         await settle(pilot)
         assert isinstance(app.screen, OutputModal)
         assert app.screen._output == option_help("switch")
+
+
+# ---------------------------------------------------------------------------
+# full review (10 items)
+# ---------------------------------------------------------------------------
+
+
+def _palette_labels(app):
+    from ccswap.tui.commands import static_commands
+
+    return [c.label for c in static_commands(app)]
+
+
+@pytest.mark.asyncio
+async def test_settings_never_opens_over_an_auto_view(tmp_path, fake_engine):  # 1
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot)
+        assert "Settings" in _palette_labels(app)
+        app.open_auto("claude")
+        await settle(pilot)
+        assert "Settings" not in _palette_labels(app)
+        app.open_settings()
+        await settle(pilot)
+        assert type(app.screen).__name__ == "AutoScreen"
+        for engine in list(_FakeEngine.instances):
+            engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_settings_is_never_stacked_twice(tmp_path):  # 6
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot)
+        app.open_settings()
+        await settle(pilot)
+        assert "Settings" not in _palette_labels(app)
+        app.open_settings()
+        await settle(pilot)
+        assert [type(s).__name__ for s in app.screen_stack].count("SettingsScreen") == 1
+
+
+def _weekly(tmp_path, **autoswitch):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"autoswitch": {"weeklyThreshold": 80, **autoswitch}})
+    )
+
+
+@pytest.mark.asyncio
+async def test_weekly_ticks_and_up_next_use_weekly_threshold(tmp_path):  # 2
+    _weekly(tmp_path)
+    claude = FakeSwitcher([_acc(1, 5, 10, active=True)], tmp_path)
+    codex = FakeSwitcher(
+        [_acc(1, 5, 85, active=True, weekly_key="weekly"), _acc(2, 5, 10, weekly_key="weekly")], tmp_path
+    )
+    app = make_app(claude, codex)
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        assert app.bar_threshold("Weekly") == 80.0  # Codex wk → the 7d gate → weeklyThreshold
+        assert app.bar_threshold("7d") == 80.0 and app.bar_threshold("5h") == 90.0
+        codex_line = next(
+            line for line in str(app.screen.query_one("#up-next").render()).splitlines()
+            if line.startswith("Codex")
+        )
+        assert codex_line.split(maxsplit=1)[1] == "#1 → #2 at 80% of wk"
+
+
+@pytest.mark.asyncio
+async def test_inherit_labels_show_weekly_threshold(tmp_path):  # 5
+    from tests.test_tui import setting_values
+
+    _weekly(tmp_path, model="Fable")
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        screen = await _open_settings(pilot)
+        values = setting_values(screen)
+        assert values["setting:threshold5h"] == "inherit (90%)"
+        assert values["setting:threshold7d"] == "inherit (80%)"
+        assert values["setting:fable"] == "inherit (80%)"
+        await pilot.press("down", "down", "down", "down", "down")  # Weekly gate
+        await settle(pilot)
+        assert str(screen.query_one("#setting-help").render()).endswith(
+            "ccswap config unset autoswitch.threshold7d   # inherits 80%"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["settings-row", "palette"])
+async def test_masking_from_any_path_relabels_an_open_account_menu(tmp_path, path):  # 3
+    from tests.test_tui import menu_select
+
+    app = make_app(FakeSwitcher([make_account(1, active=True, email="alice@acme.com")], tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot)
+        await menu_select(pilot, "remove-menu")
+        await settle(pilot)
+        dashboard = app.screen
+        if path == "settings-row":
+            app.open_settings()
+            await settle(pilot)
+            await pilot.press("down", "down", "enter", "escape")  # Mask: Enter flips it
+        else:
+            app.apply_mask(True)  # what the palette's command calls
+        await settle(pilot)
+        labels = [label for label, _id in dashboard._menu_stack[-1][1]]
+        assert any("a•••e@a•••.com" in label for label in labels)
+        assert not any("alice@acme.com" in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_clicking_a_row_from_the_section_pane_returns_to_rows(tmp_path):  # 4
+    from ccswap.tui.settings_screen import SettingRow
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        screen = await _open_settings(pilot)
+        await pilot.press("left")
+        await settle(pilot)
+        assert screen._pane == "sections"
+        await pilot.click(next(r for r in screen.query(SettingRow) if r.action_id == "setting:view"))
+        await settle(pilot)
+        assert screen._pane == "rows"
+        enter = screen._bindings.key_to_bindings["enter"][0]
+        assert enter.description in ("Edit", "Done")  # the rows' keys, not the pane's "Open"
+
+
+@pytest.mark.asyncio
+async def test_esc_on_a_view_edit_restores_the_session_tab(tmp_path):  # 7
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("right", "right")  # tab: Codex for this session
+        await settle(pilot)
+        screen = await _open_settings(pilot)
+        await pilot.press("down", "enter", "right")  # saved view: Combined → Claude Code
+        await settle(pilot)
+        assert app._saved_view == "claude"
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app._saved_view == "combined" and app._view == "codex"
+        assert screen._editing is None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_sidebar_update_still_runs_the_queued_one(tmp_path, monkeypatch):  # 8
+    from ccswap.tui.sidebar import Sidebar
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        sidebar = app.screen.query_one(Sidebar)
+        calls = []
+        original = Sidebar._compute_once
+
+        def flaky(self, providers, snapshots):
+            calls.append(1)
+            if len(calls) == 1:
+                self._rerun = True  # a request arrived while this one ran
+                raise RuntimeError("bad record")
+            return original(self, providers, snapshots)
+
+        monkeypatch.setattr(Sidebar, "_compute_once", flaky)
+        sidebar.update_panels()
+        for _ in range(5):
+            await settle(pilot)
+        assert len(calls) == 2  # the failed run handed over to the queued one
+        assert not sidebar._computing
+
+
+@pytest.mark.asyncio
+async def test_watch_asks_before_switching_codex(tmp_path):  # 9 (Switch: test_switch_routes_…)
+    from ccswap.tui.modals import ConfirmModal
+    from ccswap.tui.widgets import AccountItem
+
+    codex = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+    app = make_app(FakeSwitcher([], tmp_path), codex, start="watch")
+    async with app.run_test(size=(100, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("s")
+        listview = app.screen.query_one("#accounts")
+        listview.index = next(
+            i for i, item in enumerate(listview.children)
+            if isinstance(item, AccountItem) and item.number == "2"
+        )
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, ConfirmModal) and codex.calls == []
+        await pilot.press("y")
+        await settle(pilot)
+        assert codex.calls == [("switch_to", "2")]
+
+
+@pytest.mark.asyncio
+async def test_mask_with_a_submenu_open_keeps_an_account_cursor(tmp_path):  # 10
+    from tests.test_tui import menu_select
+
+    app, *_ = _three_providers(tmp_path)
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        await menu_select(pilot, "remove-menu")
+        await settle(pilot)
+        panel = await _cursor_on(pilot, ("claude", "2"))
+        await pilot.press("m")
+        await settle(pilot)
+        assert panel.cursor == ("claude", "2")
+        assert app.screen.query_one("#menu").index is None

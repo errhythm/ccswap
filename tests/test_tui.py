@@ -1429,6 +1429,9 @@ class TestDashboard:
             )
             await pilot.press("enter")
             await settle(pilot)
+            assert codex.calls == []  # Codex restarts: it asks first
+            await pilot.press("y")
+            await settle(pilot)
             assert codex.calls == [("switch_to", "2")]
             assert claude.calls == []
 

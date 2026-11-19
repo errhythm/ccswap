@@ -145,7 +145,8 @@ def static_commands(app: "CswapApp") -> list[Command]:
         add(tr("Mask account info: {state}").format(state=tr("on") if on else tr("off")),
             tr("Same as ccswap config set ui.mask {state}").format(state="on" if on else "off"),
             partial(app.apply_mask, on), ok=True)
-    add(tr("Settings"), tr("Same as ccswap config"), lambda: app.push_screen(SettingsScreen()))
+    if not any(isinstance(screen, (AutoScreen, SettingsScreen)) for screen in app.screen_stack):
+        add(tr("Settings"), tr("Same as ccswap config"), app.open_settings)
     add(tr("Quit"), tr("Stops any engine this app started"), app.exit, ok=True)
     return _visible(app, out)
 

@@ -40,7 +40,6 @@ from ccswap.tui.data import (
 )
 from ccswap.tui.option_help import option_help
 from ccswap.tui.overview import HeaderBar, ProviderPanel, account_count_note
-from ccswap.tui.settings_screen import SettingsScreen
 from ccswap.tui.sidebar import Sidebar
 from ccswap.tui.modals import OutputModal
 from ccswap.tui.widgets import (
@@ -74,6 +73,14 @@ _TAB_KEYS = [
     Binding("left", "view_tab(-1)", mark("View"), key_display="←→", priority=True),
     Binding("right", "view_tab(1)", show=False, priority=True),
 ]
+
+
+def switch_or_ask(app: "CswapApp", provider: str, number: str) -> None:
+    """Switch to an account; Codex and Antigravity restart, so they ask first
+    (the palette's rule, shared by the dashboard, Switch and Watch)."""
+    from ccswap.tui.commands import _switch_or_ask  # commands imports this module
+
+    _switch_or_ask(app, provider, partial(app.do_switch, provider, number))()
 
 
 class ViewTabs:
@@ -371,15 +378,13 @@ class DashboardScreen(ViewTabs, Screen):
     def _switch_to(self, provider: str, number: str) -> None:
         """What Switch does with this row: the active one stays put, Codex and
         Antigravity ask first (they restart), a disabled one still switches."""
-        from ccswap.tui.commands import _switch_or_ask
-
         if ("account", provider, number) not in self._stops():
             return  # a row the view no longer shows is never a target
         snap = self.app.snapshots.get(provider)
         acc = next((a for a in (snap.accounts if snap else ()) if a.number == number), None)
         if acc is None or acc.is_active or not capabilities(provider).switch:
             return
-        _switch_or_ask(self.app, provider, partial(self.app.do_switch, provider, number))()
+        switch_or_ask(self.app, provider, number)
 
     def action_option_help(self) -> None:
         if self._cursor[0] == "account":  # Enter on this row switches to it
@@ -454,8 +459,7 @@ class DashboardScreen(ViewTabs, Screen):
             self.app.push_screen(SwitchScreen())
 
     def action_open_settings(self) -> None:
-        if not isinstance(self.app.screen, SettingsScreen):
-            self.app.push_screen(SettingsScreen())
+        self.app.open_settings()
 
     async def action_menu_back(self) -> None:
         await self._pop_menu()
@@ -489,10 +493,13 @@ class DashboardScreen(ViewTabs, Screen):
         if builder is None:
             return
         menu = self.query_one("#menu", ListView)
-        index = menu.index
+        index, cursor = menu.index, self._cursor
         self._menu_stack[-1] = (title, builder())
         await self._render_menu()
-        if index is not None and menu.children:
+        if cursor[0] == "account":  # relabelling the menu leaves an account cursor be
+            self._cursor = cursor
+            self._place_cursor()
+        elif index is not None and menu.children:
             menu.index = min(index, len(menu.children) - 1)
 
 
@@ -661,8 +668,10 @@ class SwitchScreen(AccountListScreen):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
         if isinstance(item, AccountItem):
-            self.app.do_switch(item.provider, item.number)
             self.app.pop_screen()
+            # After the pop: a confirm opens over the dashboard and its answer
+            # reaches a live screen (a callback on the popped one never runs).
+            self.app.call_later(switch_or_ask, self.app, item.provider, item.number)
 
     def action_switch_best(self) -> None:
         listview = self.query_one("#accounts", ListView)
@@ -777,7 +786,7 @@ class WatchScreen(AccountListScreen):
             return  # e.g. a stray click while just watching
         item = event.item
         if isinstance(item, AccountItem):
-            self.app.do_switch(item.provider, item.number)
+            switch_or_ask(self.app, item.provider, item.number)
             self._set_selecting(False)  # stay here, keep watching
 
     def action_select_highlighted(self) -> None:
