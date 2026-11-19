@@ -2393,6 +2393,67 @@ class TestAutoScreen:
             assert isinstance(app.screen, AutoScreen)
             assert fake_engine.instances[-1].switcher is codex
 
+    @pytest.mark.parametrize("provider", ["claude", "codex"])
+    async def test_s_toggles_strategy_saves_and_wakes_engine(
+        self, tmp_path, fake_engine, provider
+    ):
+        from ccswap.settings import load_settings
+        from ccswap.tui.autoview import AutoScreen
+
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(7, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            app.open_auto(provider)
+            await pilot.pause()
+            assert isinstance(app.screen, AutoScreen)
+            engine = fake_engine.instances[-1]
+            summary = lambda: app.screen.query_one("#auto-summary").render().plain
+            assert "strategy Best" in summary()
+            await pilot.press("s")
+            await pilot.pause()
+            assert load_settings(tmp_path).strategy == "consume-first"
+            assert engine.settings.strategy == "consume-first"
+            assert engine.wakes == 1
+            assert "strategy Consume first" in summary()
+            log = "\n".join(l.text for l in app.screen.query_one("#event-log").lines)
+            assert "strategy → consume-first (saved)" in log
+            await pilot.press("s")
+            await pilot.pause()
+            assert load_settings(tmp_path).strategy == "best"
+            assert engine.wakes == 2
+
+    async def test_codex_threshold_arrows_do_not_raise(self, tmp_path, monkeypatch):
+        """Regression: the real Codex engine lacked wake/apply_* (t then ←/→)."""
+        from ccswap.codex_autoswitch import CodexAutoSwitchEngine
+        from ccswap.tui.autoview import AutoScreen
+
+        class Idle(CodexAutoSwitchEngine):
+            def run_loop(self):
+                self._stop.wait(30)
+                return 0
+
+        monkeypatch.setattr("ccswap.tui.autoview.CodexAutoSwitchEngine", Idle)
+        claude = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        codex = FakeSwitcher([make_account(7, active=True)], tmp_path)
+        app = make_app(claude, codex)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            app.open_auto("codex")
+            await pilot.pause()
+            assert isinstance(app.screen, AutoScreen)
+            auto = app.screen
+            before = auto._settings.threshold
+            await pilot.press("t", "left", "right", "right")
+            await pilot.pause()
+            assert auto._settings.threshold == before + 1
+            await pilot.press("escape", "s")
+            await pilot.pause()
+            assert auto._settings.strategy == "consume-first"
+            await pilot.press("escape")
+            await pilot.pause()
+
     async def test_go_live_requires_confirmation(self, tmp_path, fake_engine):
         fake = FakeSwitcher(
             [make_account(1, active=True), make_account(2)], tmp_path

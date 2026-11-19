@@ -50,6 +50,9 @@ from ccswap.tui.widgets import AccountsPanel
 if TYPE_CHECKING:
     from ccswap.tui.app import CswapApp
 
+STRATEGIES = ("best", "consume-first")
+_STRATEGY_LABELS = {"best": mark("Best"), "consume-first": mark("Consume first")}
+
 _EVENT_ROLES = {
     "switch": "accent",
     "error": "sev_warn",
@@ -84,6 +87,7 @@ class AutoScreen(Screen):
     BINDINGS = [
         Binding("l", "toggle_live", mark("Go live / dry-run")),
         Binding("t", "adjust_threshold", mark("Threshold")),
+        Binding("s", "toggle_strategy", mark("Strategy")),
         Binding("left", "threshold_step(-1)", mark("-1%")),
         Binding("right", "threshold_step(1)", mark("+1%")),
         Binding("enter", "adjust_done", mark("Done")),
@@ -179,6 +183,8 @@ class AutoScreen(Screen):
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action in ("threshold_step", "adjust_done") and not self._adjusting:
             return False  # hidden and inert until adjust mode is armed
+        if action == "toggle_strategy" and self._adjusting:
+            return False
         return True
 
     def _adjust_categories(self) -> tuple[tuple[str, str], ...]:
@@ -383,6 +389,11 @@ class AutoScreen(Screen):
         if self._settings.threshold != self._configured_threshold:
             text.append(self.app.gettext(" (session)"), style=palette.muted)
         text.append(
+            self.app.gettext(" · strategy {name}").format(
+                name=self.app.gettext(_STRATEGY_LABELS[self._settings.strategy])
+            )
+        )
+        text.append(
             self.app.gettext(" · poll every {interval_seconds:.0f}s").format(
                 interval_seconds=self._settings.interval_seconds
             )
@@ -395,6 +406,32 @@ class AutoScreen(Screen):
                 style=palette.muted,
             )
         self.query_one("#auto-summary", Static).update(text)
+
+    # -- strategy (#587) ------------------------------------------------------
+
+    def action_toggle_strategy(self) -> None:
+        index = STRATEGIES.index(self._settings.strategy)
+        self.set_strategy(STRATEGIES[(index + 1) % len(STRATEGIES)])
+
+    def set_strategy(self, name: str) -> None:
+        """Save ``autoswitch.strategy`` (as ``ccswap config set`` does) and hand
+        the running engine the new settings; both engines read
+        ``settings.strategy`` every tick, so no restart is needed."""
+        if name not in STRATEGIES or name == self._settings.strategy:
+            return
+        self.app.apply_strategy(name)
+        saved = load_settings(self.app.switcher_for(self.provider).backup_dir).strategy
+        self._settings = replace(self._settings, strategy=name)
+        if self._engine is not None:
+            self._engine.apply_gates(self._settings)
+            self._engine.wake()
+        self._update_summary()
+        self._log_note(
+            self.app.gettext("— strategy → {name} ({state}) —").format(
+                name=name,
+                state=self.app.gettext("saved" if saved == name else "not saved"),
+            )
+        )
 
     # -- engine -------------------------------------------------------------
 
