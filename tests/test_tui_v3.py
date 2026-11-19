@@ -252,6 +252,8 @@ async def test_switch_screen_refilters_and_keeps_a_valid_cursor(tmp_path):
             ("codex", "1"), ("codex", "2"), ("codex", "3"),
         ]
         assert isinstance(listview.highlighted_child, AccountItem)
+        if listview.highlighted_child.number == "1":  # the active one does nothing
+            await pilot.press("down")
         await pilot.press("enter", "y")  # Codex asks first
         await settle(pilot)
         assert codex.calls and codex.calls[-1][0] == "switch_to"
@@ -1160,3 +1162,122 @@ async def test_mask_with_a_submenu_open_keeps_an_account_cursor(tmp_path):  # 10
         await settle(pilot)
         assert panel.cursor == ("claude", "2")
         assert app.screen.query_one("#menu").index is None
+
+
+# ---------------------------------------------------------------------------
+# verify review follow-ups
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ticks_and_up_next_read_gates_from_settings_json_now(tmp_path):  # 1
+    codex = FakeSwitcher(
+        [_acc(1, 5, 75, active=True, weekly_key="weekly"), _acc(2, 5, 10, weekly_key="weekly")], tmp_path
+    )
+    app = make_app(FakeSwitcher([_acc(1, 5, 10, active=True)], tmp_path), codex)
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        assert app.bar_threshold("7d") == 90.0
+        # `ccswap config set autoswitch.weeklyThreshold 70` from another shell
+        from ccswap.settings import set_setting
+
+        set_setting(tmp_path, "autoswitch.weeklyThreshold", "70")
+        assert app.bar_threshold("7d") == 70.0 and app.bar_threshold("Weekly") == 70.0
+        app.screen.query_one("#sidebar").update_panels()
+        await settle(pilot)
+        codex_line = next(
+            line for line in str(app.screen.query_one("#up-next").render()).splitlines()
+            if line.startswith("Codex")
+        )
+        assert codex_line.endswith("at 70% of wk")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("screen", ["switch", "watch"])
+async def test_picking_the_active_account_asks_nothing_and_switches_nothing(tmp_path, screen):  # 2
+    from ccswap.tui.modals import ConfirmModal
+    from ccswap.tui.widgets import AccountItem
+
+    codex = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+    app = make_app(FakeSwitcher([], tmp_path), codex)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("s" if screen == "switch" else "w")
+        await settle(pilot)
+        if screen == "watch":
+            await pilot.press("s")  # arm: the cursor starts on the active row
+        listview = app.screen.query_one("#accounts")
+        listview.index = next(
+            i for i, item in enumerate(listview.children)
+            if isinstance(item, AccountItem) and item.number == "1"
+        )
+        await pilot.press("enter")
+        await settle(pilot)
+        assert not isinstance(app.screen, ConfirmModal) and codex.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_late_highlight_after_left_keeps_the_section_pane(tmp_path):  # 3
+    from textual.widgets import ListView
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        screen = await _open_settings(pilot)
+        menu = screen.query_one("#menu", ListView)
+        row = menu.highlighted_child
+        screen.action_left()
+        assert screen._pane == "sections" and menu.index is None
+        screen.on_list_view_highlighted(ListView.Highlighted(menu, row))  # stale, from before ←
+        assert screen._pane == "sections"
+
+
+@pytest.mark.asyncio
+async def test_switch_best_on_a_codex_row_asks_first(tmp_path):  # 4
+    from ccswap.tui.modals import ConfirmModal
+    from ccswap.tui.widgets import AccountItem
+
+    codex = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+    app = make_app(FakeSwitcher([], tmp_path), codex)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("s")
+        await settle(pilot)
+        assert isinstance(app.screen.query_one("#accounts").highlighted_child, AccountItem)
+        await pilot.press("b")
+        await settle(pilot)
+        assert isinstance(app.screen, ConfirmModal) and codex.calls == []
+        await pilot.press("y")
+        await settle(pilot)
+        assert codex.calls == [("switch", "best")]
+
+
+@pytest.mark.asyncio
+async def test_auto_view_never_opens_over_settings(tmp_path, fake_engine):  # 5
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot)
+        assert any(label.startswith("Open auto-switch") for label in _palette_labels(app))
+        app.open_settings()
+        await settle(pilot)
+        assert not any(label.startswith("Open auto-switch") for label in _palette_labels(app))
+        app.open_auto("claude")
+        app.action_open_auto()
+        await settle(pilot)
+        assert type(app.screen).__name__ == "SettingsScreen"
+
+
+def test_an_error_inside_show_leaves_computing_alone(monkeypatch):  # 6
+    from types import SimpleNamespace
+
+    from ccswap.tui import sidebar
+
+    def call_from_thread(fn, *args):
+        raise ValueError("render failed")  # an error raised by _show itself
+
+    panel = sidebar.Sidebar.__new__(sidebar.Sidebar)
+    panel._computing = True
+    monkeypatch.setattr(sidebar.Sidebar, "app", property(lambda self: SimpleNamespace(call_from_thread=call_from_thread)))
+    monkeypatch.setattr(panel, "_compute_once", lambda *_a: ([], [], ""), raising=False)
+    with pytest.raises(ValueError):
+        panel._compute(("claude",), {})
+    assert panel._computing is True  # _show owns it from there

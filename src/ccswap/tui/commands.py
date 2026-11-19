@@ -89,7 +89,9 @@ def static_commands(app: "CswapApp") -> list[Command]:
     add(tr("Refresh usage"), tr("Same as ccswap list"), app.action_refresh_full, lead=True, ok=True)
     add(tr("Watch accounts"), tr("Same as ccswap watch"), app.action_open_watch, lead=True, ok=True)
     for p in providers_with:
-        if capabilities(p).auto_switch:
+        if capabilities(p).auto_switch and not any(
+            isinstance(screen, (AutoScreen, SettingsScreen)) for screen in app.screen_stack
+        ):
             add(
                 tr("Open auto-switch: {provider}").format(provider=PROVIDER_LABELS[p]),
                 tr("Same as {cli} auto --dry-run (l goes live)").format(cli=_CLI.get(p, "ccswap")),

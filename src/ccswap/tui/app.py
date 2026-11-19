@@ -660,7 +660,12 @@ class CswapApp(App):
         self.open_auto(provider)
 
     def open_auto(self, provider: str) -> None:
-        if not capabilities(provider).auto_switch or isinstance(self.screen, AutoScreen):
+        from ccswap.tui.settings_screen import SettingsScreen
+
+        if not capabilities(provider).auto_switch or any(
+            # Never over Settings (or a second auto view): mirrors open_settings.
+            isinstance(s, (AutoScreen, SettingsScreen)) for s in self.screen_stack
+        ):
             return
         self._last_auto_provider = provider
         self.push_screen(AutoScreen(provider))
@@ -760,10 +765,16 @@ class CswapApp(App):
             )
 
     def _gate_settings(self) -> AutoSwitchSettings:
-        """The saved autoswitch settings with this session's edits applied."""
+        """settings.json as the engines read it now (so weeklyThreshold set
+        from the CLI counts), with this session's edits on top. The ticks
+        and the sidebar both read gates from here."""
+        try:
+            saved = load_settings(self.switcher_for("claude").backup_dir)
+        except Exception:
+            saved = self._auto_settings
         return replace(
-            self._auto_settings,
-            threshold=self.threshold_pct if self.threshold_pct is not None else self._auto_settings.threshold,
+            saved,
+            threshold=self.threshold_pct if self.threshold_pct is not None else saved.threshold,
             threshold_5h=self._threshold_5h,
             threshold_7d=self._threshold_7d,
             model_thresholds=self._model_thresholds,

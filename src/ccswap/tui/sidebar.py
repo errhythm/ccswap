@@ -257,7 +257,7 @@ class Sidebar(Vertical):
 
     def _compute(self, providers: tuple[str, ...], snapshots: dict) -> None:
         try:
-            self._compute_once(providers, snapshots)
+            result = self._compute_once(providers, snapshots)
         except Exception:  # one bad record must not freeze the sidebar for the session
             self._computing = False
             if self._rerun:  # a request that came in meanwhile still runs
@@ -265,22 +265,22 @@ class Sidebar(Vertical):
                     self.app.call_from_thread(self.update_panels)
                 except RuntimeError:  # the app closed meanwhile
                     pass
+            return
+        try:
+            # _show owns _computing from here; its own errors are not ours.
+            self.app.call_from_thread(self._show, *result)
+        except RuntimeError:  # the app closed meanwhile
+            self._computing = False
 
-    def _compute_once(self, providers: tuple[str, ...], snapshots: dict) -> None:
-        from ccswap.settings import gate_thresholds, load_settings, parse_model_names
+    def _compute_once(self, providers: tuple[str, ...], snapshots: dict) -> tuple:
+        from ccswap.settings import load_settings, parse_model_names
 
         app: "CswapApp" = self.app  # type: ignore[assignment]
         root = app.switcher_for("claude").backup_dir
         try:
-            settings = load_settings(root)
-            models = parse_model_names(settings.model)
-            gates = gate_thresholds(settings)  # what the engines gate on
-
-            def gate_for(label: str) -> float:
-                key = label.lower()
-                return gates.for_label("7d" if key in ("weekly", "wk") else key)
+            models = parse_model_names(load_settings(root).model)
         except Exception:
-            models, gate_for = (), app.bar_threshold
+            models = ()
         rows = [
             up_next(
                 provider,
@@ -288,17 +288,14 @@ class Sidebar(Vertical):
                 snapshots.get(provider),
                 strategy=app._strategy_name,
                 models=models if provider == "claude" else (),
-                gate_for=gate_for,
+                gate_for=app.bar_threshold,  # the ticks' source: one place for gates
             )
             for provider in providers
         ]
         logged = recent_switches(root / LOG_NAME)
         recent = [r for r in logged if r.provider in providers]
         empty = "no switches logged yet" if not logged else "only Claude Code switches are logged"
-        try:
-            app.call_from_thread(self._show, rows, recent, empty)
-        except RuntimeError:  # the app closed meanwhile
-            self._computing = False
+        return rows, recent, empty
 
     def _show(self, rows: list[UpNext], recent: list[RecentSwitch], empty: str) -> None:
         self._computing = False

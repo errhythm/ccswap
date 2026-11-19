@@ -353,7 +353,13 @@ class SettingsScreen(Screen):
         item = event.item
         if isinstance(item, MenuItem) and (section := section_of(item.action_id)) >= 0:
             self._section = section
-        if item is not None and self._pane == "sections":  # a click on a row
+        menu = self._menu()
+        if (  # a click on a row; not a late event from before ← cleared the index
+            self._pane == "sections"
+            and menu.index is not None
+            and item is not None
+            and item is menu.highlighted_child
+        ):
             self._pane = "rows"
             self._sync_keys()
         self._show_section()

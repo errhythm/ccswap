@@ -77,9 +77,14 @@ _TAB_KEYS = [
 
 def switch_or_ask(app: "CswapApp", provider: str, number: str) -> None:
     """Switch to an account; Codex and Antigravity restart, so they ask first
-    (the palette's rule, shared by the dashboard, Switch and Watch)."""
+    (the palette's rule, shared by the dashboard, Switch and Watch). The
+    active account, or one its provider can't switch, is left alone."""
     from ccswap.tui.commands import _switch_or_ask  # commands imports this module
 
+    snap = app.snapshots.get(provider)
+    acc = next((a for a in (snap.accounts if snap else ()) if a.number == number), None)
+    if acc is None or acc.is_active or not capabilities(provider).switch:
+        return
     _switch_or_ask(app, provider, partial(app.do_switch, provider, number))()
 
 
@@ -677,7 +682,13 @@ class SwitchScreen(AccountListScreen):
         listview = self.query_one("#accounts", ListView)
         item = listview.highlighted_child
         if isinstance(item, AccountItem) and "best" in capabilities(item.provider).strategies:
-            self.app.do_switch_best(item.provider)
+            from ccswap.tui.commands import _switch_or_ask
+
+            # Like Enter: leave first, then ask (Codex restarts) over the dashboard.
+            self.app.pop_screen()
+            self.app.call_later(
+                _switch_or_ask(self.app, item.provider, partial(self.app.do_switch_best, item.provider))
+            )
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action == "switch_best":
