@@ -764,21 +764,36 @@ class CswapApp(App):
                 severity="warning",
             )
 
-    def _gate_settings(self) -> AutoSwitchSettings:
-        """settings.json as the engines read it now (so weeklyThreshold set
-        from the CLI counts), with this session's edits on top. The ticks
-        and the sidebar both read gates from here."""
+    def _saved_settings(self) -> AutoSwitchSettings:
+        """settings.json as the engines read it, re-parsed only when the file
+        changes. A file that fails to parse keeps the last good copy."""
+        import json
+
+        root = self.switcher_for("claude").backup_dir
+        path = root / "settings.json"
         try:
-            saved = load_settings(self.switcher_for("claude").backup_dir)
-        except Exception:
-            saved = self._auto_settings
-        return replace(
-            saved,
-            threshold=self.threshold_pct if self.threshold_pct is not None else saved.threshold,
-            threshold_5h=self._threshold_5h,
-            threshold_7d=self._threshold_7d,
-            model_thresholds=self._model_thresholds,
-        )
+            stamp = path.stat().st_mtime_ns
+        except OSError:
+            stamp = None
+        if stamp != getattr(self, "_gate_stamp", object()):
+            cached = getattr(self, "_gate_cache", self._auto_settings)
+            try:
+                if stamp is not None:
+                    json.loads(path.read_text(encoding="utf-8"))  # load_settings hides a corrupt file
+                self._gate_cache = load_settings(root)
+            except Exception:
+                self._gate_cache = cached
+            self._gate_stamp = stamp
+        return self._gate_cache
+
+    def _gate_settings(self) -> AutoSwitchSettings:
+        """The gates the ticks and the sidebar show: settings.json (so CLI
+        edits count), plus the auto view's session-only threshold while one
+        is open (its `t` change is never saved)."""
+        saved = self._saved_settings()
+        if self.threshold_pct is not None and any(isinstance(s, AutoScreen) for s in self.screen_stack):
+            return replace(saved, threshold=self.threshold_pct)
+        return saved
 
     def bar_threshold(self, label: str) -> float | None:
         """The gate the engines use for one usage row (settings.gate_thresholds:

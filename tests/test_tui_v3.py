@@ -1281,3 +1281,53 @@ def test_an_error_inside_show_leaves_computing_alone(monkeypatch):  # 6
     with pytest.raises(ValueError):
         panel._compute(("claude",), {})
     assert panel._computing is True  # _show owns it from there
+
+
+@pytest.mark.asyncio
+async def test_cli_gate_edits_reach_ticks_parse_is_cached_and_corrupt_keeps_last_good(tmp_path, monkeypatch):
+    import os
+
+    from ccswap.settings import set_setting
+    from ccswap.tui import app as app_mod
+
+    app = make_app(FakeSwitcher([_acc(1, 5, 10, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        set_setting(tmp_path, "autoswitch.threshold7d", "60")  # from another shell
+        assert app.bar_threshold("7d") == 60.0  # the startup value no longer wins
+        calls = []
+        real = app_mod.load_settings
+        monkeypatch.setattr(app_mod, "load_settings", lambda root: calls.append(root) or real(root))
+        for _ in range(20):
+            app.bar_threshold("5h")
+        assert calls == []  # unchanged file: no re-parse per tick
+        path = tmp_path / "settings.json"
+        path.write_text("{ half written")
+        os.utime(path, ns=(1, 1))
+        assert app.bar_threshold("7d") == 60.0  # corrupt file keeps the last good copy
+
+
+@pytest.mark.asyncio
+async def test_a_late_highlight_never_changes_the_section(tmp_path):
+    from textual.widgets import ListView
+
+    from ccswap.tui.settings_screen import SettingsScreen
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("comma")
+        await settle(pilot)
+        screen = app.screen
+        assert isinstance(screen, SettingsScreen)
+        menu = screen.query_one("#menu", ListView)
+        stale = menu.highlighted_child
+        before = screen._section
+        await pilot.press("left")
+        await pilot.press("down")  # pick the next section in the section pane
+        await settle(pilot)
+        picked = screen._section
+        assert picked != before
+        menu.post_message(ListView.Highlighted(menu, stale))  # queued from before ←
+        await settle(pilot)
+        assert screen._section == picked

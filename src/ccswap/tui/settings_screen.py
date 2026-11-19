@@ -351,9 +351,11 @@ class SettingsScreen(Screen):
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         item = event.item
+        menu = self._menu()
+        if item is not menu.highlighted_child:  # a late event from before ← or a section change
+            return
         if isinstance(item, MenuItem) and (section := section_of(item.action_id)) >= 0:
             self._section = section
-        menu = self._menu()
         if (  # a click on a row; not a late event from before ← cleared the index
             self._pane == "sections"
             and menu.index is not None
