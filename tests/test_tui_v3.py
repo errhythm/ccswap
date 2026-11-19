@@ -552,3 +552,20 @@ def test_sidebar_compute_failure_does_not_freeze_it(monkeypatch):
     monkeypatch.setattr(panel, "_compute_once", boom, raising=False)
     panel._compute(("claude",), {})
     assert panel._computing is False  # the next snapshot can compute again
+
+
+@pytest.mark.asyncio
+async def test_clicks_and_drags_never_select_text(tmp_path):
+    from ccswap.tui.app import CswapApp
+
+    assert CswapApp.ALLOW_SELECT is False
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot)
+        await pilot.mouse_down("#accounts-panel", offset=(4, 2))
+        await pilot.hover("#accounts-panel", offset=(30, 3))
+        await pilot.mouse_up("#accounts-panel", offset=(30, 3))
+        await pilot.click("#accounts-panel", offset=(10, 2), times=2)
+        await settle(pilot)
+        assert not app.screen.selections
+        assert app.screen.get_selected_text() is None

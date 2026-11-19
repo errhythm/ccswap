@@ -61,6 +61,8 @@ class CswapApp(App):
 
     TITLE = "ccswap"
     CSS_PATH = "cswap.tcss"
+    # A keyboard app: a click picks a row, it never starts a text selection.
+    ALLOW_SELECT = False
     # ctrl+p: ccswap's own commands only, each calling an app method the menus
     # already use. Static ones come from get_system_commands, per-account ones
     # from AccountCommands.
