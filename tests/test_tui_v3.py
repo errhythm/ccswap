@@ -1,4 +1,4 @@
-"""TUI v3: header tabs, footer fitting, settings sections, the sidebar."""
+"""TUI v3: footer fitting, header tabs, settings sections, the sidebar."""
 
 from __future__ import annotations
 
@@ -20,6 +20,101 @@ from tests.test_tui import (  # noqa: F401 - fake_engine is a fixture
 def _no_claude_plugin_list(monkeypatch):
     monkeypatch.setattr("ccswap.claude_integration.mod_installed", lambda: False)
     monkeypatch.setattr("ccswap.claude_integration.is_enabled", lambda key: False)
+
+
+def _keys(screen) -> tuple[list[str], list]:
+    from textual.widgets._footer import FooterKey
+
+    keys = list(screen.query(FooterKey))
+    left = [k for k in keys if not k.has_class("-command-palette")]
+    return [f"{k.key_display} {k.description}" for k in left], keys
+
+
+async def _footer(pilot, width):
+    await settle(pilot)
+    for _ in range(20):
+        await pilot.pause()
+    labels, keys = _keys(pilot.app.screen)
+    palette = next(k for k in keys if k.has_class("-command-palette"))
+    for key in keys:  # every key drawn whole, none under the palette key
+        assert key.region.width >= len(f"{key.key_display} {key.description}")
+        assert key.region.right <= width
+        if key is not palette:
+            assert key.region.right <= palette.region.x
+    return labels
+
+
+NARROW = {
+    "dashboard": ["s Switch accounts", "w Watch", "q Quit", "←→ View", "? Option help", "m Mask off"],
+    "switch": ["⏎ Switch", "b Switch (best)", "esc Back", "←→ View", "m Mask off"],
+    "watch": ["s Switch", "esc Back", "←→ View", "m Mask off"],
+    "watch-selecting": ["⏎ Confirm", "s Switch", "esc Back", "←→ View", "m Mask off"],
+    "auto": ["l Go live / dry-run", "t Threshold", "s Strategy", "esc Back", "m Mask off"],
+    "auto-adjusting": ["l Go live / dry-run", "t Threshold", "⏎ Done", "esc Back", "m Mask off"],
+    "settings": ["esc Back", "q Quit", "? Option help", "m Mask off"],
+}
+
+
+async def _goto(pilot, state):
+    app = pilot.app
+    if state == "switch":
+        await pilot.press("s")
+    elif state == "watch":
+        await pilot.press("w")
+    elif state == "watch-selecting":
+        await pilot.press("w")
+        await settle(pilot)
+        await pilot.press("s")
+    elif state == "auto":
+        app.open_auto("claude")
+    elif state == "auto-adjusting":
+        app.open_auto("claude")
+        await settle(pilot)
+        await pilot.press("t")
+        await settle(pilot)
+        app.pop_screen()  # the popup; the auto view's footer is what stays
+    elif state == "settings":
+        await pilot.press("comma")
+    await settle(pilot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", list(NARROW))
+@pytest.mark.parametrize("width", [80, 132])
+async def test_footer_keys_per_screen_never_clip(tmp_path, fake_engine, state, width):
+    app = make_app(FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path))
+    async with app.run_test(size=(width, 30)) as pilot:
+        await settle(pilot)
+        await _goto(pilot, state)
+        if state == "auto-adjusting":
+            assert app.screen._adjusting
+        expected = list(NARROW[state])
+        if width >= 100:  # ^t Theme comes back before m Mask
+            expected.insert(expected.index("m Mask off"), "^t Theme")
+        assert await _footer(pilot, width) == expected
+        assert app.screen.query_one("CswapFooter").compact is (width < 100)
+        for engine in list(_FakeEngine.instances):
+            engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_narrow_footer_drops_option_help_then_view_before_clipping(tmp_path):
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(80, 30)) as pilot:
+        labels = await _footer(pilot, 80)
+        assert "? Option help" in labels and "←→ View" in labels
+        await pilot.resize_terminal(72, 30)  # 9 cells less: option help goes
+        labels = await _footer(pilot, 72)
+        assert "? Option help" not in labels and "←→ View" in labels
+        await pilot.resize_terminal(62, 30)
+        labels = await _footer(pilot, 62)
+        assert labels == ["s Switch accounts", "w Watch", "q Quit", "m Mask off"]
+        await pilot.resize_terminal(132, 30)  # back to today's footer
+        labels = await _footer(pilot, 132)
+        assert "^t Theme" in labels and "? Option help" in labels
+        await pilot.press("ctrl+t")  # hidden on narrow screens, never unbound
+        await settle(pilot)
+        assert app._theme_name == "dark"
 
 
 # ---------------------------------------------------------------------------

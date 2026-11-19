@@ -22,7 +22,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Label, RichLog, Static
+from textual.widgets import Label, RichLog, Static
 
 from ccswap.autoswitch import (
     AutoSwitchEngine,
@@ -46,7 +46,7 @@ from ccswap.tui import data
 from ccswap.tui.modals import ConfirmModal
 from ccswap.tui.overview import HeaderBar
 from ccswap.tui.theme import Palette
-from ccswap.tui.widgets import AccountsPanel
+from ccswap.tui.widgets import AccountsPanel, CswapFooter
 
 if TYPE_CHECKING:
     from ccswap.tui.app import CswapApp
@@ -89,8 +89,8 @@ class AutoScreen(Screen):
         Binding("l", "toggle_live", mark("Go live / dry-run")),
         Binding("t", "adjust_threshold", mark("Threshold")),
         Binding("s", "toggle_strategy", mark("Strategy")),
-        Binding("left", "threshold_step(-1)", mark("-1%")),
-        Binding("right", "threshold_step(1)", mark("+1%")),
+        Binding("left", "threshold_step(-1)", mark("-1%"), show=False),
+        Binding("right", "threshold_step(1)", mark("+1%"), show=False),
         Binding("enter", "adjust_done", mark("Done")),
         Binding("escape,q", "back", mark("Back")),
     ]
@@ -136,7 +136,7 @@ class AutoScreen(Screen):
                 yield Static("", id="auto-summary")
             yield Static("", id="candidates")
         yield RichLog(id="event-log", highlight=False, markup=False, wrap=True)
-        yield Footer()
+        yield CswapFooter()
 
     # -- lifecycle ----------------------------------------------------------
 

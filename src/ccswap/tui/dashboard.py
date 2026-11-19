@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Callable
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import Footer, ListView, Static
+from textual.widgets import ListView, Static
 
 from ccswap.i18n import localize_bindings, mark
 from ccswap.models import AccountSnapshot, AccountsSnapshot
@@ -43,6 +43,7 @@ from ccswap.tui.modals import OutputModal
 from ccswap.tui.widgets import (
     AccountItem,
     AccountsPanel,
+    CswapFooter,
     CyclingListView,
     MenuItem,
     ProviderDivider,
@@ -110,7 +111,7 @@ class DashboardScreen(ViewTabs, Screen):
         )
         yield Static("", id="menu-title")
         yield CyclingListView(id="menu")
-        yield Footer()
+        yield CswapFooter()
 
     async def on_mount(self) -> None:
         localize_bindings(self, self.app.gettext)
@@ -381,7 +382,7 @@ class AccountListScreen(ViewTabs, Screen):
         yield HeaderBar()
         yield Static("", id="list-title")
         yield CyclingListView(id="accounts")
-        yield Footer()
+        yield CswapFooter()
 
     def on_mount(self) -> None:
         localize_bindings(self, self.app.gettext)

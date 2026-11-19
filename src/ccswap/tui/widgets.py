@@ -9,8 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable
 
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import ListItem, ListView, Static
+from textual.widgets import Footer, ListItem, ListView, Static
+from textual.widgets._footer import FooterKey
 
 from ccswap.models import AccountSnapshot
 from ccswap.tui import data
@@ -313,6 +315,88 @@ class MenuItem(ListItem):
         super().__init__(item)
         self.action_id = action_id
         self.tooltip = Text(help_text) if help_text else None
+
+
+FOOTER_COMPACT_BELOW = 100
+# Dropped in this order, under FOOTER_COMPACT_BELOW cols, until the rest fits.
+# ^t Theme always goes first; its binding stays live and ctrl+p lists it.
+_VIEW_ACTION = "view_tab(-1)"
+_FOOTER_DROPS = ("toggle_theme", "option_help", _VIEW_ACTION)
+
+
+class CswapFooter(Footer):
+    """Today's Footer at >= 100 cols. Narrower, the compact style with keys
+    dropped (``_FOOTER_DROPS``) until every one left fits: nothing clips."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._width: int | None = None  # the width the keys were fitted to
+
+    def on_resize(self) -> None:
+        width = self.app.size.width
+        if width != self._width and (width < FOOTER_COMPACT_BELOW or (self._width or 0) < FOOTER_COMPACT_BELOW):
+            self.call_after_refresh(self.recompose)
+
+    def compose(self) -> ComposeResult:
+        if not self._bindings_ready:
+            return
+        width = self.app.size.width
+        narrow = width < FOOTER_COMPACT_BELOW
+        self._width = width
+        if self.compact != narrow:
+            self.compact = narrow
+        shown: dict[str, tuple] = {}
+        for _node, binding, enabled, tooltip in self.screen.active_bindings.values():
+            if binding.show:
+                shown.setdefault(binding.action, (binding, enabled, tooltip))
+        keys = list(shown.values())
+        # ←→ View is a priority binding, so Textual lists it first; it reads
+        # after the screen's own keys (after esc Back, before ? Option help).
+        view = shown.get(_VIEW_ACTION)
+        if view is not None:
+            keys.remove(view)
+            actions = [b.action for b, _e, _t in keys]
+            at = next(
+                (actions.index(a) for a in ("option_help", "toggle_theme", "toggle_mask") if a in actions),
+                len(keys),
+            )
+            keys.insert(at, view)
+        palette =self.screen.active_bindings.get(self.app.COMMAND_PALETTE_BINDING)
+        if narrow:
+            # Footer padding (2), and the docked "│^p palette" on the right.
+            room = width - 2
+            if palette is not None:
+                room -= 1 + len(self.app.get_key_display(palette[1])) + 1 + len(palette[1].description)
+
+            def used() -> int:
+                return sum(
+                    len(self.app.get_key_display(b)) + 1 + len(b.description) + 1
+                    for b, _e, _t in keys
+                )
+
+            for action in _FOOTER_DROPS:
+                if action == "toggle_theme" or used() > room:
+                    keys = [k for k in keys if k[0].action != action]
+        for binding, enabled, tooltip in keys:
+            yield FooterKey(
+                binding.key,
+                self.app.get_key_display(binding),
+                binding.description,
+                binding.action,
+                disabled=not enabled,
+                tooltip=tooltip,
+            ).data_bind(compact=Footer.compact)
+        if self.show_command_palette and self.app.ENABLE_COMMAND_PALETTE and palette is not None:
+            _node, binding, enabled, tooltip = palette
+            yield FooterKey(
+                binding.key,
+                self.app.get_key_display(binding),
+                binding.description,
+                binding.action,
+                classes="-command-palette",
+                disabled=not enabled,
+                tooltip=binding.tooltip or binding.description,
+            )
 
 
 def overview_clock() -> float:

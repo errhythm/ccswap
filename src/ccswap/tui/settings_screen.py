@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import Footer, ListView, Static
+from textual.widgets import ListView, Static
 
 from ccswap.i18n import localize_bindings, mark
 from ccswap.settings import parse_model_thresholds
@@ -22,7 +22,7 @@ from ccswap.tui.data import PROVIDER_LABELS, PROVIDERS
 from ccswap.tui.modals import OutputModal
 from ccswap.tui.option_help import option_help
 from ccswap.tui.overview import HeaderBar
-from ccswap.tui.widgets import AccountsPanel, CyclingListView, MenuItem
+from ccswap.tui.widgets import AccountsPanel, CswapFooter, CyclingListView, MenuItem
 
 if TYPE_CHECKING:
     from ccswap.tui.app import CswapApp
@@ -106,7 +106,7 @@ class SettingsScreen(Screen):
         )
         yield Static("", id="menu-title")
         yield CyclingListView(id="menu")
-        yield Footer()
+        yield CswapFooter()
 
     async def on_mount(self) -> None:
         localize_bindings(self, self.app.gettext)
