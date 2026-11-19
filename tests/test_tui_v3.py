@@ -254,3 +254,125 @@ async def test_settings_and_auto_view_keep_arrows_for_their_values(tmp_path, fak
         assert app._view == "combined"
         for engine in list(_FakeEngine.instances):
             engine.stop()
+
+
+# ---------------------------------------------------------------------------
+# settings sections
+# ---------------------------------------------------------------------------
+
+
+def _shown_rows(screen) -> list[str]:
+    from ccswap.tui.widgets import MenuItem
+
+    return [m.action_id for m in screen.query("#menu").first().query(MenuItem) if m.display]
+
+
+@pytest.mark.asyncio
+async def test_settings_down_walks_every_row_and_opens_the_next_section(tmp_path):
+    from textual.widgets import ListView
+
+    from ccswap.tui.settings_screen import SECTIONS
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("comma")
+        await settle(pilot)
+        screen = app.screen
+        menu = screen.query_one("#menu", ListView)
+        order = [row for _title, rows in SECTIONS for row in rows] + ["back"]
+        visited, sections = [], []
+        for _ in order:
+            visited.append(menu.highlighted_child.action_id)
+            sections.append(_shown_rows(screen))
+            await pilot.press("down")
+            await settle(pilot)
+        assert visited == order  # every row, in today's order, then ← back
+        assert menu.highlighted_child.action_id == order[0]  # wraps
+        for row, shown in zip(visited, sections):
+            if row != "back":
+                assert row in shown  # the row's own section is on screen
+                assert shown == list(next(rows for _t, rows in SECTIONS if row in rows))
+        assert sections[-1] == list(SECTIONS[-1][1])  # ← back keeps the last section
+        await pilot.press("k")  # up wraps to ← back, drawn in the nav
+        await settle(pilot)
+        assert menu.highlighted_child.action_id == "back"
+        assert "› ← back" in str(screen.query_one("#settings-sections").render())
+        await pilot.press("enter")
+        await settle(pilot)
+        assert type(app.screen).__name__ == "DashboardScreen"
+
+
+@pytest.mark.asyncio
+async def test_settings_rows_show_values_hints_and_config_line(tmp_path):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"autoswitch": {"threshold5h": 80.0, "strategy": "consume-first"}})
+    )
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        await pilot.press("comma")
+        await settle(pilot)
+        screen = app.screen
+        rows = {r.action_id: r for r in screen.query("SettingRow")}
+        assert rows["setting:threshold5h"].value == "80%"
+        await pilot.press(*["down"] * 3)  # Display rows, then Threshold
+        await pilot.press("down")  # 5h gate
+        await settle(pilot)
+        line = str(rows["setting:threshold5h"].query_one("Static").render())
+        assert line.startswith("› 5h gate") and "‹ 80% ›" in line and "inherit · 40 … 95" in line
+        help_text = str(screen.query_one("#setting-help").render())
+        assert help_text.startswith("5h gate\n")
+        assert help_text.endswith("$ ccswap config set autoswitch.threshold5h 80")
+        assert "Claude Code · Codex" in str(screen.query_one("#section-title").render())
+        await pilot.press("down")  # weekly gate inherits: the unset line
+        await settle(pilot)
+        assert str(screen.query_one("#setting-help").render()).endswith(
+            "$ ccswap config unset autoswitch.threshold7d"
+        )
+        await pilot.press(*["up"] * 3)  # Mask account info: an on/off row
+        await settle(pilot)
+        assert "[  off]" in str(rows["setting:mask"].query_one("Static").render())
+        await pilot.press("enter")
+        await settle(pilot)
+        assert "[● on ]" in str(rows["setting:mask"].query_one("Static").render())
+        assert str(screen.query_one("#setting-help").render()).endswith("ccswap config set ui.mask on")
+
+
+@pytest.mark.asyncio
+async def test_settings_section_list_becomes_a_switcher_under_100_cols(tmp_path):
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 30)) as pilot:
+        await settle(pilot)
+        await pilot.press("comma")
+        await settle(pilot)
+        nav = app.screen.query_one("#settings-sections")
+        assert str(nav.render()).splitlines()[0] == "› Display"
+        await pilot.resize_terminal(80, 24)
+        await settle(pilot)
+        line = str(nav.render())
+        assert "\n" not in line
+        assert line.startswith("Display   Auto-switch   Claude Code")
+        assert line.endswith("← back") and len(line) == nav.content_size.width
+        assert not app.screen.query_one("#section-title").display or app.screen.has_class("-narrow")
+        await pilot.click("#settings-sections", offset=(1 + 10 + 1, 0))  # Auto-switch
+        await settle(pilot)
+        assert app.screen.query_one("#menu").highlighted_child.action_id == "setting:threshold"
+
+
+@pytest.mark.asyncio
+async def test_settings_view_row_steps_the_saved_view_not_the_tab(tmp_path):
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 30)) as pilot:
+        await settle(pilot)
+        await pilot.press("right", "right")  # tabs: Codex for this session
+        await settle(pilot)
+        assert app._view == "codex"
+        await pilot.press("comma")
+        await settle(pilot)
+        rows = {r.action_id: r for r in app.screen.query("SettingRow")}
+        assert rows["setting:view"].value == "Combined"  # what is saved
+        await pilot.press("down", "right")
+        await settle(pilot)
+        assert app._view == "claude" and app._saved_view == "claude"
+        assert json.loads((tmp_path / "settings.json").read_text())["ui"]["view"] == "claude"

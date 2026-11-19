@@ -370,6 +370,13 @@ def footer_labels(screen) -> list[str]:
     return [key.description for key in screen.query(FooterKey)]
 
 
+def setting_values(screen) -> dict[str, str]:
+    """Settings rows by action id: the value each row shows."""
+    from ccswap.tui.settings_screen import SettingRow
+
+    return {row.action_id: row.value for row in screen.query(SettingRow)}
+
+
 async def footer_after(pilot) -> list[str]:
     """Footer labels once the footer has recomposed (slow on Windows CI)."""
     for _ in range(50):
@@ -3105,10 +3112,9 @@ class TestSettingsScreen:
                 await settle(pilot)
                 await pilot.press("comma")
                 await settle(pilot)
-                menu = app.screen.query_one("#menu", ListView)
-                labels = [m.query_one(Static).render().plain for m in menu.query(MenuItem)]
-                assert "Claude statusline: unavailable" in labels
-                assert "Claude Code mod: unavailable" in labels
+                values = setting_values(app.screen)
+                assert values["claude:claude.statusline"] == "unavailable"
+                assert values["claude:claude.mod"] == "unavailable"
 
     async def test_mask_key_relabels_the_open_settings_screen(self, tmp_path):
         app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
@@ -3118,9 +3124,7 @@ class TestSettingsScreen:
             await pilot.pause()
             await pilot.press("m")
             await pilot.pause()
-            menu = app.screen.query_one("#menu", ListView)
-            labels = [m.query_one(Static).render().plain for m in menu.query(MenuItem)]
-            assert "Mask account info: on" in labels
+            assert setting_values(app.screen)["setting:mask"] == "on"
 
 
 @pytest.mark.asyncio
@@ -3137,9 +3141,7 @@ class TestSettingsMenu:
             from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "settings-menu")
-            menu = app.screen.query_one("#menu", ListView)
-            labels = [item.query_one(Static).render().plain for item in menu.query(MenuItem)]
-            assert "Auto-switch threshold: 87.5%" in labels
+            assert setting_values(app.screen)["setting:threshold"] == "87.5%"
             await menu_select(pilot, "setting:threshold")
             assert app.threshold_pct == 90.0
             assert json.loads((tmp_path / "settings.json").read_text())["autoswitch"]["threshold"] == 90.0
@@ -3156,11 +3158,10 @@ class TestSettingsMenu:
             from ccswap.tui.widgets import MenuItem
 
             await menu_select(pilot, "settings-menu")
-            menu = app.screen.query_one("#menu", ListView)
-            labels = [item.query_one(Static).render().plain for item in menu.query(MenuItem)]
-            assert "5h gate: inherit (90%)" in labels
-            assert "Weekly gate: inherit (90%)" in labels
-            assert "Fable gate: inherit (90%)" in labels
+            values = setting_values(app.screen)
+            assert values["setting:threshold5h"] == "inherit (90%)"
+            assert values["setting:threshold7d"] == "inherit (90%)"
+            assert values["setting:fable"] == "inherit (90%)"
 
             await menu_select(pilot, "setting:threshold5h")
             await menu_select(pilot, "setting:threshold7d")
@@ -3213,20 +3214,12 @@ class TestSettingsMenu:
             menu = app.screen.query_one("#menu", ListView)
             assert menu.index == 1
             assert list(menu.query(MenuItem))[menu.index].action_id == "setting:view"
-            labels = [
-                item.query_one(Static).render().plain
-                for item in menu.query(MenuItem)
-            ]
-            assert "Dashboard view: Claude Code" in labels
+            assert setting_values(app.screen)["setting:view"] == "Claude Code"
 
             await pilot.press("enter")
             await pilot.pause()
             assert app._view == "codex"  # Combined → Claude Code → Codex
-            labels = [
-                item.query_one(Static).render().plain
-                for item in menu.query(MenuItem)
-            ]
-            assert "Dashboard view: Codex" in labels
+            assert setting_values(app.screen)["setting:view"] == "Codex"
 
 
 @pytest.mark.asyncio
@@ -3281,9 +3274,7 @@ class TestThemeWiring:
             await settle(pilot)
             assert app._theme_name == "auto"  # default
             await menu_select(pilot, "settings-menu")
-            menu = app.screen.query_one("#menu", ListView)
-            labels = [it.query_one(Static).render().plain for it in menu.query(MenuItem)]
-            assert "Theme: auto" in labels
+            assert setting_values(app.screen)["setting:theme"] == "auto"
             await menu_select(pilot, "setting:theme")  # auto → dark
             await menu_select(pilot, "setting:theme")  # dark → light
             assert app._theme_name == "light"

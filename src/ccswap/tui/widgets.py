@@ -96,7 +96,8 @@ def empty_state(
     providers: tuple[str, ...], palette: Palette, tr: Callable[[str], str] = str
 ) -> Text:
     """No accounts in the view: how to save a login, one line per provider shown."""
-    text = Text(tr("No accounts yet. Sign in to a tool, then save that login:"), style=palette.muted)
+    text = Text()
+    text.append(tr("No accounts yet. Sign in to a tool, then save that login:"), style=palette.muted)
     text.append("\n")
     name_w = max(len(PROVIDER_LABELS[p]) for p in providers)
     for provider in providers:
