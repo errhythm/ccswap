@@ -66,11 +66,6 @@ _LOGIN_LABELS = {
 
 class DashboardScreen(Screen):
     BINDINGS = [
-        # 1-4 step through the ui.view filter (Overview, then each provider).
-        Binding("1", "app.view_tab(0)", mark("view"), key_display="1-4"),
-        Binding("2", "app.view_tab(1)", show=False),
-        Binding("3", "app.view_tab(2)", show=False),
-        Binding("4", "app.view_tab(3)", show=False),
         Binding("s", "open_switch", mark("Switch accounts")),
         Binding("w", "app.open_watch", mark("Watch")),
         Binding("escape,left", "menu_back", mark("Back"), show=False),
@@ -103,6 +98,9 @@ class DashboardScreen(Screen):
 
     async def on_mount(self) -> None:
         localize_bindings(self, self.app.gettext)
+        # Tab moves focus to the panels (↑↓/PgUp/PgDn scroll them) and back to
+        # the menu, so a tall panel stays reachable without a mouse.
+        self.query_one("#accounts-panel", AccountsPanel).can_focus = True
         self.query_one("#menu", ListView).focus()
         await self._push_menu("menu", self._root_entries())
 
@@ -362,14 +360,6 @@ class AccountListScreen(Screen):
         self._rows: list[tuple[str, AccountSnapshot]] = []
         self._stamps: dict[tuple[str, str], float | None] = {}
         self._rebuild_lock = asyncio.Lock()
-
-    BINDINGS = [
-        # 1-4 step through the ui.view filter (Overview, then each provider).
-        Binding("1", "app.view_tab(0)", mark("view"), key_display="1-4"),
-        Binding("2", "app.view_tab(1)", show=False),
-        Binding("3", "app.view_tab(2)", show=False),
-        Binding("4", "app.view_tab(3)", show=False),
-    ]
 
     def compose(self) -> ComposeResult:
         yield HeaderBar()

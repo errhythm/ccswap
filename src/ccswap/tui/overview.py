@@ -44,7 +44,7 @@ GROUP_GAUGE_W = 10  # Antigravity model-group gauges
 MIN_GAUGE_W = 6  # Figma compact view
 
 # Textual's own bar glyphs (textual/renderables/bar.py) and Rule's heavy vertical.
-_FILLED, _HALF, _TRACK, _PACE = "━", "╸", "─", "┃"
+_FILLED, _HALF, _TRACK, _TICK = "━", "╸", "─", "┃"
 _WINDOWS = (("five_hour", "5h"), ("seven_day", "7d"), ("weekly", "wk"))
 
 
@@ -115,7 +115,7 @@ def gauge(
     fill = f"{color} dim" if stale else color
     for i in range(width):
         if i == mark:
-            text.append(_PACE, style=palette.sev_warn)
+            text.append(_TICK, style=palette.sev_warn)
         elif i < full:
             text.append(_FILLED, style=fill)
         elif i == full and half:
@@ -251,8 +251,11 @@ def _window_line(
             stale=stale,
         )
     )
-    line.append("  ")
-    line.append(_pct_text(window.pct, palette, stale=stale))
+    if window.pct is None:
+        line.append("  usage unknown", style=palette.muted)  # main's wording
+    else:
+        line.append("  ")
+        line.append(_pct_text(window.pct, palette, stale=stale))
     parts: list[str] = []
     if result is not None and result.ahead and window.pct is not None and window.pct < 100:
         parts.append("ahead of pace")
@@ -276,8 +279,11 @@ def _group_lines(
     now: float,
     palette: Palette,
     stale: bool,
+    threshold_for: Callable[[str], float | None] | None = None,
 ) -> list[Text]:
-    """``Gemini models  5h ──── 4%  4h 44m   wk ━─── 22%  6d 10h``"""
+    """``Gemini models  5h ──── 4%  4h 44m   wk ━─── 22%  6d 10h``
+
+    ``threshold_for`` gets each window's own name, as main's rows did."""
     name_w = min(24, max(len(name) for name, _ in groups))
     count_w = 7
 
@@ -300,7 +306,8 @@ def _group_lines(
                 continue
             pct = float(window["pct"])
             line.append(f"{label} ", style=palette.dim)
-            line.append(gauge(pct, bar, palette, stale=stale))
+            tick = threshold_for(window["name"]) if threshold_for is not None else None
+            line.append(gauge(pct, bar, palette, tick=tick, stale=stale))
             line.append(_pct_text(pct, palette, stale=stale, width=5))
             if counts:
                 left = data.reset_countdown(window, now) or ""
@@ -396,7 +403,7 @@ def _sentinel_lines(acc: AccountSnapshot, palette: Palette) -> list[Text]:
         return []
     api_key = sentinel == USAGE_API_KEY
     lines = [
-        Text(
+        _Whole(
             f"  {'·' if api_key else '⚠'} {data.sentinel_label(sentinel)}",
             style=palette.muted if api_key else palette.sev_warn,
         )
@@ -505,7 +512,10 @@ def account_block(
                 )
             )
     if groups:
-        lines += _group_lines(groups, width=width, now=now, palette=palette, stale=stale)
+        lines += _group_lines(
+            groups, width=width, now=now, palette=palette, stale=stale,
+            threshold_for=threshold_for,
+        )
     lines += money
     return _join(lines, width)
 

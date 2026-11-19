@@ -25,11 +25,16 @@ Screen {
     background: $background;
 }
 
-/* The dashboard keeps room for its menu: the panels scroll past 60%. */
+/* The dashboard keeps room for its menu: past 60% the panels scroll.
+   Tab focuses them (the accent scrollbar shows it), ↑↓ scroll, Tab returns. */
 #accounts-panel {
     max-height: 60%;
-    overflow-y: auto;
     scrollbar-size-vertical: 1;
+}
+
+#accounts-panel:focus {
+    scrollbar-color: $primary;
+    background-tint: $foreground 0%;
 }
 
 #auto-active-panel {

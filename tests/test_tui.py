@@ -312,8 +312,33 @@ def make_app(
     return CswapApp(
         fake,
         codex_switcher=codex or FakeSwitcher([], fake.backup_dir),
+        agy_switcher=FakeSwitcher([], fake.backup_dir),
         start=start,
         detected=detected,
+    )
+
+
+def card(acc, width, *, now=None, palette=None, mask=False, show_tag=True,
+         threshold_for=None, narrow=False, provider="claude"):
+    """The full account text (``overview.account_block``), tag shown by default."""
+    from ccswap.tui import overview
+    from ccswap.tui.theme import Palette
+
+    return overview.account_block(
+        acc, provider, width=width, now=time.time() if now is None else now,
+        palette=palette or Palette.DARK, mask=mask, show_tag=show_tag,
+        threshold_for=threshold_for, narrow=narrow,
+    )
+
+
+def mini(acc, now, *, palette=None, mask=False, show_tag=True, width=200, provider="claude"):
+    """The one-line account text (``overview.compact_block``)."""
+    from ccswap.tui import overview
+    from ccswap.tui.theme import Palette
+
+    return overview.compact_block(
+        acc, provider, width=width, now=now, palette=palette or Palette.DARK,
+        mask=mask, show_tag=show_tag,
     )
 
 
@@ -409,7 +434,6 @@ class TestFormatting:
         # A sentinel is a live overlay — the entry can still carry the last
         # good measurement, and `cswap list` prints it as a "last seen" line.
         # The card must too (except for API-key accounts, which have no quota).
-        from ccswap.tui.widgets import account_card_text
 
         entry = UsageEntry(
             sentinel=USAGE_TOKEN_EXPIRED,
@@ -417,16 +441,16 @@ class TestFormatting:
             fetched_at=time.time() - 720,
             age_s=720.0,
         )
-        card = account_card_text(make_account(1, active=True, entry=entry), 80).plain
-        assert "token expired — refresh deferred this pass; retries automatically" in card
-        assert "last seen 53% used" in card
+        full = card(make_account(1, active=True, entry=entry), 80).plain
+        assert "token expired — refresh deferred this pass; retries automatically" in full
+        assert "last seen 53% used" in full
 
-        no_history = account_card_text(
+        no_history = card(
             make_account(1, entry=UsageEntry(sentinel=USAGE_TOKEN_EXPIRED)), 80
         ).plain
         assert "last seen" not in no_history
 
-        api_key = account_card_text(
+        api_key = card(
             make_account(
                 1,
                 kind="api_key",
@@ -438,10 +462,9 @@ class TestFormatting:
 
     def test_account_card_uses_light_palette_when_passed(self):
         from ccswap.tui.theme import ACCENT_LIGHT, CSWAP_LIGHT, Palette
-        from ccswap.tui.widgets import account_card_text
 
         acc = make_account(1, active=True, entry=make_entry(pct5=95.0))
-        text = account_card_text(acc, 100, palette=Palette.from_theme(CSWAP_LIGHT))
+        text = card(acc, 100, palette=Palette.from_theme(CSWAP_LIGHT))
         styles = {str(span.style) for span in text.spans}
         assert any(ACCENT_LIGHT in s for s in styles)  # active marker uses light accent
 
@@ -464,25 +487,24 @@ class TestFormatting:
         assert tui_data.present_alias("me@work.com", mask=True) == "m•@w•••.com"
 
     def test_account_card_masks_email_and_org_but_keeps_alias(self):
-        from ccswap.tui.widgets import account_card_text, mini_account_text
 
         acc = dataclasses.replace(
             make_account(1, active=True, alias="dev", email="alice@acme.com"),
             org_name="Acme Corp",
         )
-        plain = account_card_text(acc, 100, mask=True).plain
+        plain = card(acc, 100, mask=True).plain
         assert "alice@acme.com" not in plain
         assert "Acme Corp" not in plain
         assert "dev (a•••e@a•••.com)" in plain
         assert "[A••• C•••]" in plain
-        mini = mini_account_text(acc, time.time(), mask=True).plain
-        assert "alice@acme.com" not in mini
-        assert "dev (a•••e@a•••.com)" in mini
+        one = mini(acc, time.time(), mask=True).plain
+        assert "alice@acme.com" not in one
+        assert "dev (a•••e@a•••.com)" in one
 
         plan = dataclasses.replace(
             make_account(2, email="a@b.co"), org_name="Codex Team"
         )
-        plan_plain = account_card_text(plan, 80, mask=True).plain
+        plan_plain = card(plan, 80, mask=True).plain
         assert "[Codex Team]" in plan_plain
         assert "a@b.co" not in plan_plain
 
@@ -624,47 +646,42 @@ class TestSnapshotSource:
         assert usage.last_good["five_hour"]["pct"] == 80.0
 
 
+def _labels(last_good) -> list[str]:
+    from ccswap.tui.overview import account_windows
+
+    return [w.label for w in account_windows(last_good)]
+
+
+def _line(text, label: str) -> str:
+    """The gauge row for one window label in an account block."""
+    return next(l for l in text.plain.splitlines() if l.strip().startswith(label + " "))
+
+
 class TestUsageRows:
     """The card's rows must mirror the CLI's _format_usage_lines semantics."""
 
     def test_absent_window_produces_no_row(self):
-        from ccswap.tui.widgets import usage_rows
-
         entry = make_entry(pct5=47.0, pct7=None)  # annual plan: no 7d window
-        labels = [label for label, *_ in usage_rows(entry.last_good, time.time())]
-        assert labels == ["5h"]
+        assert _labels(entry.last_good) == ["5h"]
 
     def test_scoped_models_and_over_limit_marker(self):
-        from ccswap.tui.widgets import usage_rows
-
         entry = make_entry(scoped=[("Fable", 100.0), ("Opus", 12.0)])
-        rows = usage_rows(entry.last_good, time.time())
-        labels = [label for label, *_ in rows]
-        assert labels == ["5h", "7d", "Fable", "Opus"]
-        fable = next(row for row in rows if row[0] == "Fable")
-        assert "(!)" in fable[2]
-        # the marker stays terminal in the clock-extended variant too
-        assert fable[3].endswith("(!)") and " · " in fable[3]
+        assert _labels(entry.last_good) == ["5h", "7d", "Fable", "Opus"]
+        fable = _line(card(make_account(1, entry=entry), 100), "Fable")
+        # the marker stays terminal after the reset and its clock
+        assert fable.endswith("(!)") and " · " in fable
 
     def test_spend_row_first_with_amounts(self):
-        from ccswap.tui.widgets import usage_rows
-
         entry = make_entry(spend={"used": 12.5, "limit": 50.0, "pct": 25.0, "currency": "USD"})
-        rows = usage_rows(entry.last_good, time.time())
-        assert rows[0][0] == "$$"
-        assert "$12.50 / $50.00" in rows[0][2]
+        assert _labels(entry.last_good)[0] == "$$"
+        assert "$12.50 / $50.00" in _line(card(make_account(1, entry=entry), 100), "$$")
 
-    def test_suffix_full_extends_countdown_with_clock(self):
-        from ccswap.tui.widgets import usage_rows
-
+    def test_reset_countdown_carries_its_clock(self):
         entry = make_entry(pct5=47.0)
-        row5 = usage_rows(entry.last_good, time.time())[0]
-        assert row5[2].startswith("resets ")
-        assert row5[3].startswith(row5[2] + " · ")
+        row = _line(card(make_account(1, entry=entry), 100), "5h")
+        assert "resets " in row and row.split("resets ", 1)[1].count(" · ") == 1
 
     def test_spend_clock_sits_with_reset_not_after_amounts(self):
-        from ccswap.tui.widgets import usage_rows
-
         entry = make_entry(
             spend={
                 "used": 12.5,
@@ -674,18 +691,12 @@ class TestUsageRows:
                 "resets_at": _iso_in(7200),
             }
         )
-        spend = usage_rows(entry.last_good, time.time())[0]
-        assert spend[0] == "$$"
-        assert " · " in spend[3]
-        assert spend[3].index(" · ") < spend[3].index("$12.50")
+        spend = _line(card(make_account(1, entry=entry), 120), "$$")
+        assert spend.index("resets") < spend.index(":") < spend.index("$12.50")
 
     def test_codex_weekly_row_and_banked_reset_text(self):
-        from ccswap.tui.widgets import (
-            credit_allowance_text,
-            credits_text,
-            reset_credits_text,
-            usage_rows,
-        )
+        from ccswap.reset_credit_display import reset_credit_display
+        from ccswap.tui.widgets import credit_allowance_text, credits_text
 
         # Fixed time keeps the countdown and local date deterministic.
         now = 1_700_000_000.0
@@ -707,8 +718,8 @@ class TestUsageRows:
             },
         }
 
-        assert [row[0] for row in usage_rows(usage, now)] == ["Weekly"]
-        assert reset_credits_text(usage, now) == (
+        assert _labels(usage) == ["wk"]
+        assert reset_credit_display(usage, now).text == (
             f"3 banked · earliest expires in 2d 0h ({datetime.fromtimestamp(now + 2 * 86400).astimezone().strftime('%Y-%m-%d %H:%M %Z (%z)')})"
         )
         assert credits_text(usage, now) == "2,500.00 available"
@@ -720,15 +731,8 @@ class TestUsageRows:
         )
 
     def test_banked_resets_render_in_the_card_and_the_mini_line(self):
-        """The banked-reset lines must actually render, in both themes.
-
-        ``reset_credits_text`` being correct is not enough: only a Codex
-        account has ``reset_credits``, so the two call sites that draw it are
-        skipped by every Claude-only fixture — a bad style reference there
-        raises NameError at paint time and no other test notices.
-        """
+        """The banked-reset lines must actually render, in both themes."""
         from ccswap.tui.theme import CSWAP_LIGHT, Palette
-        from ccswap.tui.widgets import account_card_text, mini_account_text
 
         now = 1_700_000_000.0
         entry = UsageEntry(
@@ -742,27 +746,17 @@ class TestUsageRows:
         )
         acc = make_account(1, active=True, entry=entry)
         for palette in (Palette.DARK, Palette.from_theme(CSWAP_LIGHT)):
-            assert "Resets 3 banked" in account_card_text(
-                acc, 80, now=now, palette=palette
-            ).plain
-            assert "Credits 2,500.00 available" in account_card_text(
-                acc, 80, now=now, palette=palette
-            ).plain
-            assert "Allowance 4,678.45 remaining · 5,000.00 limit" in (
-                account_card_text(acc, 80, now=now, palette=palette).plain
-            )
-            assert "Resets 3 banked" in mini_account_text(
-                acc, now, palette=palette
-            ).plain
-            assert "Credits 2,500.00 available" in mini_account_text(
-                acc, now, palette=palette
-            ).plain
-            assert "Allowance 4,678.45 remaining" in mini_account_text(
-                acc, now, palette=palette
-            ).plain
+            full = card(acc, 80, now=now, palette=palette).plain
+            assert "Resets 3 banked" in full
+            assert "Credits 2,500.00 available" in full
+            assert "Allowance 4,678.45 remaining · 5,000.00 limit" in full
+            one = mini(acc, now, palette=palette).plain
+            assert "Resets 3 banked" in one
+            assert "Credits 2,500.00 available" in one
+            assert "Allowance 4,678.45 remaining" in one
 
     def test_no_credits_with_zero_balance_renders_as_none(self):
-        from ccswap.tui.widgets import account_card_text, credits_text
+        from ccswap.tui.widgets import credits_text
 
         now = 1_700_000_000.0
         usage = {"credits": {"has_credits": False, "balance": 0.0}}
@@ -779,94 +773,78 @@ class TestUsageRows:
             active=True,
             entry=UsageEntry(last_good=usage, fetched_at=now),
         )
-        rendered = account_card_text(acc, 80, now=now).plain
+        rendered = card(acc, 80, now=now).plain
         assert "Credits none" in rendered
         assert "usage unavailable" not in rendered
 
     def test_no_data_no_rows(self):
-        from ccswap.tui.widgets import usage_rows
-
-        assert usage_rows(None, time.time()) == []
-        assert usage_rows({}, time.time()) == []
+        assert _labels(None) == []
+        assert _labels({}) == []
 
     def test_window_without_a_figure_is_a_row_drawn_as_unknown(self):
         # ``utilization: null`` keeps its row with no pct; the card draws it as
-        # "usage unknown".
-        from ccswap.tui.widgets import account_card_text, mini_account_text, usage_rows
-
+        # "usage unknown", the one-line row as "?".
         entry = make_entry(pct5=47.0, pct7=12.0)
         entry.last_good["five_hour"]["pct"] = None
         now = time.time()
-        rows = usage_rows(entry.last_good, now)
-        assert [(label, pct) for label, pct, *_ in rows] == [("5h", None), ("7d", 12.0)]
-        assert rows[0][2].startswith("resets ")
-        card = account_card_text(make_account(1, entry=entry), 80, now=now).plain
-        assert "5h" in card and "usage unknown" in card and " 0%" not in card
-        mini = mini_account_text(make_account(2, entry=entry), now).plain
-        assert "5h ? · 7d 12%" in mini
+        assert _labels(entry.last_good) == ["5h", "7d"]
+        row = _line(card(make_account(1, entry=entry), 80, now=now), "5h")
+        assert "usage unknown" in row and "resets " in row and " 0%" not in row
+        one = mini(make_account(2, entry=entry), now).plain
+        assert one.index("5h") < one.index("?") < one.index("7d") < one.index("12%")
 
     @pytest.mark.parametrize("key", ["five_hour", "seven_day"])
     @pytest.mark.parametrize("width", [60, 70, 80])
     def test_unknown_row_stays_within_the_card_width(self, key, width):
-        # "usage unknown" is wider than " NNN%": the row must budget for it
-        # when deciding whether the clock-extended reset suffix fits.
-        from ccswap.tui.widgets import account_card_text
-
         entry = make_entry(pct5=47.0, pct7=12.0)
         entry.last_good[key]["pct"] = None
-        card = account_card_text(make_account(1, entry=entry), width, now=time.time()).plain
-        assert all(len(line) <= width for line in card.splitlines()), card
+        text = card(make_account(1, entry=entry), width, now=time.time()).plain
+        assert all(len(line) <= width for line in text.splitlines()), text
 
     def test_seven_day_ahead_of_pace_marker(self):
         # 1 day elapsed of the week, 50% used -> far ahead of the ~14% expected.
-        from ccswap.tui.widgets import usage_rows
-
         now = time.time()
-        last_good = {"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}}
-        row = usage_rows(last_good, now, now)[0]
-        assert "(ahead of pace)" in row[2]
-        assert "(ahead of pace)" in row[3]
+        entry = UsageEntry(
+            last_good={"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}},
+            fetched_at=now,
+        )
+        assert "ahead of pace" in _line(card(make_account(1, entry=entry), 100, now=now), "7d")
 
     def test_five_hour_never_shows_pace_marker(self):
-        from ccswap.tui.widgets import usage_rows
-
         now = time.time()
-        last_good = {"five_hour": {"pct": 90.0, "resets_at": _iso_in(3600 * 4)}}
-        row = usage_rows(last_good, now, now)[0]
-        assert "pace" not in row[2]
+        entry = UsageEntry(
+            last_good={"five_hour": {"pct": 90.0, "resets_at": _iso_in(3600 * 4)}},
+            fetched_at=now,
+        )
+        assert "pace" not in card(make_account(1, entry=entry), 100, now=now).plain
 
     def test_scoped_ahead_of_pace_marker(self):
-        from ccswap.tui.widgets import usage_rows
-
         now = time.time()
-        last_good = {"scoped": [{"name": "Fable", "pct": 50.0, "resets_at": _iso_in(86400 * 6)}]}
-        row = usage_rows(last_good, now, now)[0]
-        assert "(ahead of pace)" in row[2]
+        entry = UsageEntry(
+            last_good={"scoped": [{"name": "Fable", "pct": 50.0, "resets_at": _iso_in(86400 * 6)}]},
+            fetched_at=now,
+        )
+        assert "ahead of pace" in _line(card(make_account(1, entry=entry), 100, now=now), "Fable")
 
     def test_maxed_scoped_marker_wins_over_pace(self):
-        from ccswap.tui.widgets import usage_rows
-
         now = time.time()
-        last_good = {"scoped": [{"name": "Fable", "pct": 100.0, "resets_at": _iso_in(86400 * 6)}]}
-        row = usage_rows(last_good, now, now)[0]
-        assert "(!)" in row[2]
-        assert "ahead of pace" not in row[2]
-
+        entry = UsageEntry(
+            last_good={"scoped": [{"name": "Fable", "pct": 100.0, "resets_at": _iso_in(86400 * 6)}]},
+            fetched_at=now,
+        )
+        row = _line(card(make_account(1, entry=entry), 100, now=now), "Fable")
+        assert "(!)" in row and "ahead of pace" not in row
 
     def test_no_pace_marker_without_fetched_at(self):
-        from ccswap.tui.widgets import usage_rows
-
         now = time.time()
-        last_good = {"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}}
-        row = usage_rows(last_good, now)[0]
-        assert "pace" not in row[2]
+        entry = UsageEntry(
+            last_good={"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}},
+        )
+        assert "pace" not in card(make_account(1, entry=entry), 100, now=now).plain
 
-    def test_card_shows_clock_only_where_it_fits(self):
-        # Per-row degradation: the wide card shows every clock, a mid width
-        # keeps 5h/7d clocks while the longer spend row falls back to its
-        # countdown, and a narrow card is exactly the old countdown-only look.
-        from ccswap.tui.widgets import account_card_text
-
+    def test_narrow_drops_reset_clocks_and_rows_fit(self):
+        # Wide rows carry every reset clock; the -narrow breakpoint keeps the
+        # countdown only; any width cuts rather than wraps.
         entry = make_entry(
             spend={
                 "used": 12.5,
@@ -877,68 +855,39 @@ class TestUsageRows:
             }
         )
         acc = make_account(1, active=True, entry=entry)
-
-        wide = account_card_text(acc, 100).plain
-        assert wide.count(" · ") == 3
-
-        mid_lines = account_card_text(acc, 78).plain.splitlines()
-        spend_line = next(line for line in mid_lines if "$12.50" in line)
-        assert " · " not in spend_line
-        for line in mid_lines:
-            if "resets" in line and "$12.50" not in line:
-                assert " · " in line
-
-        narrow = account_card_text(acc, 40).plain
-        assert " · " not in narrow
+        wide = card(acc, 120).plain.splitlines()[1:]
+        assert all(":" in line.split("resets", 1)[1] for line in wide if "resets" in line)
+        narrow = card(acc, 120, narrow=True).plain.splitlines()[1:]
+        assert all(":" not in line.split("resets", 1)[1].split("$")[0] for line in narrow if "resets" in line)
+        assert all(len(line) <= 40 for line in card(acc, 40).plain.splitlines())
 
 
 class TestMiniAccountText:
 
-    def test_seven_day_ahead_of_pace_marker(self):
-        from ccswap.tui.widgets import mini_account_text
+    def _acc(self, window, pct, seconds, fetched_at):
+        return make_account(1, entry=UsageEntry(
+            last_good={window: {"pct": pct, "resets_at": _iso_in(seconds)}},
+            fetched_at=fetched_at,
+            age_s=0.0 if fetched_at else None,
+        ))
 
+    def test_seven_day_ahead_of_pace_marker(self):
         now = time.time()
-        entry = UsageEntry(
-            last_good={"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}},
-            fetched_at=now,
-            age_s=0.0,
-        )
-        acc = make_account(1, entry=entry)
-        assert "(ahead)" in mini_account_text(acc, now).plain
+        assert "(ahead)" in mini(self._acc("seven_day", 50.0, 86400 * 6, now), now).plain
 
     def test_five_hour_never_shows_pace_marker(self):
-        from ccswap.tui.widgets import mini_account_text
-
         now = time.time()
-        entry = UsageEntry(
-            last_good={"five_hour": {"pct": 90.0, "resets_at": _iso_in(3600 * 4)}},
-            fetched_at=now,
-            age_s=0.0,
-        )
-        acc = make_account(1, entry=entry)
-        assert "pace" not in mini_account_text(acc, now).plain
+        assert "ahead" not in mini(self._acc("five_hour", 90.0, 3600 * 4, now), now).plain
 
     def test_no_pace_marker_without_fetched_at(self):
-        from ccswap.tui.widgets import mini_account_text
-
         now = time.time()
-        entry = UsageEntry(
-            last_good={"seven_day": {"pct": 50.0, "resets_at": _iso_in(86400 * 6)}},
-            fetched_at=None,
-            age_s=None,
-        )
-        acc = make_account(1, entry=entry)
-        assert "pace" not in mini_account_text(acc, now).plain
+        assert "ahead" not in mini(self._acc("seven_day", 50.0, 86400 * 6, None), now).plain
 
     @pytest.mark.parametrize("show", [True, False])
     def test_org_tag_follows_show_tag(self, show):
-        from ccswap.tui.widgets import account_card_text, mini_account_text
-
         acc = dataclasses.replace(make_account(1, active=True), org_name="acme")
-        card = account_card_text(acc, 80, show_tag=show).plain
-        mini = mini_account_text(acc, time.time(), show_tag=show).plain
-        assert ("[acme]" in card) is show
-        assert ("[acme]" in mini) is show
+        assert ("[acme]" in card(acc, 80, show_tag=show).plain) is show
+        assert ("[acme]" in mini(acc, time.time(), show_tag=show).plain) is show
 
 
 class TestOrgTagSetting:
@@ -3350,7 +3299,6 @@ async def test_menu_hover_and_keyboard_help_do_not_activate_option(tmp_path):
 def test_expiring_resets_stay_visible_in_both_themes_and_narrow_rows(sentinel):
     from rich.console import Console
     from ccswap.tui.theme import CSWAP_LIGHT, Palette
-    from ccswap.tui.widgets import account_card_text, mini_account_text
     now = 1_700_000_000.0
     expiry = datetime.fromtimestamp(now + 1800, timezone.utc).isoformat()
     entry = UsageEntry(last_good={"reset_credits": {"available": 1, "expires_at": expiry}},
@@ -3358,8 +3306,8 @@ def test_expiring_resets_stay_visible_in_both_themes_and_narrow_rows(sentinel):
     acc = make_account(1, entry=entry)
     local = datetime.fromtimestamp(now + 1800).astimezone().strftime("%Y-%m-%d %H:%M %Z (%z)")
     for palette in (Palette.DARK, Palette.from_theme(CSWAP_LIGHT)):
-        for text in (account_card_text(acc, 60, now=now, palette=palette),
-                     mini_account_text(acc, now, palette=palette)):
+        for text in (card(acc, 60, now=now, palette=palette),
+                     mini(acc, now, palette=palette)):
             assert text.plain.count("earliest expires in 30m") == 1
             assert local in text.plain
             assert bool("last known" in text.plain) == bool(sentinel)
@@ -3411,23 +3359,22 @@ async def test_confirmation_translates_once_and_keeps_yes_no_keys(tmp_path, key,
         assert any(call[0] == 'remove' for call in fake.calls) is confirmed
 
 
-def test_translated_quota_labels_preserve_window_ids_and_spend_countdowns():
-    from ccswap.tui.widgets import account_card_text, mini_account_text
+def test_threshold_lookup_uses_window_ids_and_spend_keeps_its_countdown():
+    # The tick asks for main's window ids ("Weekly", not the "wk" shown).
     now = 1_700_000_000.0
     seen = []
     entry = UsageEntry(last_good={
         'weekly': {'pct': 42.0},
         'spend': {'pct': 30.0, 'used': 3.0, 'limit': 10.0, 'resets_at': datetime.fromtimestamp(now + 3600, timezone.utc).isoformat()},
     }, fetched_at=now)
-    translate = lambda text: {'Weekly': 'Woche', 'resets {duration}': 'Reset in {duration}'}.get(text, text)
+
     def threshold(window):
         seen.append(window)
         return None
-    account = make_account(1, entry=entry)
-    card = account_card_text(account, 100, now=now, tr=translate, threshold_for=threshold).plain
-    assert 'Weekly' in seen and 'Woche' not in seen
-    assert 'Woche' in card and 'Reset in 1h' in card
-    assert 'Woche' in mini_account_text(account, now, tr=translate).plain
+
+    full = card(make_account(1, entry=entry), 100, now=now, threshold_for=threshold).plain
+    assert 'Weekly' in seen and 'wk' not in seen
+    assert 'resets 1h' in full
 
 
 def test_root_menu_hides_entries_no_provider_supports(monkeypatch):

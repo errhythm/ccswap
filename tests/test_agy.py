@@ -537,18 +537,17 @@ def test_malformed_usage_cache_fails_closed(provider, cached):
 
 def test_five_hour_scoped_quota_has_no_weekly_pace_and_healthy_compact_rows(provider):
     from ccswap.models import AccountSnapshot
-    from ccswap.tui.widgets import mini_account_text, usage_rows
     from ccswap.usage_store import UsageEntry
+    from tests.test_tui import card, mini
 
     usage = agy.parse_usage(quota())
     usage["scoped"] = [dict(usage["scoped"][1], pct=80, resets_at="2030-01-01T00:00:00Z")]
-    rows = usage_rows(usage, 1_893_455_400, 1_893_455_400)
-    assert "ahead" not in rows[0][2]
     account = AccountSnapshot("1", "one@example.com", "Antigravity", "", False, "oauth", True,
-                              UsageEntry(last_good=usage))
-    compact = mini_account_text(account, 1_893_455_400).plain
-    assert "Gemini Models · 5h" in compact
-    assert "80%" in compact
+                              UsageEntry(last_good=usage, fetched_at=1_893_455_400))
+    assert "ahead" not in card(account, 100, now=1_893_455_400, provider="agy").plain
+    compact = mini(account, 1_893_455_400, provider="agy").plain
+    group_row = next(line for line in compact.splitlines() if "Gemini Models" in line)
+    assert "5h" in group_row and "80%" in group_row
     assert "usage unavailable" not in compact
 
 
@@ -619,18 +618,19 @@ async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider
 
 
 def test_inactive_scoped_quota_keeps_each_group_when_one_is_exhausted(provider):
-    from ccswap.tui.widgets import mini_account_text
+    from tests.test_tui import mini
 
     two_accounts(provider)
     account = provider.accounts_snapshot().accounts[0]
     windows = account.usage.last_good["scoped"]
     windows[0]["pct"] = 100
-    rendered = mini_account_text(account, 0).plain
-    for window in windows:
-        assert window["name"] in rendered
-    assert len(rendered.splitlines()) == len(windows) + 1
+    rendered = mini(account, 0, provider="agy").plain
+    groups = list(dict.fromkeys(window["group"] for window in windows))
+    # One row per model group (its 5h and weekly side by side), each once.
+    assert len(rendered.splitlines()) == len(groups) + 1
+    assert "100%" in rendered
     for line in rendered.splitlines()[1:]:
-        assert sum(window["name"] in line for window in windows) == 1
+        assert sum(group in line for group in groups) == 1
 
 
 def test_snapshot_bounds_total_subprocess_time_and_rotates_persisted_order(provider, monkeypatch):
@@ -1030,11 +1030,11 @@ def test_malformed_recovery_metadata_fails_without_leaking(provider, metadata):
 
 
 def test_full_and_compact_cards_show_recovery_with_cached_quota(provider, monkeypatch):
-    from ccswap.tui.widgets import account_card_text, mini_account_text
+    from tests.test_tui import card, mini
 
     account = induce_recovery(provider, monkeypatch)
     assert account.usage.last_good is not None
-    for text in (account_card_text(account, 100).plain, mini_account_text(account, 0).plain):
+    for text in (card(account, 100, provider="agy").plain, mini(account, 0, provider="agy").plain):
         assert "Recovery required" in text
         assert "ccswap agy add" in text
         assert account.usage.recovery.path in text

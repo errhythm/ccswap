@@ -199,46 +199,55 @@ async def test_active_account_comes_first_in_its_panel(tmp_path, frozen):
         assert "ACTIVE" in claude.split("○ 1", 1)[0]
 
 
+def _drawn(widget) -> str:
+    """What the widget actually paints right now (not a fresh render call)."""
+    from textual.geometry import Region
+
+    strips = widget.render_lines(Region(0, 0, widget.outer_size.width, widget.outer_size.height))
+    return "\n".join(strip.text for strip in strips)
+
+
 @pytest.mark.asyncio
 async def test_resize_follows_breakpoints_without_duplicating(tmp_path, frozen):
     from ccswap.tui.data import PROVIDERS
-    from ccswap.tui.widgets import AccountsPanel
 
     app = _app(tmp_path)
     async with app.run_test(size=(132, 40)) as pilot:
         await settle(pilot)
-        for size, cls in (((80, 24), "-narrow"), ((100, 30), "-medium"), ((132, 40), "-wide"), ((80, 24), "-narrow")):
+        for size, cls in (((80, 24), "-narrow"), ((132, 40), "-wide"), ((100, 30), "-medium"), ((80, 24), "-narrow")):
             await pilot.resize_terminal(*size)
             await settle(pilot)
             assert app.screen.has_class(cls)
             assert _panels(app) == list(PROVIDERS)
-            text = app.screen.query_one(AccountsPanel).render_text().plain
+            drawn = _drawn(app.screen.query_one("#panel-claude"))
             # Narrow drops the plan label and the reset clock, never a gauge row.
-            assert ("Max 5x" in text) is (cls != "-narrow")
-            assert ("· 14:46" in text) is (cls != "-narrow")
-            assert text.count("━") > 0
-            for line in text.splitlines():
-                assert len(line) <= size[0]
+            assert ("Max 5x" in drawn) is (cls != "-narrow")
+            assert ("· 14:46" in drawn) is (cls != "-narrow")
+            assert "━" in drawn
+            assert all(len(line) <= size[0] for line in drawn.splitlines())
 
 
 @pytest.mark.asyncio
-async def test_number_keys_step_through_the_view_setting(tmp_path, frozen):
+async def test_tabs_show_the_view_setting_and_change_only_through_it(tmp_path, frozen):
     from ccswap.tui.overview import HeaderBar
 
     app = _app(tmp_path)
     async with app.run_test(size=(132, 40)) as pilot:
         await settle(pilot)
-        await pilot.press("3")
+        for key in "1234":  # no tab keys: nothing changes, nothing is saved
+            await pilot.press(key)
         await settle(pilot)
-        assert app._view == "codex"
-        assert json.loads((tmp_path / "settings.json").read_text())["ui"]["view"] == "codex"
+        assert app._view == "combined"
+        assert "view" not in json.loads((tmp_path / "settings.json").read_text())["ui"]
+        app.apply_view("codex")  # what Settings, the menu and the palette call
+        await settle(pilot)
         assert [p.provider for p in app.screen.query("ProviderPanel") if p.display] == ["codex"]
         header = app.screen.query_one(HeaderBar).render()
         codex_at = header.plain.index("Codex")
         assert any("underline" in str(span.style) and span.start == codex_at for span in header.spans)
-        await pilot.press("1")
+        await pilot.click(HeaderBar, offset=(40, 0))  # tabs are a display, not buttons
         await settle(pilot)
-        assert app._view == "combined"
+        assert app._view == "codex"
 
 
 @pytest.mark.asyncio
@@ -248,7 +257,7 @@ async def test_footer_lists_only_keys_that_work(tmp_path, frozen):
     app = _app(tmp_path)
     async with app.run_test(size=(132, 40)) as pilot:
         await settle(pilot)
-        assert "view" in await footer_after(pilot)
+        assert "view" not in await footer_after(pilot)
         await pilot.press("w")
         await settle(pilot)
         labels = await footer_after(pilot)
@@ -256,6 +265,35 @@ async def test_footer_lists_only_keys_that_work(tmp_path, frozen):
         await pilot.press("enter")
         await settle(pilot)
         assert not any(c[0] == "switch_to" for c in app.switchers["claude"].calls)
+
+
+@pytest.mark.asyncio
+async def test_tall_panels_scroll_by_keyboard_and_the_menu_stays_usable(tmp_path, frozen):
+    from textual.widgets import ListView
+
+    from ccswap.tui.dashboard import WatchScreen
+    from ccswap.tui.widgets import AccountsPanel
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(pilot)
+        panel = app.screen.query_one(AccountsPanel)
+        menu = app.screen.query_one("#menu", ListView)
+        assert menu.has_focus and menu.region.height >= 3
+        agy = app.screen.query_one("#panel-agy")
+        assert not panel.region.contains_region(agy.region)  # below the fold
+        await pilot.press("tab")
+        assert panel.has_focus
+        await pilot.press("end")
+        await settle(pilot)
+        assert panel.scroll_y > 0
+        assert panel.region.contains_region(agy.region)  # its bottom border too
+        await pilot.press("tab")
+        assert menu.has_focus
+        menu.index = 1  # "Watch accounts"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, WatchScreen)
 
 
 def test_gauge_glyphs_half_cell_and_threshold_tick():

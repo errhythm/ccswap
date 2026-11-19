@@ -49,7 +49,7 @@ from ccswap.tui.data import (
     mask_emails_in_text,
     run_action,
 )
-from ccswap.tui.overview import BREAKPOINTS, HeaderBar, tabs
+from ccswap.tui.overview import BREAKPOINTS, HeaderBar
 from ccswap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
 from ccswap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
 from ccswap.tui.widgets import AccountsPanel
@@ -710,11 +710,6 @@ class CswapApp(App):
         for screen in self.screen_stack:
             for panel in screen.query(AccountsPanel):
                 panel.refresh(layout=True)
-
-    def action_view_tab(self, index: int) -> None:
-        """1-4: the ``ui.view`` filter, one tab per key."""
-        if index < len(tabs()):
-            self.apply_view(tabs()[index])
 
     def apply_view(self, name: str) -> None:
         """Apply the dashboard-only provider filter without refetching data."""
