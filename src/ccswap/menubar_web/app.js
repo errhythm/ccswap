@@ -489,10 +489,23 @@
 
   // --- chrome ---
   // The header and the provider strip stay put in every view, so switching is one click in the strip.
+  // The ccswap mark, filled along its loop like the menu bar glyph (menubar_popover.tightest_used_pct).
+  const MARK_LOOP = "M 58.446 76.364 C 54.762 79.240 50.343 81.024 45.695 81.512 C 41.046 82.000 36.353 81.171 32.152 79.122 C 27.951 77.072 24.411 73.883 21.934 69.919 C 19.457 65.955 18.144 61.374 18.144 56.700 C 18.144 52.026 19.457 47.445 21.934 43.481 C 24.411 39.517 27.951 36.328 32.152 34.278 C 36.353 32.229 41.046 31.401 45.695 31.888 C 50.343 32.376 54.762 34.160 58.446 37.036 C 62.130 34.160 66.549 32.376 71.197 31.888 C 75.846 31.401 80.539 32.229 84.740 34.278 C 88.941 36.328 92.481 39.517 94.958 43.481 C 97.435 47.445 98.748 52.026 98.748 56.700 C 98.748 61.374 97.435 65.955 94.958 69.919 C 92.481 73.883 88.941 77.072 84.740 79.122 C 80.539 81.171 75.846 82.000 71.197 81.512 C 66.549 81.024 62.130 79.240 58.446 76.364 Z";
+  function headMark() {
+    const p = data.providers.find((x) => x.id === (data.title && data.title.resolved));
+    const a = p && (p.accounts || []).find((x) => x.active);
+    const ws = (a && a.windows) || [];
+    const pcts = (ws.filter((w) => !w.scope).length ? ws.filter((w) => !w.scope) : ws).map((w) => w.pct).filter((x) => typeof x === "number");
+    const used = pcts.length ? Math.min(100, Math.max(0, Math.max(...pcts))) : 0;
+    const s = svg("svg", { viewBox: "12.19 25.45 92.51 62.5", "aria-hidden": "true" },
+      svg("path", { d: MARK_LOOP, class: "mt" }));
+    if (used > 0) s.append(svg("path", { d: MARK_LOOP, class: "mf", pathLength: 100, "stroke-dasharray": `${used} 101` }));
+    return s;
+  }
   function drawHead() {
     const head = document.getElementById("head");
     const any = data.providers.some(autoOn);
-    head.replaceChildren(h("span", { class: "tile" }, h("img", { src: "mark.svg", alt: "" })), h("span", { class: "title", text: "ccswap" }),
+    head.replaceChildren(h("span", { class: "tile" }, headMark()), h("span", { class: "title", text: "ccswap" }),
       h("span", { class: "spacer" }),
       any ? autoChip(`Auto at ${round(data.settings.threshold)}%`, () => { tab = "settings"; draw(); }, data.settings.strategy ? `Strategy: ${data.settings.strategy}` : null) : null,
       h("button", { class: "ib" + (checking() ? " spin" : ""), title: "Refresh", "aria-label": checking() ? "Refreshing" : "Refresh",

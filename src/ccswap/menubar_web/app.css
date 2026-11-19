@@ -25,7 +25,10 @@ img { display: block; }
 #head:empty { display: none; }
 .tile { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: none;
   background: #173F33; }
-.tile img { width: 17px; height: 17px; }
+.tile svg { width: 17px; height: 11.5px; }
+.tile path { fill: none; stroke-width: 11.907; stroke-linejoin: round; }
+.tile .mt { stroke: #9BE0B6; stroke-opacity: 0.4; }
+.tile .mf { stroke: #F5FBF7; stroke-linecap: round; }
 .ltile { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none;
   background: var(--glass); border: 1px solid var(--card-line); }
 .ltile.sm { width: 22px; height: 22px; border-radius: 7px; }

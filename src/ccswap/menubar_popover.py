@@ -94,7 +94,11 @@ def dispatch(controller, body, confirm=None) -> dict | None:
             if not caps.strategies or (strategy is not None and strategy not in caps.strategies):
                 return bad()
             reply["ok"] = bool(controller.rotate(pid, strategy))
-            reply["restart"] = bool(caps.restart_after_switch)
+            changed = getattr(controller, "last_switch_changed", True)
+            reply["restart"] = bool(caps.restart_after_switch) and changed is not False
+            note = getattr(controller, "last_note", None)
+            if changed is False and isinstance(note, str):
+                reply["note"] = note
         elif action in ("toggleAuto", "restartEngine"):
             if not caps.auto_switch:
                 return bad()

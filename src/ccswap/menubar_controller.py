@@ -189,6 +189,7 @@ class MenuBarController:
         self.alert = alert
         self.on_interval_changed = on_interval_changed
         self.last_note: str | None = None  # outcome of the last add_login, for the popover reply
+        self.last_switch_changed = True  # False when the last rotate kept the same account
         self._logger = getattr(claude_switcher, "_logger", None) or logging.getLogger("ccswap")
         self.settings = MenuBarSettings.load(backup_root)
         self.states: dict[str, ProviderState] = {}
@@ -584,9 +585,16 @@ class MenuBarController:
             models = parse_model_names(load_settings(self.backup_root).model)
             if models:
                 kwargs.update(models=models, model_source="autoswitch.model")
+        self.last_note = None
+        before = self._active_number(sw)
         if not self._guard(lambda: sw.switch(**kwargs)):
             return False
-        self._notified_switch(spec)
+        after = self._active_number(sw)
+        self.last_switch_changed = before is None or after != before
+        if self.last_switch_changed:
+            self._notified_switch(spec)
+        else:
+            self.last_note = f"{spec.label}: already on the best account ({after})"
         return self._done(provider_id)
 
     def _notified_switch(self, spec) -> None:

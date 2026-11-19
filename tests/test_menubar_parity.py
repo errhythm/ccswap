@@ -119,12 +119,23 @@ def test_switch_to_matches_cli(menu, pid):
 
 @pytest.mark.parametrize("pid", ["claude", "codex"])
 @pytest.mark.parametrize("strategy", [None, "best", "next-available", "consume-first"])
-def test_rotate_matches_cli(menu, pid, strategy):
+def test_rotate_matches_cli(menu, pid, strategy, monkeypatch):
     argv = ["switch"] + (["--strategy", strategy] if strategy else [])
     expected = run_cli(pid, argv)
+    sw = menu.sws[pid]
+    moved = replace(sw.snapshot, active_number="9")
+    monkeypatch.setattr(sw, "switch", lambda **kw: (sw.calls.append(("switch", (), kw)), setattr(sw, "snapshot", moved)))
     reply, calls = menu({"action": "rotate", "provider": pid, "strategy": strategy})
     assert reply["ok"] and calls == expected and calls[0][1]["strategy"] == strategy
     assert reply["restart"] is PROVIDERS[pid].capabilities.restart_after_switch
+    assert "note" not in reply
+
+
+@pytest.mark.parametrize("pid", ["claude", "codex"])
+def test_rotate_that_keeps_the_account_says_so_without_a_restart_hint(menu, pid):
+    reply, _ = menu({"action": "rotate", "provider": pid, "strategy": "best"})
+    assert reply["ok"] and reply["restart"] is False
+    assert reply["note"] == f"{PROVIDERS[pid].label}: already on the best account (1)"
 
 
 @pytest.mark.parametrize("strategy", [None, "best"])

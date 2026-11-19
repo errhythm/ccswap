@@ -327,3 +327,14 @@ test("refresh spins and the footer says Checking… while any provider is fetchi
   assert.match($("#checked").textContent, /^(Checked|Not checked)/);
   assert.ok(!$("#f-refresh").classList.contains("spin"));
 });
+
+test("header mark fills with the title provider's tightest window, like the menu bar glyph", () => {
+  boot();
+  const fill = $("#head .tile path.mf");
+  assert.ok(fill, "fill path drawn");
+  assert.equal(fill.getAttribute("stroke-dasharray"), "30 101"); // claude active: 5h 12%, weekly 30%
+  const p = payload();
+  p.title.resolved = "agy"; // active agy account has no windows
+  boot(p);
+  assert.ok($("#head .tile path.mt") && !$("#head .tile path.mf"), "track only when nothing is used");
+});
