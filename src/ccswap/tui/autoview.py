@@ -44,6 +44,7 @@ from ccswap.settings import (
 )
 from ccswap.tui import data
 from ccswap.tui.modals import ConfirmModal
+from ccswap.tui.overview import HeaderBar
 from ccswap.tui.theme import Palette
 from ccswap.tui.widgets import AccountsPanel
 
@@ -121,6 +122,7 @@ class AutoScreen(Screen):
         self._log_items: list[tuple[str, str | AutoSwitchEvent]] = []
 
     def compose(self) -> ComposeResult:
+        yield HeaderBar(tab=self.provider)
         yield AccountsPanel(
             show_minis=False,
             provider=self.provider,

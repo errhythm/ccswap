@@ -8,6 +8,7 @@ Lines and boxes come from Textual borders, never from repeated ``─`` text.
 
 from __future__ import annotations
 
+import textwrap
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -353,7 +354,7 @@ def _head(
     if age:
         status.append(f"{' ' if status else ''}{age}", style=palette.dim)
     plan = "" if narrow else plan_text(acc)
-    plan_w = cols.plan if plan or cols.plan else 0
+    plan_w = max(cols.plan, len(plan))
     if not narrow and name_at + cols.name + 2 + plan_w + 2 + status.cell_len <= width:
         head.pad_right(max(0, name_at + cols.name - head.cell_len))
         if plan_w:
@@ -371,7 +372,7 @@ class _Whole(Text):
     """A line that folds instead of being cut (warnings whose text is the point)."""
 
 
-def _status_lines(acc: AccountSnapshot, now: float, palette: Palette) -> list[Text]:
+def _status_lines(acc: AccountSnapshot, now: float, palette: Palette, width: int = 200) -> list[Text]:
     """Recovery and urgent banked-reset warnings, as main shows them.
 
     The recovery line is left whole (Rich folds it): its file path is the one
@@ -383,7 +384,8 @@ def _status_lines(acc: AccountSnapshot, now: float, palette: Palette) -> list[Te
         if recovery.path and message.endswith(recovery.path):
             # The path on a line of its own, indented, so a fold stays inside it.
             message = message[: -len(recovery.path)].rstrip()
-            lines.append(_Whole("  ⚠ " + message, style=palette.sev_warn))
+            for i, part in enumerate(textwrap.wrap(message, max(20, width - 4))):
+                lines.append(_Whole(("  ⚠ " if i == 0 else "    ") + part, style=palette.sev_warn))
             lines.append(_Whole("    " + recovery.path, style=palette.sev_warn))
         else:
             lines.append(_Whole("  ⚠ " + message, style=palette.sev_warn))
@@ -424,7 +426,7 @@ def _money_lines(last_good: dict | None, now: float, palette: Palette, *, compac
         ("Resets", reset_display.text if reset_display and not reset_display.urgent else None),
     ):
         if value:
-            line = Text(f"  {label} ", style=palette.muted)
+            line = _Whole(f"  {label} ", style=palette.muted)  # amounts fold, never cut
             line.append(value, style=palette.foreground)
             lines.append(line)
     return lines
@@ -480,7 +482,7 @@ def account_block(
             show_tag=show_tag, narrow=narrow, marker=None, tag=tag,
         )
     ]
-    lines += _status_lines(acc, now, palette)
+    lines += _status_lines(acc, now, palette, width)
     if acc.usage.sentinel is not None:
         return _join(lines + _sentinel_lines(acc, palette), width)
     last_good = acc.usage.last_good
@@ -540,7 +542,7 @@ def compact_block(
         acc, provider, cols=cols, width=width, palette=palette, mask=mask,
         show_tag=show_tag, narrow=narrow, marker=None,
     )
-    extra = _status_lines(acc, now, palette)
+    extra = _status_lines(acc, now, palette, width)
     if acc.usage.sentinel is not None:
         sentinel = acc.usage.sentinel
         head.append("   ")
@@ -619,8 +621,9 @@ class HeaderBar(Static):
     """Brand mark and the ``ui.view`` filter as tabs, over a border-bottom
     rule. The right side carries the snapshot-age / long-refresh note."""
 
-    def __init__(self, *, id: str | None = "header") -> None:
+    def __init__(self, *, id: str | None = "header", tab: str | None = None) -> None:
         super().__init__(id=id)
+        self.tab = tab  # a screen bound to one provider (the auto view) marks it
 
     def on_mount(self) -> None:
         self.watch(self.app, "refresh_status", lambda _s: self.refresh())
@@ -630,7 +633,7 @@ class HeaderBar(Static):
         app: "CswapApp" = self.app  # type: ignore[assignment]
         palette = Palette.from_theme(app.current_theme)
         width = self.content_size.width or 80
-        current = app._view if app._view in tabs() else "combined"
+        current = self.tab or (app._view if app._view in tabs() else "combined")
         status = Text(app.refresh_status, style=palette.sev_warn)
         for short in (False, True):
             text = Text()
@@ -694,12 +697,15 @@ class ProviderPanel(Static):
         now = clock()
         shown = [a for a in accounts if a.is_active or self.show_minis]
         shown.sort(key=lambda a: not a.is_active)  # active first, then slot order
+        # Columns align the one-line rows with each other; the full card
+        # above them has its own line and needs no padding.
+        rows = [a for a in shown if not a.is_active]
         cols = Columns(
             name=max(
-                (name_text(a, palette, mask=mask, show_tag=app.tag_shown(a)).cell_len for a in shown),
+                (name_text(a, palette, mask=mask, show_tag=app.tag_shown(a)).cell_len for a in rows),
                 default=0,
             ),
-            plan=max((len(plan_text(a)) for a in shown), default=0),
+            plan=max((len(plan_text(a)) for a in rows), default=0),
         )
         blocks = []
         for acc in shown:
@@ -708,6 +714,7 @@ class ProviderPanel(Static):
                 mask=mask, show_tag=app.tag_shown(acc), narrow=narrow,
             )
             if acc.is_active:
+                common["cols"] = Columns()
                 blocks.append(account_block(acc, self.provider, threshold_for=app.bar_threshold, **common))
             else:
                 blocks.append(compact_block(acc, self.provider, **common))

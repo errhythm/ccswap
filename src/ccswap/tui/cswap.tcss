@@ -25,11 +25,17 @@ Screen {
     background: $background;
 }
 
-/* The dashboard keeps room for its menu: past 60% the panels scroll.
-   Tab focuses them (the accent scrollbar shows it), ↑↓ scroll, Tab returns. */
+/* The menu takes the rows its items need (up to half the screen) and the
+   panels the rest; past that they scroll. Tab focuses them (the accent
+   scrollbar shows it), ↑↓ scroll, Tab returns to the menu. */
 #accounts-panel {
-    max-height: 60%;
+    height: 1fr;
     scrollbar-size-vertical: 1;
+}
+
+#menu {
+    height: auto;
+    max-height: 50%;
 }
 
 #accounts-panel:focus {
@@ -76,7 +82,7 @@ Screen {
     scrollbar-size-vertical: 1;
 }
 
-#menu:focus, #accounts:focus {
+#menu:focus, #accounts:focus, #event-log:focus {
     background-tint: $foreground 0%;
 }
 
@@ -178,7 +184,7 @@ Footer {
 
 #event-log {
     background: $background;
-    border-top: solid $panel;
+    border-top: solid $line;
     padding: 0 1;
     scrollbar-size-vertical: 1;
 }
@@ -194,9 +200,10 @@ ConfirmModal, AddTokenModal, OutputModal, ThresholdAdjustModal {
     width: 64;
     max-width: 90%;
     height: auto;
-    max-height: 80%;
+    max-height: 100%;
+    overflow-y: auto;
     background: $surface;
-    border: round $panel;
+    border: round $line;
     padding: 1 2;
 }
 
@@ -263,14 +270,14 @@ ConfirmModal, AddTokenModal, OutputModal, ThresholdAdjustModal {
 }
 
 AddTokenModal Input {
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 /* -- command palette (ctrl+p) ----------------------------------------------------- */
 
 CommandPalette > Vertical, CommandPalette > Vertical:dark {
     background: $surface;
-    border: round $panel;
+    border: round $line;
 }
 
 CommandPalette #--input {
@@ -278,7 +285,7 @@ CommandPalette #--input {
 }
 
 CommandPalette #--input.--list-visible {
-    border-bottom: solid $panel;
+    border-bottom: solid $line;
 }
 
 CommandPalette > .command-palette--help-text {
@@ -301,7 +308,7 @@ CommandList > .option-list--option-highlighted {
 
 /* -- scrollbars: quiet, in the line colour ------------------------------------ */
 
-#menu, #accounts, #accounts-panel, #event-log {
+#menu, #accounts, #accounts-panel, #event-log, CommandList, .modal-box {
     scrollbar-color: $line;
     scrollbar-color-hover: $secondary;
     scrollbar-color-active: $primary;

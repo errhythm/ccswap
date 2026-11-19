@@ -21,6 +21,7 @@ from ccswap.settings import parse_model_thresholds
 from ccswap.tui.data import PROVIDER_LABELS, PROVIDERS
 from ccswap.tui.modals import OutputModal
 from ccswap.tui.option_help import option_help
+from ccswap.tui.overview import HeaderBar
 from ccswap.tui.widgets import AccountsPanel, CyclingListView, MenuItem
 
 if TYPE_CHECKING:
@@ -98,6 +99,7 @@ class SettingsScreen(Screen):
         self._claude_busy = False
 
     def compose(self) -> ComposeResult:
+        yield HeaderBar()
         yield AccountsPanel(
             provider=None if self.app._view == "combined" else self.app._view,
             id="accounts-panel",
