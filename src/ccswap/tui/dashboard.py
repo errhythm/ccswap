@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Callable
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.geometry import Region
+from textual.geometry import Region, Spacing
 from textual.screen import Screen
 from textual.widgets import ListView, Static
 
@@ -316,7 +316,10 @@ class DashboardScreen(ViewTabs, Screen):
             if row_number == number:
                 top = provider_panel.virtual_region.y + 1  # the border's top row
                 panel.scroll_to_region(
-                    Region(0, top + start, 1, end - start), animate=False, x_axis=False
+                    Region(0, top + start, 1, end - start),
+                    spacing=Spacing(1, 0, 1, 0),  # keep a row of context (a border, a title)
+                    animate=False,
+                    x_axis=False,
                 )
                 return
 
