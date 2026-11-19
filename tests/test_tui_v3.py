@@ -511,6 +511,14 @@ async def test_sidebar_shows_at_120_cols_and_hides_below_live(tmp_path):
         assert sidebar.display and sidebar.region.width == 44
         assert "#1 → #2 at 90% of 5h" in str(app.screen.query_one("#up-next").render())
         assert "#2 → #1" in str(app.screen.query_one("#recent-switches").render())
+        app.step_view(-1)  # Antigravity: the log has no switches of its own
+        await settle(pilot)
+        assert str(app.screen.query_one("#recent-switches").render()) == (
+            "the log records Claude Code switches only"
+        )
+        assert str(app.screen.query_one("#up-next").render()) == "Antigravity  manual switching only"
+        app.step_view(1)
+        await settle(pilot)
         for width, shown in ((119, False), (120, True), (100, False), (80, False), (125, True)):
             await pilot.resize_terminal(width, 40)
             await settle(pilot)

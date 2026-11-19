@@ -197,6 +197,12 @@ SettingsScreen #menu {
     padding: 0;
 }
 
+/* Rows, the switcher and the sidebar lines are one line each: cut, never wrapped. */
+SettingRow Static, #settings-sections, .side-panel {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
 #setting-help {
     height: auto;
     margin: 1 1 0 1;

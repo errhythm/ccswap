@@ -197,11 +197,16 @@ def up_next_text(rows: list[UpNext], palette: Palette, tr: Callable[[str], str] 
 
 
 def recent_text(
-    rows: list[RecentSwitch], palette: Palette, now: float, tr: Callable[[str], str] = str
+    rows: list[RecentSwitch],
+    palette: Palette,
+    now: float,
+    tr: Callable[[str], str] = str,
+    *,
+    empty: str = "no switches logged yet",
 ) -> Text:
     text = Text(no_wrap=True, overflow="ellipsis")
     if not rows:
-        text.append(tr("no switches logged yet"), style=palette.dim)
+        text.append(tr(empty), style=palette.dim)
         return text
     stamps = [when(r.at, now) for r in rows]
     stamp_w = max(len(s) for s in stamps)
@@ -270,13 +275,15 @@ class Sidebar(Vertical):
             )
             for provider in providers
         ]
-        recent = [r for r in recent_switches(root / LOG_NAME) if r.provider in providers]
+        logged = recent_switches(root / LOG_NAME)
+        recent = [r for r in logged if r.provider in providers]
+        empty = "no switches logged yet" if not logged else "the log records Claude Code switches only"
         try:
-            app.call_from_thread(self._show, rows, recent)
+            app.call_from_thread(self._show, rows, recent, empty)
         except RuntimeError:  # the app closed meanwhile
             self._computing = False
 
-    def _show(self, rows: list[UpNext], recent: list[RecentSwitch]) -> None:
+    def _show(self, rows: list[UpNext], recent: list[RecentSwitch], empty: str) -> None:
         self._computing = False
         if not self.is_attached:
             return
@@ -286,5 +293,5 @@ class Sidebar(Vertical):
         tr = self.app.gettext
         self.query_one("#up-next", Static).update(up_next_text(rows, palette, tr))
         self.query_one("#recent-switches", Static).update(
-            recent_text(recent, palette, overview.clock(), tr)
+            recent_text(recent, palette, overview.clock(), tr, empty=empty)
         )

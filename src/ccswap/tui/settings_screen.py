@@ -117,7 +117,7 @@ _HINTS = {
     "claude:claude.mod": "on · off",
 }
 _TOGGLES = {"setting:mask", "claude:claude.statusline", "claude:claude.mod"}
-NAME_W = 18  # widest row name plus a gap
+NAME_W = 20  # widest row name plus a gap
 VALUE_W = 21  # "‹ inherit (90%) ›" plus a gap
 
 
