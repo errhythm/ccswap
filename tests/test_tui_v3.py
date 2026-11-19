@@ -98,6 +98,19 @@ async def test_footer_keys_per_screen_never_clip(tmp_path, fake_engine, state, w
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", list(NARROW))
+async def test_footer_never_clips_at_72_cols(tmp_path, fake_engine, state):
+    app = make_app(FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path))
+    async with app.run_test(size=(72, 30)) as pilot:
+        await settle(pilot)
+        await _goto(pilot, state)
+        labels = await _footer(pilot, 72)  # asserts every key fits left of ^p palette
+        assert labels, state
+        for engine in list(_FakeEngine.instances):
+            engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_narrow_footer_drops_option_help_then_view_before_clipping(tmp_path):
     app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
     async with app.run_test(size=(80, 30)) as pilot:
@@ -526,3 +539,16 @@ async def test_sidebar_shows_at_120_cols_and_hides_below_live(tmp_path):
             panels = app.screen.query_one("#accounts-panel")
             assert panels.region.right <= (sidebar.region.x if shown else width)
         assert not any(c[0] in ("switch", "switch_to") for c in claude.calls)  # read-only
+
+
+def test_sidebar_compute_failure_does_not_freeze_it(monkeypatch):
+    from ccswap.tui import sidebar
+
+    def boom(*_a, **_k):
+        raise ValueError("malformed usage record")
+
+    panel = sidebar.Sidebar.__new__(sidebar.Sidebar)
+    panel._computing = True
+    monkeypatch.setattr(panel, "_compute_once", boom, raising=False)
+    panel._compute(("claude",), {})
+    assert panel._computing is False  # the next snapshot can compute again

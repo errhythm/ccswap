@@ -378,6 +378,8 @@ class CswapFooter(Footer):
             for action in _FOOTER_DROPS:
                 if action == "toggle_theme" or used() > room:
                     keys = [k for k in keys if k[0].action != action]
+            while keys and used() > room:  # last resort: drop from the end, never clip
+                keys.pop()
         for binding, enabled, tooltip in keys:
             yield FooterKey(
                 binding.key,

@@ -256,6 +256,12 @@ class Sidebar(Vertical):
         )
 
     def _compute(self, providers: tuple[str, ...], snapshots: dict) -> None:
+        try:
+            self._compute_once(providers, snapshots)
+        except Exception:  # one bad record must not freeze the sidebar for the session
+            self._computing = False
+
+    def _compute_once(self, providers: tuple[str, ...], snapshots: dict) -> None:
         from ccswap.settings import load_settings, parse_model_names
 
         app: "CswapApp" = self.app  # type: ignore[assignment]
