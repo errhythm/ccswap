@@ -25,7 +25,7 @@ from ccswap.subscription import plan_label
 from ccswap.switcher import ERROR_NOTES
 from ccswap.tui import data
 from ccswap.tui.data import PROVIDER_LABELS, PROVIDERS, capabilities
-from ccswap.tui.theme import Palette
+from ccswap.tui.theme import CRIT_PCT, Palette
 from ccswap.usage_store import STALE_OK_S
 
 if TYPE_CHECKING:
@@ -97,6 +97,14 @@ def plan_text(acc: AccountSnapshot) -> str:
     return ""
 
 
+def tick_color(pct: float | None, tick: float | None, palette: Palette) -> str:
+    """Below its gate the tick is the dim track colour; at or past the gate it
+    turns bad (usage >= 90%) or warn."""
+    if pct is None or tick is None or pct < tick:
+        return palette.dim
+    return palette.sev_crit if pct >= CRIT_PCT else palette.sev_warn
+
+
 def gauge(
     pct: float | None,
     width: int,
@@ -114,9 +122,10 @@ def gauge(
     half = cells - full >= 0.5 and full < width
     color = palette.severity(pct) if pct is not None else palette.dim
     fill = f"{color} dim" if stale else color
+    tick_style = tick_color(pct, tick, palette)
     for i in range(width):
         if i == mark:
-            text.append(_TICK, style=palette.sev_warn)
+            text.append(_TICK, style=tick_style)
         elif i < full:
             text.append(_FILLED, style=fill)
         elif i == full and half:

@@ -313,3 +313,24 @@ async def test_settings_account_panel_is_keyboard_scrollable(tmp_path):
         await pilot.press("comma")
         await settle(pilot)
         assert app.screen.query_one("#accounts-panel").can_focus
+
+
+@pytest.mark.parametrize(
+    "pct, tick, expected",
+    [
+        (59, 90, "dim"),        # under its gate: the track colour
+        (None, 90, "dim"),      # unknown usage never claims a crossing
+        (83, 80, "sev_warn"),   # at/over the gate, under 90%
+        (80, 80, "sev_warn"),   # exactly at the gate counts as over
+        (94, 90, "sev_crit"),   # over the gate and >= 90%
+        (90, 75, "sev_crit"),
+    ],
+)
+def test_tick_colour_follows_the_gate(pct, tick, expected):
+    from ccswap.tui.theme import CSWAP_LIGHT
+
+    for palette in (Palette.DARK, Palette.from_theme(CSWAP_LIGHT)):
+        text = overview.gauge(pct, 20, palette, tick=tick)
+        at = text.plain.index("┃")
+        styles = [str(s.style) for s in text.spans if s.start <= at < s.end]
+        assert styles == [getattr(palette, expected)]
