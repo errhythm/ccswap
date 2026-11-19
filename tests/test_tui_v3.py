@@ -569,3 +569,143 @@ async def test_clicks_and_drags_never_select_text(tmp_path):
         await settle(pilot)
         assert not app.screen.selections
         assert app.screen.get_selected_text() is None
+
+
+# ---------------------------------------------------------------------------
+# the dashboard's one cursor
+# ---------------------------------------------------------------------------
+
+
+def _three_providers(tmp_path):
+    claude = FakeSwitcher([make_account(1, active=True), make_account(2), make_account(3, disabled=True)], tmp_path)
+    codex = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+    agy = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+    from ccswap.tui.app import CswapApp
+
+    return CswapApp(claude, codex_switcher=codex, agy_switcher=agy), claude, codex, agy
+
+
+@pytest.mark.asyncio
+async def test_arrows_walk_every_account_row_then_the_menu_and_wrap(tmp_path):
+    from textual.widgets import ListView
+
+    app, *_ = _three_providers(tmp_path)
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        panel = app.screen.query_one("#accounts-panel")
+        menu = app.screen.query_one("#menu", ListView)
+        menu_size = len(menu.children)
+
+        def where():
+            return panel.cursor or ("menu", menu.index)
+
+        await pilot.press("down")  # start on the menu's first entry; walk to its end
+        seen = [where()]
+        for _ in range(menu_size - 1 + 7):
+            await pilot.press("down")
+            seen.append(where())
+        accounts = [("claude", "1"), ("claude", "2"), ("claude", "3"),
+                    ("codex", "1"), ("codex", "2"), ("agy", "1"), ("agy", "2")]
+        assert seen[menu_size - 1:] == accounts + [("menu", 0)]  # wrapped
+        for _ in range(2):
+            await pilot.press("up")
+        assert where() == ("agy", "1")
+        # one highlight at a time: the menu shows none while an account has it
+        assert menu.index is None and menu.has_focus
+        drawn = app.screen.query_one("#panel-agy").render()
+        palette_cursor = __import__("ccswap.tui.theme", fromlist=["Palette"]).Palette.from_theme(
+            app.current_theme).cursor
+        assert sum(1 for s in drawn.spans if palette_cursor in str(s.style)) >= 1
+        assert not any(palette_cursor in str(s.style) for s in app.screen.query_one("#panel-claude").render().spans)
+
+
+@pytest.mark.asyncio
+async def test_enter_on_an_account_switches_like_the_switch_screen(tmp_path):
+    app, claude, codex, agy = _three_providers(tmp_path)
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        await pilot.press("up", *["up"] * 6)  # menu 0 → agy 2 → … → claude 1 (active)
+        assert app.screen.query_one("#accounts-panel").cursor == ("claude", "1")
+        await pilot.press("enter")  # the active row does nothing
+        await settle(pilot)
+        assert claude.calls == []
+        await pilot.press("down", "enter")
+        await settle(pilot)
+        assert claude.calls == [("switch_to", "2")]  # the Switch screen's do_switch
+        # #2 is now active and drawn first; walk to the disabled #3.
+        panel = app.screen.query_one("#accounts-panel")
+        for _ in range(5):
+            if panel.cursor == ("claude", "3"):
+                break
+            await pilot.press("down")
+        await pilot.press("enter")  # disabled: still switches, like `ccswap switch 3`
+        await settle(pilot)
+        assert claude.calls[-1] == ("switch_to", "3")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider, ups", [("codex", 3), ("agy", 1)])
+async def test_codex_and_antigravity_ask_before_switching(tmp_path, provider, ups):
+    from ccswap.tui.modals import ConfirmModal
+
+    app, _claude, codex, agy = _three_providers(tmp_path)
+    fake = {"codex": codex, "agy": agy}[provider]
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        await pilot.press(*["up"] * ups)
+        assert app.screen.query_one("#accounts-panel").cursor == (provider, "2")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, ConfirmModal) and fake.calls == []
+        await pilot.press("n")
+        await settle(pilot)
+        assert fake.calls == []
+        await pilot.press("enter", "y")
+        await settle(pilot)
+        assert fake.calls == [("switch_to", "2")]
+
+
+@pytest.mark.asyncio
+async def test_one_click_picks_a_row_and_only_a_second_click_switches(tmp_path):
+    app, claude, *_ = _three_providers(tmp_path)
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        panel = app.screen.query_one("#panel-claude")
+        start = next(s for s, _e, n in panel.rows if n == "2")
+        await pilot.click("#panel-claude", offset=(4, 1 + start))
+        await settle(pilot)
+        assert app.screen.query_one("#accounts-panel").cursor == ("claude", "2")
+        assert claude.calls == []
+        await pilot.press("up", "down")  # moving away forgets the first click
+        await pilot.click("#panel-claude", offset=(4, 1 + start))
+        await settle(pilot)
+        assert claude.calls == []
+        await pilot.click("#panel-claude", offset=(4, 1 + start))
+        await settle(pilot)
+        assert claude.calls == [("switch_to", "2")]
+
+
+@pytest.mark.asyncio
+async def test_locked_watch_moves_the_cursor_but_never_switches(tmp_path):
+    from textual.widgets import ListView
+
+    from ccswap.tui.widgets import AccountItem
+
+    claude = FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path)
+    app = make_app(claude, start="watch")
+    async with app.run_test(size=(100, 40)) as pilot:
+        await settle(pilot)
+        listview = app.screen.query_one("#accounts", ListView)
+        assert app.screen.locked and listview.index is None
+        await pilot.press("down", "down")
+        await settle(pilot)
+        assert isinstance(listview.highlighted_child, AccountItem)
+        assert listview.highlighted_child.number == "2"
+        await pilot.press("enter")
+        await settle(pilot)
+        await pilot.click(AccountItem)
+        await settle(pilot)
+        assert claude.calls == [] and app.screen.locked
+        await pilot.press("s", "down", "enter")  # armed: Enter switches
+        await settle(pilot)
+        assert claude.calls == [("switch_to", "2")]

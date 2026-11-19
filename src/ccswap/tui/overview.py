@@ -712,6 +712,8 @@ class ProviderPanel(Static):
         self.provider = provider
         self.show_minis = show_minis
         self._width = 0
+        # (first row, last row + 1, account number) of each block last drawn.
+        self.rows: list[tuple[int, int, str]] = []
 
     def get_content_height(self, container, viewport, width: int) -> int:
         # Lines are cut or folded to the width, so measure at the width
@@ -753,6 +755,7 @@ class ProviderPanel(Static):
             ),
             plan=max((len(plan_text(a)) for a in rows), default=0),
         )
+        cursor = getattr(self.parent, "cursor", None)
         blocks = []
         for acc in shown:
             common = dict(
@@ -765,12 +768,41 @@ class ProviderPanel(Static):
             else:
                 blocks.append(compact_block(acc, self.provider, **common))
         if not blocks:
+            self.rows = []
             return Text(app.gettext("no active managed login"), style=palette.muted)
         text = Text(overflow="fold")
-        for i, block in enumerate(blocks):
+        rows: list[tuple[int, int, str]] = []
+        row = 0
+        for i, (acc, block) in enumerate(zip(shown, blocks)):
             if i:
                 # A blank line around multi-line blocks; one-line rows stack.
                 multi = "\n" in block.plain or "\n" in blocks[i - 1].plain
                 text.append("\n\n" if multi else "\n")
+                row += 2 if multi else 1
+            lines = block.split("\n", allow_blank=True)
+            height = sum(max(1, -(-line.cell_len // width)) for line in lines)
+            rows.append((row, row + height, acc.number))
+            row += height - 1
+            if cursor == (self.provider, acc.number):
+                # The dashboard cursor: the menu's accent tint, the whole block.
+                block = Text(overflow="fold")
+                for j, line in enumerate(lines):
+                    if j:
+                        block.append("\n")
+                    line.pad_right(max(0, width - line.cell_len))
+                    line.stylize(f"bold on {palette.cursor}")
+                    block.append(line)
             text.append(block)
+        self.rows = rows
         return text
+
+    def number_at(self, y: int) -> str | None:
+        """The account drawn on content row ``y``, if any."""
+        return next((number for start, end, number in self.rows if start <= y < end), None)
+
+    def on_click(self, event) -> None:
+        offset = event.get_content_offset(self)
+        number = None if offset is None else self.number_at(offset.y)
+        handler = getattr(self.screen, "account_clicked", None)
+        if number is not None and handler is not None:
+            handler(self.provider, number)

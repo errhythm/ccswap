@@ -1701,16 +1701,19 @@ class TestDashboard:
             from textual.widgets import ListView
 
             menu = app.screen.query_one("#menu", ListView)
+            panel = app.screen.query_one("#accounts-panel")
             last = len(menu.children) - 1
             assert menu.index == 0
-            await pilot.press("up")
-            assert menu.index == last
-            await pilot.press("down")
-            assert menu.index == 0
-            await pilot.press("k")
-            assert menu.index == last
+            await pilot.press("up")  # above the menu: the account row
+            assert menu.index is None and panel.cursor == ("claude", "1")
+            await pilot.press("up")  # above the first row: wraps to the end
+            assert menu.index == last and panel.cursor is None
+            await pilot.press("down")  # past the end: wraps to the account
+            assert panel.cursor == ("claude", "1")
             await pilot.press("j")
             assert menu.index == 0
+            await pilot.press("k", "k")
+            assert menu.index == last
 
     async def test_s_opens_switch_screen_and_enter_switches(self, tmp_path):
         fake = FakeSwitcher(

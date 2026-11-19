@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Callable
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.geometry import Region
 from textual.screen import Screen
 from textual.widgets import ListView, Static
 
@@ -38,7 +39,7 @@ from ccswap.tui.data import (
     present_tag,
 )
 from ccswap.tui.option_help import option_help
-from ccswap.tui.overview import HeaderBar, account_count_note
+from ccswap.tui.overview import HeaderBar, ProviderPanel, account_count_note
 from ccswap.tui.settings_screen import SettingsScreen
 from ccswap.tui.sidebar import Sidebar
 from ccswap.tui.modals import OutputModal
@@ -94,8 +95,11 @@ class DashboardScreen(ViewTabs, Screen):
         Binding("comma", "open_settings", mark("Settings"), show=False),
         Binding("g", "app.open_auto", mark("Auto view"), show=False),
         Binding("f", "app.refresh_full", mark("Refresh usage"), show=False),
-        Binding("j", "cursor_down", show=False),
-        Binding("k", "cursor_up", show=False),
+        # One cursor walks the account rows, then the menu (priority: the
+        # focused menu would otherwise take ↑/↓ and Enter for itself).
+        Binding("down,j", "cursor_down", show=False, priority=True),
+        Binding("up,k", "cursor_up", show=False, priority=True),
+        Binding("enter", "select_cursor", show=False, priority=True),
     ]
 
     app: "CswapApp"
@@ -104,6 +108,9 @@ class DashboardScreen(ViewTabs, Screen):
         super().__init__()
         # Stack of (title, entries); depth 1 = root menu.
         self._menu_stack: list[tuple[str, MenuEntries]] = []
+        # ("account", provider, number) or ("menu", index): the one cursor.
+        self._cursor: tuple = ("menu", 0)
+        self._clicked: tuple[str, str] | None = None  # first click of a double pick
 
     def compose(self) -> ComposeResult:
         yield HeaderBar()
@@ -123,10 +130,8 @@ class DashboardScreen(ViewTabs, Screen):
 
     async def on_mount(self) -> None:
         localize_bindings(self, self.app.gettext)
-        # Tab moves focus to the panels (↑↓/PgUp/PgDn scroll them) and back to
-        # the menu, so a tall panel stays reachable without a mouse.
-        self.query_one("#accounts-panel", AccountsPanel).can_focus = True
         self.query_one("#menu", ListView).focus()
+        self.watch(self.app, "snapshots", lambda _s: self.call_after_refresh(self._keep_cursor))
         await self._push_menu("menu", self._root_entries())
 
     # -- menu plumbing --------------------------------------------------------
@@ -256,6 +261,106 @@ class DashboardScreen(ViewTabs, Screen):
             for label, action_id in entries
         )
         menu.index = 0
+        self._cursor = ("menu", 0)
+        self._place_cursor()
+
+    # -- the one cursor: account rows, then menu entries ------------------------
+
+    def _stops(self) -> list[tuple]:
+        """Every selectable row, top to bottom: each shown account, then each
+        menu entry."""
+        stops: list[tuple] = []
+        panel = self.query_one("#accounts-panel", AccountsPanel)
+        for provider_panel in panel.query(ProviderPanel):
+            if provider_panel.display:
+                stops.extend(
+                    ("account", provider_panel.provider, number)
+                    for _start, _end, number in provider_panel.rows
+                )
+        menu = self.query_one("#menu", ListView)
+        stops.extend(("menu", i) for i, item in enumerate(menu.children) if not item.disabled)
+        return stops
+
+    def _move(self, step: int) -> None:
+        stops = self._stops()
+        if not stops:
+            return
+        at = stops.index(self._cursor) if self._cursor in stops else -1 if step > 0 else 0
+        self._cursor = stops[(at + step) % len(stops)]
+        self._clicked = None
+        self._place_cursor()
+
+    def _place_cursor(self) -> None:
+        """Draw the cursor where it is: the menu's own highlight, or the
+        account row's tint (then the menu shows none), and keep it in view."""
+        panel = self.query_one("#accounts-panel", AccountsPanel)
+        menu = self.query_one("#menu", ListView)
+        if self._cursor[0] == "menu":
+            panel.cursor = None
+            if menu.index != self._cursor[1]:
+                menu.index = self._cursor[1]
+        else:
+            panel.cursor = self._cursor[1:]
+            menu.index = None
+        panel.refresh(layout=True)
+        if self._cursor[0] == "account":
+            self.call_after_refresh(self._scroll_to_cursor)
+
+    def _scroll_to_cursor(self) -> None:
+        if self._cursor[0] != "account":
+            return
+        _kind, provider, number = self._cursor
+        panel = self.query_one("#accounts-panel", AccountsPanel)
+        provider_panel = panel.query_one(f"#panel-{provider}", ProviderPanel)
+        for start, end, row_number in provider_panel.rows:
+            if row_number == number:
+                top = provider_panel.virtual_region.y + 1  # the border's top row
+                panel.scroll_to_region(
+                    Region(0, top + start, 1, end - start), animate=False, x_axis=False
+                )
+                return
+
+    def _keep_cursor(self) -> None:
+        """New snapshots: an account under the cursor that is gone hands the
+        cursor back to the menu."""
+        if self._cursor[0] == "account" and self._cursor not in self._stops():
+            self._cursor = ("menu", 0)
+            self._place_cursor()
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        # A click on a menu entry moves the one cursor there too.
+        if event.list_view.id == "menu" and event.list_view.index is not None:
+            if self._cursor != ("menu", event.list_view.index):
+                self._cursor = ("menu", event.list_view.index)
+                self._place_cursor()
+
+    def action_select_cursor(self) -> None:
+        if self._cursor[0] == "menu":
+            self.query_one("#menu", ListView).action_select_cursor()
+        else:
+            self._switch_to(*self._cursor[1:])
+
+    def account_clicked(self, provider: str, number: str) -> None:
+        """First click moves the cursor; a second click on the same row picks it."""
+        key = (provider, number)
+        if self._clicked == key and self._cursor == ("account", *key):
+            self._clicked = None
+            self._switch_to(provider, number)
+            return
+        self._cursor = ("account", *key)
+        self._clicked = key
+        self._place_cursor()
+
+    def _switch_to(self, provider: str, number: str) -> None:
+        """What Switch does with this row: the active one stays put, Codex and
+        Antigravity ask first (they restart), a disabled one still switches."""
+        from ccswap.tui.commands import _switch_or_ask
+
+        snap = self.app.snapshots.get(provider)
+        acc = next((a for a in (snap.accounts if snap else ()) if a.number == number), None)
+        if acc is None or acc.is_active or not capabilities(provider).switch:
+            return
+        _switch_or_ask(self.app, provider, partial(self.app.do_switch, provider, number))()
 
     def action_option_help(self) -> None:
         menu = self.query_one("#menu", ListView)
@@ -334,10 +439,10 @@ class DashboardScreen(ViewTabs, Screen):
         await self._pop_menu()
 
     def action_cursor_down(self) -> None:
-        self.query_one("#menu", ListView).action_cursor_down()
+        self._move(1)
 
     def action_cursor_up(self) -> None:
-        self.query_one("#menu", ListView).action_cursor_up()
+        self._move(-1)
 
     def _account_label(self, acc: AccountSnapshot) -> str:
         return account_label(acc.alias, acc.email, mask=self.app.mask_accounts)
@@ -623,8 +728,8 @@ class WatchScreen(AccountListScreen):
         first_build: bool,
         previous: int | None,
     ) -> int | None:
-        if not self._selecting:
-            return None  # monitor mode: no cursor at all
+        if not self._selecting and previous is None:
+            return None  # monitor mode: no cursor until an arrow key places one
         return super()._index_after_build(rows, first_build, previous)
 
     def _set_selecting(self, on: bool) -> None:
@@ -663,16 +768,10 @@ class WatchScreen(AccountListScreen):
         else:
             self.app.pop_screen()
 
+    # Locked or not, ↑/↓ move the cursor (the list scrolls to follow it);
+    # only Enter is held back until `s` arms selection.
     def action_nav_down(self) -> None:
-        listview = self.query_one("#accounts", ListView)
-        if self._selecting:
-            listview.action_cursor_down()
-        else:
-            listview.scroll_down(animate=False)
+        self.query_one("#accounts", ListView).action_cursor_down()
 
     def action_nav_up(self) -> None:
-        listview = self.query_one("#accounts", ListView)
-        if self._selecting:
-            listview.action_cursor_up()
-        else:
-            listview.scroll_up(animate=False)
+        self.query_one("#accounts", ListView).action_cursor_up()

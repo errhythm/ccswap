@@ -63,6 +63,7 @@ class Palette:
     antigravity: str = ANTIGRAVITY
     mark: str = MARK
     hover: str = SURFACE  # block-hover-background
+    cursor: str = "#3F2822"  # block-cursor-background flattened on the background
 
     DARK: ClassVar["Palette"]
 
@@ -91,11 +92,22 @@ class Palette:
             antigravity=theme.variables.get("antigravity", ANTIGRAVITY),
             mark=theme.variables.get("mark", MARK),
             hover=theme.variables.get("block-hover-background", SURFACE),
+            cursor=_flatten(theme.variables.get("block-cursor-background", SURFACE), theme.background),
         )
 
     def provider(self, provider: str) -> str:
         """The provider's own colour (panel titles, tab marks, active dots)."""
         return {"codex": self.codex, "agy": self.antigravity}.get(provider, self.accent)
+
+
+def _flatten(color: str, background: str | None) -> str:
+    """A "#rrggbb NN%" theme colour as the solid colour it paints on the
+    background (Rich styles have no alpha)."""
+    from textual.color import Color
+
+    value, _space, pct = color.partition(" ")
+    alpha = float(pct.rstrip("%")) / 100 if pct else 1.0
+    return Color.parse(background or BACKGROUND).blend(Color.parse(value), alpha).hex
 
 
 CSWAP_DARK = Theme(

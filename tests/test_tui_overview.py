@@ -265,7 +265,7 @@ async def test_footer_lists_only_keys_that_work(tmp_path, frozen):
 
 
 @pytest.mark.asyncio
-async def test_tall_panels_scroll_by_keyboard_and_the_menu_stays_usable(tmp_path, frozen):
+async def test_tall_panels_follow_the_cursor_and_the_menu_stays_usable(tmp_path, frozen):
     from textual.widgets import ListView
 
     from ccswap.tui.dashboard import WatchScreen
@@ -277,20 +277,21 @@ async def test_tall_panels_scroll_by_keyboard_and_the_menu_stays_usable(tmp_path
         panel = app.screen.query_one(AccountsPanel)
         menu = app.screen.query_one("#menu", ListView)
         assert menu.has_focus and menu.region.height >= 3
+        assert not panel.can_focus  # no Tab-into-panels focus state
         agy = app.screen.query_one("#panel-agy")
         assert not panel.region.contains_region(agy.region)  # below the fold
-        await pilot.press("tab")
-        assert panel.has_focus
-        await pilot.press("end")
+        await pilot.press("up")  # from the menu up to the last account: Antigravity
         await settle(pilot)
-        assert panel.scroll_y > 0
-        assert panel.region.contains_region(agy.region)  # its bottom border too
-        await pilot.press("tab")
+        assert panel.cursor == ("agy", "1")
+        assert panel.scroll_y > 0  # scrolled to keep the cursor in view
         assert menu.has_focus
-        menu.index = 1  # "Watch accounts"
+        await pilot.press("down", "down")  # the last account, then into the menu
+        await settle(pilot)
+        assert panel.cursor is None and menu.index == 1  # "Watch accounts"
         await pilot.press("enter")
         await settle(pilot)
         assert isinstance(app.screen, WatchScreen)
+
 
 
 def test_gauge_glyphs_half_cell_and_threshold_tick():

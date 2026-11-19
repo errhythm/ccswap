@@ -130,6 +130,8 @@ class AccountsPanel(VerticalScroll, can_focus=False):
         super().__init__(id=id, classes="accounts-panel")
         self._show_minis = show_minis
         self._provider = provider
+        # (provider, number) of the account row under the dashboard cursor.
+        self.cursor: tuple[str, str] | None = None
 
     @property
     def provider(self) -> str | None:
