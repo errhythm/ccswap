@@ -95,3 +95,38 @@ def maybe_ask(switcher, from_num: str | None) -> None:
         atomic_write_text(path, json.dumps(state))
     except Exception:
         pass
+
+
+def dismissed(backup_dir: Path) -> bool:
+    """The user starred, opened the repo, or picked "never" (CLI or TUI)."""
+    return bool(_read_state(Path(backup_dir) / "cache" / STATE_NAME).get("never"))
+
+
+def star(backup_dir: Path) -> str:
+    """Star the repo with a signed-in GitHub CLI, else open it in the browser.
+    Either way the prompt never shows again. Returns "starred" or "opened"."""
+    import shutil
+    import subprocess
+
+    how = "opened"
+    gh = shutil.which("gh")
+    if gh:
+        try:
+            done = subprocess.run(
+                [gh, "api", "-X", "PUT", "user/starred/errhythm/ccswap"],
+                capture_output=True, timeout=15,
+            )
+            how = "starred" if done.returncode == 0 else how
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if how == "opened":
+        webbrowser.open(REPO_URL)
+    path = Path(backup_dir) / "cache" / STATE_NAME
+    state = _read_state(path)
+    state["never"] = True
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, json.dumps(state))
+    except OSError:
+        pass
+    return how

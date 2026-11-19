@@ -73,6 +73,8 @@ class CswapApp(App):
         # Description is rewritten to "Mask on" / "Mask off" so the footer
         # shows the live state, not just the key.
         Binding("m", "toggle_mask", mark("Mask off")),
+        # The header shows this key ("★ star on GitHub *"), so the footer doesn't.
+        Binding("asterisk", "star", mark("Star on GitHub"), show=False),
     ]
 
     # Screen classes -narrow / -medium / -wide drive the layout from TCSS.
@@ -100,6 +102,8 @@ class CswapApp(App):
     # Display-only. Slot numbers and aliases stay readable so a masked
     # dashboard, watch page, and auto-switch view can still be operated.
     mask_accounts: reactive[bool] = reactive(False)
+    # The header's star hint: "prompt", "thanks" (a few seconds), or "".
+    star_hint: reactive[str] = reactive("")
 
     def __init__(
         self,
@@ -167,7 +171,9 @@ class CswapApp(App):
             self._saved_view = ui_settings.view  # Settings' row; tabs never write it
             self.mask_accounts = ui_settings.mask
             self.org_tag = ui_settings.org_tag
+            self._star_setting = ui_settings.star_prompt
         except Exception:
+            self._star_setting = False
             self._theme_name = "auto"
             self._view = "combined"
             self._saved_view = "combined"
@@ -200,6 +206,7 @@ class CswapApp(App):
 
     def on_mount(self) -> None:
         localize_bindings(self, self.gettext)
+        self._sync_star()
         self.register_theme(CSWAP_DARK)
         self.register_theme(CSWAP_LIGHT)
         resolved = self._resolved_theme()
@@ -951,6 +958,51 @@ class CswapApp(App):
         if self._is_mounted:
             for screen in self.screen_stack:
                 screen.refresh_bindings()
+
+    def _sync_star(self) -> None:
+        from ccswap.star_prompt import dismissed
+
+        try:
+            gone = dismissed(self.switcher_for("claude").backup_dir)
+        except Exception:
+            gone = True
+        self.star_hint = "prompt" if self._star_setting and not gone else ""
+        self.refresh_bindings()
+
+    def apply_star_prompt(self, on: bool) -> None:
+        """Settings › Display › Star prompt: writes ui.starPrompt."""
+        self._star_setting = bool(on)
+        self._sync_star()
+        try:
+            set_setting(self.switcher_for("claude").backup_dir, "ui.starPrompt", "on" if on else "off")
+        except Exception as exc:
+            self.notify(
+                self.gettext("Could not save the star prompt setting: {exc}").format(exc=exc),
+                severity="warning",
+            )
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "star":
+            return self.star_hint == "prompt"
+        return True
+
+    def action_star(self) -> None:
+        if self.star_hint != "prompt":
+            return
+        self.star_hint = "thanks"
+        self.refresh_bindings()
+        self.run_worker(self._star_work, thread=True, exclusive=True, group="star")
+
+    def _star_work(self) -> None:
+        from ccswap.star_prompt import star
+
+        try:
+            how = star(self.switcher_for("claude").backup_dir)
+        except Exception:
+            how = "opened"
+        if how == "opened":
+            self.call_from_thread(self.notify, self.gettext("Opened GitHub in your browser"), timeout=3)
+        self.call_from_thread(self.set_timer, 4.0, lambda: setattr(self, "star_hint", ""))
 
     def action_toggle_mask(self) -> None:
         self.apply_mask(not self.mask_accounts)

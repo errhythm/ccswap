@@ -1153,3 +1153,21 @@ def test_usage_expiry_warning_preserves_json_and_survives_status(switcher, monke
     payload = instance.usage_status(json_output=True)
     assert payload["accounts"][0]["usage"] == usage
     assert "⚠" not in capsys.readouterr().out
+
+
+def test_switch_is_recorded_in_the_shared_switch_log(switcher, monkeypatch):
+    import logging
+
+    monkeypatch.setattr(logging.getLogger("ccswap"), "handlers", [])
+    instance, home = switcher
+    _write_live(home, _auth("one@example.com", "account-one"))
+    instance.add_account(assume_yes=True)
+    _write_live(home, _auth("two@example.com", "account-two"))
+    instance.add_account(assume_yes=True)
+    instance.switch_to("1", json_output=True)
+    instance.switch_to("1", json_output=True)  # already active: not a switch
+    for handler in logging.getLogger("ccswap").handlers:
+        handler.close()
+    lines = (instance.backup_dir / "claude-swap.log").read_text().splitlines()
+    assert [line.split(" - ")[-1] for line in lines if "Switched" in line] == [
+        "Switched codex from account 2 to 1"]

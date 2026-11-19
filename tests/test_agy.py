@@ -74,7 +74,10 @@ def two_accounts(provider):
     provider.add_account()
 
 
-def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider):
+def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider, monkeypatch):
+    import logging
+
+    monkeypatch.setattr(logging.getLogger("ccswap"), "handlers", [])
     two_accounts(provider)
     outgoing = auth("unknown@example.com", future_field={"revision": 3})
     native(outgoing)
@@ -83,6 +86,10 @@ def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider):
     assert read_native() == auth()
     assert json.loads(provider._credential_path("3").read_text()) == outgoing
     assert provider.status()["activeAccountNumber"] == 1
+    for handler in logging.getLogger("ccswap").handlers:
+        handler.close()
+    log = (provider.backup_dir.parent / "claude-swap.log").read_text()
+    assert log.rstrip().endswith("Switched agy from account 3 to 1")  # the captured login
     if os.name != "nt":
         assert provider.backup_dir.stat().st_mode & 0o777 == 0o700
         for path in provider.backup_dir.iterdir():

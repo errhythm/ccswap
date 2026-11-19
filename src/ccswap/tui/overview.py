@@ -627,8 +627,9 @@ def account_count_note(provider: str, count: int) -> str:
 
 
 class HeaderBar(Static):
-    """Brand mark and the ``ui.view`` filter as tabs, over a border-bottom
-    rule. The right side carries the snapshot-age / long-refresh note.
+    """One filled row: brand mark and the ``ui.view`` filter as tabs (the
+    current one a solid accent block). The right side carries, as room
+    allows, "masked", the snapshot-age / long-refresh note and the star hint.
 
     On screens with ``action_view_tab`` (dashboard, Switch, Watch) a click on
     a tab switches the view for this session; hovering one tints it."""
@@ -642,6 +643,8 @@ class HeaderBar(Static):
     def on_mount(self) -> None:
         self.watch(self.app, "refresh_status", lambda _s: self.refresh())
         self.watch(self.app, "theme", lambda _t: self.refresh())
+        self.watch(self.app, "mask_accounts", lambda _m: self.refresh())
+        self.watch(self.app, "star_hint", lambda _h: self.refresh())
 
     def _clickable(self) -> bool:
         return self.tab is None and hasattr(self.screen, "action_view_tab")
@@ -674,33 +677,58 @@ class HeaderBar(Static):
         palette = Palette.from_theme(app.current_theme)
         width = self.content_size.width or 80
         current = self.tab or (app._view if app._view in tabs() else "combined")
-        status = Text(app.refresh_status, style=palette.sev_warn)
         for short in (False, True):
             text = Text()
             spans: list[tuple[int, int, str]] = []
             text.append("∞", style=f"bold {palette.mark}")
             text.append(" ")
             text.append("ccswap", style=f"bold {palette.foreground}")
+            text.append(" " if short else "  ")
             for tab in tabs():
-                text.append("  " if short else "   ")
                 if tab == "combined":
                     label = "All" if short else "Overview"
                 else:
                     label = short_label(tab) if short else PROVIDER_LABELS[tab]
-                hover = f" on {palette.hover}" if tab == self._hover else ""
                 start = text.cell_len
                 if tab == current:
-                    text.append(label, style=f"bold underline {palette.accent}{hover}")
+                    text.append(f" {label} ", style=f"bold {palette.background} on {palette.accent}")
                 else:
-                    text.append(label, style=f"{palette.muted}{hover}")
+                    hover = f" on {palette.cursor}" if tab == self._hover else ""
+                    text.append(f" {label} ", style=f"{palette.muted}{hover}")
                 spans.append((start, text.cell_len, tab))
             if text.cell_len <= width:
                 break
         self._spans = spans
-        if status and text.cell_len + 3 + status.cell_len <= width:
-            text.append(" " * (width - text.cell_len - status.cell_len))
-            text.append(status)
+        room = width - text.cell_len - 2
+        for right in self._right_variants(palette):
+            if right.cell_len <= room:
+                if right:
+                    text.append(" " * (width - text.cell_len - right.cell_len))
+                    text.append(right)
+                break
         return _fit(text, width)
+
+    def _right_variants(self, palette: Palette) -> list[Text]:
+        """The right side from fullest to emptiest; render takes the first that fits.
+        Order of dropping: the long star wording, "masked", the star, the status."""
+        app: "CswapApp" = self.app  # type: ignore[assignment]
+        status = Text(app.refresh_status, style=palette.sev_warn) if app.refresh_status else None
+        masked = Text("masked", style=palette.muted) if app.mask_accounts else None
+        long_star = short_star = None
+        if app.star_hint == "prompt":
+            long_star = Text.assemble(("★ ", palette.sev_warn), ("star on GitHub ", palette.muted), ("*", f"bold {palette.accent}"))
+            short_star = Text.assemble(("★ ", palette.sev_warn), ("*", f"bold {palette.accent}"))
+        elif app.star_hint == "thanks":
+            long_star = short_star = Text.assemble(("★ ", palette.sev_warn), ("thanks!", palette.sev_ok))
+        sep = Text(" · ", style=palette.dim)
+        variants = [
+            [masked, status, long_star],
+            [masked, status, short_star],
+            [status, short_star],
+            [status],
+            [],
+        ]
+        return [sep.join(p for p in parts if p) for parts in variants]
 
 
 class ProviderPanel(Static):

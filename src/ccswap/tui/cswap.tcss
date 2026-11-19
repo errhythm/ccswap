@@ -6,14 +6,13 @@ Screen {
     background: $background;
 }
 
-/* -- header: brand + the ui.view filter as tabs, one rule under it ---------- */
+/* -- header: one filled row, brand + the ui.view filter as tabs ------------- */
 
 #header {
-    height: 2;
+    height: 1;
     width: 1fr;
-    padding: 0 2;
-    border-bottom: solid $line;
-    background: $background;
+    padding: 0 1;
+    background: $surface;
 }
 
 /* -- accounts panel: one rounded panel per provider ------------------------- */
@@ -21,7 +20,7 @@ Screen {
 .accounts-panel {
     height: auto;
     width: 1fr;
-    padding: 1 2 0 2;
+    padding: 0 2;
     background: $background;
 }
 
@@ -78,7 +77,7 @@ Screen {
     width: 44;
     height: auto;
     max-height: 100%;
-    padding: 1 2 0 0;
+    padding: 0 2 0 0;
     background: $background;
 }
 

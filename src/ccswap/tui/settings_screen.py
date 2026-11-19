@@ -80,7 +80,7 @@ def _step_gate(current: float | None, delta: int) -> float | None:
 
 # (section, rows): today's row order, split as the Figma settings frames do.
 SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (mark("Display"), ("setting:theme", "setting:view", "setting:mask")),
+    (mark("Display"), ("setting:theme", "setting:view", "setting:mask", "setting:star")),
     (
         mark("Auto-switch"),
         (
@@ -97,6 +97,7 @@ _ROW_NAMES = {
     "setting:theme": mark("Theme"),
     "setting:view": mark("Dashboard view"),
     "setting:mask": mark("Mask account info"),
+    "setting:star": mark("Star prompt"),
     "setting:threshold": mark("Threshold"),
     "setting:threshold5h": mark("5h gate"),
     "setting:threshold7d": mark("Weekly gate"),
@@ -109,6 +110,7 @@ _HINTS = {
     "setting:theme": "dark · light · auto",
     "setting:view": "Combined · Claude Code · Codex · Antigravity",
     "setting:mask": "on · off",
+    "setting:star": "on · off",
     "setting:threshold": " · ".join(f"{v:g}" for v in _THRESHOLD_STOPS),
     "setting:threshold5h": "inherit · 40 … 95",
     "setting:threshold7d": "inherit · 40 … 95",
@@ -117,7 +119,7 @@ _HINTS = {
     "claude:claude.statusline": "on · off",
     "claude:claude.mod": "on · off",
 }
-_TOGGLES = {"setting:mask", "claude:claude.statusline", "claude:claude.mod"}
+_TOGGLES = {"setting:mask", "setting:star", "claude:claude.statusline", "claude:claude.mod"}
 # The settings.json key each edited row writes (Esc restores it).
 _CONFIG_KEYS = {
     "setting:theme": "ui.theme",
@@ -280,6 +282,7 @@ class SettingsScreen(Screen):
             "setting:theme": (app._theme_name, None),
             "setting:view": (view_labels[app._saved_view], None),
             "setting:mask": (tr("on") if app.mask_accounts else tr("off"), app.mask_accounts),
+            "setting:star": (tr("on") if app._star_setting else tr("off"), app._star_setting),
             "setting:threshold": (f"{shared:g}%", None),
             # "inherit" shows what the engine falls back to (weeklyThreshold too).
             "setting:threshold5h": (_gate_label(app._threshold_5h, app.inherited_gate("5h"), tr), None),
@@ -320,6 +323,7 @@ class SettingsScreen(Screen):
             "setting:theme": f"ccswap config set ui.theme {app._theme_name}",
             "setting:view": f"ccswap config set ui.view {app._saved_view}",
             "setting:mask": f"ccswap config set ui.mask {'on' if app.mask_accounts else 'off'}",
+            "setting:star": f"ccswap config set ui.starPrompt {'on' if app._star_setting else 'off'}",
             "setting:threshold": f"ccswap config set autoswitch.threshold {shared:g}",
             "setting:threshold5h": optional(
                 "autoswitch.threshold5h", app._threshold_5h, app.inherited_gate("5h")
@@ -769,6 +773,8 @@ class SettingsScreen(Screen):
             app.apply_fable_gate(_step_gate(_fable_pct(app._model_thresholds), delta))
         elif key == "mask":
             app.apply_mask(not app.mask_accounts)
+        elif key == "star":
+            app.apply_star_prompt(not app._star_setting)
         elif key == "strategy":
             # app.open_settings refuses while an AutoScreen is open, so no
             # live engine needs the new value; the next AutoScreen re-reads

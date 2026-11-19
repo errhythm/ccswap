@@ -243,8 +243,9 @@ async def test_tabs_show_the_view_setting_and_number_keys_do_nothing(tmp_path, f
         await settle(pilot)
         assert [p.provider for p in app.screen.query("ProviderPanel") if p.display] == ["codex"]
         header = app.screen.query_one(HeaderBar).render()
-        codex_at = header.plain.index("Codex")
-        assert any("underline" in str(span.style) and span.start == codex_at for span in header.spans)
+        codex_at = header.plain.index(" Codex ")  # the tab, padded to a block
+        accent = app.current_theme.primary
+        assert any(str(span.style).endswith(f"on {accent}") and span.start == codex_at for span in header.spans)
 
 
 @pytest.mark.asyncio

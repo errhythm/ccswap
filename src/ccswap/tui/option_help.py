@@ -13,6 +13,7 @@ OPTION_HELP = {
     "setting:theme": "Cycle dark, light and auto. Auto follows the terminal background.",
     "setting:view": "Cycle all providers, Claude Code only, Codex only and Antigravity only. This filters the dashboard, Switch and Watch lists; administrative menus still show all accounts.",
     "setting:mask": "Hide account emails and organization names in supported displays. This does not remove credentials or change the active login.",
+    "setting:star": "Show the ★ in the header that asks for a GitHub star. Pressing * stars ccswap with the GitHub CLI, or opens the repo in your browser, then hides it for good.",
     "setting:threshold": "Cycle the default utilization threshold for automatic switching. More specific gates override it; weekly gates may inherit weeklyThreshold first. Disabled windows do not trigger switching.",
     "setting:threshold5h": "Cycle the 5-hour gate, then inherit. Automatic switching can trigger when any configured gate reaches its threshold.",
     "setting:threshold7d": "Cycle the weekly gate, then inherit. Applies to Claude's 7-day window and Codex's weekly window.",

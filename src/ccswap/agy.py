@@ -363,9 +363,14 @@ class AgyAccountSwitcher:
             if previous == number:
                 target = original.credential
             self._preflight(original, target)
+            source = previous
             if original.credential is not None:
-                self._capture(data, original.credential)
+                source = self._capture(data, original.credential)
             self._activate(original, target)
+        if source != number:
+            from ccswap.logging_config import log_switch
+
+            log_switch(self.backup_dir.parent, "agy", source, number)
         payload = {"provider": "agy", "switched": True,
                    "from": {"number": int(previous) if previous else None,
                             "email": original.credential.email if original.credential else None},

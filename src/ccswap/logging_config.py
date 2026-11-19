@@ -62,3 +62,15 @@ def setup_logging(log_dir: Path, debug: bool = False) -> logging.Logger:
         logger.addHandler(console_handler)
 
     return logger
+
+
+def log_switch(log_dir: Path, provider: str, source: object, target: object) -> None:
+    """Record a Codex or Antigravity switch in the shared switch log.
+
+    Claude's switcher writes "Switched from account X to Y"; these lines name
+    the provider so readers that only want Claude (the menu bar) skip them.
+    """
+    logger = logging.getLogger("ccswap")
+    if not logger.handlers:  # a provider-only process (`ccswap codex switch`)
+        setup_logging(log_dir)
+    logger.info(f"Switched {provider} from account {source or '?'} to {target}")

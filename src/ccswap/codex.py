@@ -833,6 +833,9 @@ class CodexAccountSwitcher:
                         and self._read_json(self.auth_file) in (auth, original_auth)):
                     self._write_json(self.auth_file, original_auth)
                 raise
+        from ccswap.logging_config import log_switch
+
+        log_switch(self.backup_dir, "codex", current, number)
         result = {
             "switched": True,
             "from": {"number": int(current) if current else None, "email": ""},

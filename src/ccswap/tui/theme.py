@@ -64,6 +64,7 @@ class Palette:
     mark: str = MARK
     hover: str = SURFACE  # block-hover-background
     cursor: str = "#3F2822"  # block-cursor-background flattened on the background
+    background: str = "#121212"
 
     DARK: ClassVar["Palette"]
 
@@ -93,6 +94,7 @@ class Palette:
             mark=theme.variables.get("mark", MARK),
             hover=theme.variables.get("block-hover-background", SURFACE),
             cursor=_flatten(theme.variables.get("block-cursor-background", SURFACE), theme.background),
+            background=theme.background or "#121212",
         )
 
     def provider(self, provider: str) -> str:

@@ -25,7 +25,7 @@
   <a href="https://github.com/errhythm/ccswap#documentation">Docs</a>
 </p>
 
-<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-watch.png" width="760" alt="ccswap watch: live usage bars for every Claude Code and Codex account, with reset times and the active account marked"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-dashboard.png" width="760" alt="ccswap dashboard: usage bars for every Claude Code, Codex and Antigravity account, with what auto-switch does next and the recent switches beside them"></p>
 
 ## What it does
 

@@ -191,13 +191,15 @@ async def test_clicking_a_tab_switches_the_view_without_saving(tmp_path):
         await settle(pilot)
         header = app.screen.query_one(HeaderBar)
         start, end, tab = next(s for s in header._spans if s[2] == "codex")
-        await pilot.hover(HeaderBar, offset=(2 + start + 1, 0))  # padding 2
+        await pilot.hover(HeaderBar, offset=(1 + start + 1, 0))  # padding 1
         await pilot.pause()
         assert header._hover == "codex"
-        hover = app.current_theme.variables["block-hover-background"]
+        from ccswap.tui.theme import Palette
+
+        hover = Palette.from_theme(app.current_theme).cursor
         styles = [str(s.style) for s in header.render().spans if s.start == start]
         assert any(style.endswith(f"on {hover}") for style in styles)
-        await pilot.click(HeaderBar, offset=(2 + start + 1, 0))
+        await pilot.click(HeaderBar, offset=(1 + start + 1, 0))
         await settle(pilot)
         assert app._view == "codex"
         await pilot.click(HeaderBar, offset=(2 + header._spans[0][0], 0))
@@ -272,7 +274,7 @@ async def test_settings_and_auto_view_keep_arrows_for_their_values(tmp_path, fak
         assert not hasattr(app.screen, "action_view_tab")
         header = app.screen.query_one(HeaderBar)
         start = next(s[0] for s in header._spans if s[2] == "codex")
-        await pilot.click(HeaderBar, offset=(2 + start + 1, 0))
+        await pilot.click(HeaderBar, offset=(1 + start + 1, 0))
         await settle(pilot)
         assert app._view == "combined"
         await pilot.press("escape")
@@ -347,7 +349,7 @@ async def test_settings_rows_show_values_hints_and_config_line(tmp_path):
         screen = app.screen
         rows = {r.action_id: r for r in screen.query("SettingRow")}
         assert rows["setting:threshold5h"].value == "80%"
-        await pilot.press(*["down"] * 3)  # Display rows, then Threshold
+        await pilot.press(*["down"] * 4)  # Display rows, then Threshold
         await pilot.press("down")  # 5h gate
         await settle(pilot)
         line = str(rows["setting:threshold5h"].query_one("Static").render())
@@ -361,7 +363,7 @@ async def test_settings_rows_show_values_hints_and_config_line(tmp_path):
         assert str(screen.query_one("#setting-help").render()).endswith(
             "$ ccswap config unset autoswitch.threshold7d   # inherits 90%"
         )
-        await pilot.press(*["up"] * 3)  # Mask account info: an on/off row
+        await pilot.press(*["up"] * 4)  # Mask account info: an on/off row
         await settle(pilot)
         assert "[  off]" in str(rows["setting:mask"].query_one("Static").render())
         await pilot.press("enter")
@@ -529,6 +531,28 @@ def test_recent_switches_read_the_switch_log(tmp_path):
     assert recent_text([], Palette.DARK, now).plain == "no switches logged yet"
 
 
+def test_recent_switches_cover_every_provider(tmp_path):
+    from ccswap.menubar import parse_switch_history
+    from ccswap.tui.sidebar import recent_switches, recent_text
+    from ccswap.tui.theme import Palette
+
+    log = tmp_path / "claude-swap.log"
+    log.write_text(
+        "2026-11-19 09:00:00,000 - INFO - Switched from account 1 to 2\n"
+        "2026-11-19 10:00:00,000 - INFO - Switched codex from account 1 to 2\n"
+        "2026-11-19 11:00:00,000 - INFO - Switched agy from account ? to 1\n"
+    )
+    rows = recent_switches(log)
+    assert [(r.provider, r.source, r.target) for r in rows] == [
+        ("agy", "?", "1"), ("codex", "1", "2"), ("claude", "1", "2")]
+    now = datetime(2026, 11, 19, 12, 0).timestamp()
+    assert recent_text(rows, Palette.DARK, now).plain.splitlines() == [
+        "11:00  Antigravity  ? → #1", "10:00  Codex        #1 → #2", "09:00  Claude       #1 → #2"]
+    assert recent_switches(log, limit=None)[2:] == rows[2:]
+    # The menu bar's history stays Claude-only.
+    assert parse_switch_history(log.read_text()) == ["1 → 2   2026-11-19 09:00"]
+
+
 @pytest.mark.asyncio
 async def test_sidebar_shows_at_120_cols_and_hides_below_live(tmp_path):
     (tmp_path / "claude-swap.log").write_text(
@@ -544,9 +568,7 @@ async def test_sidebar_shows_at_120_cols_and_hides_below_live(tmp_path):
         assert "#2 → #1" in str(app.screen.query_one("#recent-switches").render())
         app.step_view(-1)  # Antigravity: the log has no switches of its own
         await settle(pilot)
-        assert str(app.screen.query_one("#recent-switches").render()) == (
-            "only Claude Code switches are logged"
-        )
+        assert str(app.screen.query_one("#recent-switches").render()) == "no switches logged yet"
         assert str(app.screen.query_one("#up-next").render()) == "Antigravity  manual switching only"
         app.step_view(1)
         await settle(pilot)
@@ -752,7 +774,7 @@ async def test_left_moves_to_the_section_pane_and_back(tmp_path):
         await pilot.press("left")
         await settle(pilot)
         assert screen._pane == "sections" and menu.index is None  # one highlight: the section
-        assert _shown_rows(screen) == ["setting:theme", "setting:view", "setting:mask"]
+        assert _shown_rows(screen) == ["setting:theme", "setting:view", "setting:mask", "setting:star"]
         await pilot.press("down")
         await settle(pilot)
         assert _shown_rows(screen)[0] == "setting:threshold"  # the rows follow the section
@@ -827,7 +849,7 @@ async def test_enter_edits_a_row_and_esc_restores_it(tmp_path):
     app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
     async with app.run_test(size=(132, 40)) as pilot:
         screen = await _open_settings(pilot)
-        await pilot.press("down", "down", "down")  # Threshold (unset: 90)
+        await pilot.press("down", "down", "down", "down")  # Threshold (unset: 90)
         await pilot.press("enter")
         await settle(pilot)
         row = next(r for r in screen.query(SettingRow) if r.action_id == "setting:threshold")
@@ -845,7 +867,7 @@ async def test_enter_edits_a_row_and_esc_restores_it(tmp_path):
         after.pop("schemaVersion")  # set_setting stamps it on any write
         assert after.get("autoswitch", {}) == {} and after["ui"] == json.loads(before)["ui"]
         assert type(app.screen).__name__ == "SettingsScreen"  # Esc cancelled, didn't leave
-        await pilot.press("up", "up", "up", "enter", "right", "enter")  # Theme: dark → light, kept
+        await pilot.press("up", "up", "up", "up", "enter", "right", "enter")  # Theme: dark → light, kept
         await settle(pilot)
         assert app._theme_name == "light" and screen._editing is None
         assert json.loads((tmp_path / "settings.json").read_text())["ui"]["theme"] == "light"
@@ -898,7 +920,7 @@ async def test_a_view_change_moves_the_cursor_off_hidden_rows(tmp_path, how):
         elif how == "click":
             header = app.screen.query_one(HeaderBar)
             start = next(s for s, _e, t in header._spans if t == "codex")
-            await pilot.click(HeaderBar, offset=(2 + start + 1, 0))
+            await pilot.click(HeaderBar, offset=(1 + start + 1, 0))
         else:
             app.apply_view("codex")  # what Settings and the palette call
         await settle(pilot)
@@ -1035,7 +1057,7 @@ async def test_inherit_labels_show_weekly_threshold(tmp_path):  # 5
         assert values["setting:threshold5h"] == "inherit (90%)"
         assert values["setting:threshold7d"] == "inherit (80%)"
         assert values["setting:fable"] == "inherit (80%)"
-        await pilot.press("down", "down", "down", "down", "down")  # Weekly gate
+        await pilot.press("down", "down", "down", "down", "down", "down")  # Weekly gate
         await settle(pilot)
         assert str(screen.query_one("#setting-help").render()).endswith(
             "ccswap config unset autoswitch.threshold7d   # inherits 80%"
@@ -1331,3 +1353,63 @@ async def test_a_late_highlight_never_changes_the_section(tmp_path):
         menu.post_message(ListView.Highlighted(menu, stale))  # queued from before ←
         await settle(pilot)
         assert screen._section == picked
+
+
+def test_star_uses_gh_else_the_browser_and_never_asks_again(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    from ccswap import star_prompt
+
+    opened = []
+    monkeypatch.setattr(star_prompt.webbrowser, "open", opened.append)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert not star_prompt.dismissed(tmp_path)
+    assert star_prompt.star(tmp_path) == "opened" and opened == [star_prompt.REPO_URL]
+    assert star_prompt.dismissed(tmp_path)
+
+    opened.clear()
+    (tmp_path / "cache" / star_prompt.STATE_NAME).unlink()
+    calls = []
+    monkeypatch.setattr("shutil.which", lambda name: "/bin/gh")
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0))
+    assert star_prompt.star(tmp_path) == "starred" and not opened
+    assert calls == [["/bin/gh", "api", "-X", "PUT", "user/starred/errhythm/ccswap"]]
+    assert star_prompt.dismissed(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_star_hint_in_the_header_star_key_and_settings_row(tmp_path, monkeypatch):
+    from ccswap import star_prompt
+    from ccswap.tui.overview import HeaderBar
+
+    starred = []
+    monkeypatch.setattr(star_prompt, "star", lambda root: starred.append(root) or "starred")
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 30)) as pilot:
+        await settle(pilot)
+        header = app.screen.query_one(HeaderBar)
+        assert str(header.render()).rstrip().endswith("★ star on GitHub *")
+        await pilot.resize_terminal(80, 24)
+        await settle(pilot)
+        assert str(header.render()).rstrip().endswith("★ star on GitHub *")  # still fits
+        app.mask_accounts = True
+        await settle(pilot)
+        assert str(header.render()).rstrip().endswith("masked · ★ *")  # the wording goes first
+        await pilot.resize_terminal(132, 30)
+        await settle(pilot)
+        assert str(header.render()).rstrip().endswith("masked · ★ star on GitHub *")
+        await pilot.press("asterisk")
+        await settle(pilot)
+        assert starred == [tmp_path] and app.star_hint == "thanks"
+        assert str(header.render()).rstrip().endswith("★ thanks!")
+        app.star_hint = ""  # the timer's job
+        await pilot.press("asterisk")  # gone: the key does nothing
+        await settle(pilot)
+        assert starred == [tmp_path]
+
+        app.star_hint = "prompt"
+        app.apply_star_prompt(False)  # the Settings row
+        await settle(pilot)
+        assert app.star_hint == "" and "★" not in str(header.render())
+        assert json.loads((tmp_path / "settings.json").read_text())["ui"]["starPrompt"] is False

@@ -3,12 +3,13 @@
 Read-only, built from data ccswap already has. Up next asks the same
 selectors ``ccswap switch --strategy <saved strategy>`` runs which account
 it would pick, over the usage the dashboard shows, and never switches.
-Recent switches parses the switch log the menu bar reads. Both run in a
+Recent switches parses the switch log (every provider logs its switches there). Both run in a
 thread worker: the Claude selector reads the sequence file.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -133,25 +134,30 @@ class RecentSwitch:
     target: str
 
 
-def recent_switches(log_path: Path, limit: int = RECENT_LIMIT) -> list[RecentSwitch]:
-    """The newest switches in the switch log, newest first. The log records
-    Claude Code switches only, with no reason."""
-    from ccswap.menubar import parse_switch_history
+# Claude's switcher logs "Switched from account X to Y"; Codex and
+# Antigravity log "Switched codex|agy from account X to Y" (X is "?" when the
+# previous login wasn't a saved account).
+_SWITCH_RE = re.compile(r"Switched (?:(codex|agy) )?from account (\S+) to (\d+)")
 
+
+def recent_switches(log_path: Path, limit: int | None = RECENT_LIMIT) -> list[RecentSwitch]:
+    """The newest switches in the switch log for every provider, newest first.
+    The log records no reason."""
     try:
         text = log_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
     out = []
-    for line in parse_switch_history(text, limit):  # "3 → 1   2026-06-27 02:06"
-        pair, _sep, stamp = line.partition("   ")
-        source, _arrow, target = pair.partition(" → ")
+    for line in text.splitlines():
+        m = _SWITCH_RE.search(line)
+        if not m:
+            continue
         try:
-            at = datetime.strptime(stamp.strip(), "%Y-%m-%d %H:%M").timestamp()
+            at = datetime.strptime(line.split(" - ", 1)[0].strip()[:16], "%Y-%m-%d %H:%M").timestamp()
         except ValueError:
             continue
-        out.append(RecentSwitch(at, "claude", source, target))
-    return out
+        out.append(RecentSwitch(at, m.group(1) or "claude", m.group(2), m.group(3)))
+    return out[::-1][:limit]
 
 
 def when(at: float, now: float) -> str:
@@ -210,13 +216,15 @@ def recent_text(
         return text
     stamps = [when(r.at, now) for r in rows]
     stamp_w = max(len(s) for s in stamps)
+    name_w = max(len(short_label(r.provider)) for r in rows)
     for i, (row, stamp) in enumerate(zip(rows, stamps)):
         if i:
             text.append("\n")
         text.append(stamp.ljust(stamp_w), style=palette.muted)
         text.append("  ")
-        text.append(short_label(row.provider), style=palette.provider(row.provider))
-        text.append(f"  #{row.source} → #{row.target}", style=palette.foreground)
+        text.append(short_label(row.provider).ljust(name_w), style=palette.provider(row.provider))
+        source = "#" + row.source if row.source != "?" else "?"
+        text.append(f"  {source} → #{row.target}", style=palette.foreground)
     return text
 
 
@@ -292,10 +300,9 @@ class Sidebar(Vertical):
             )
             for provider in providers
         ]
-        logged = recent_switches(root / LOG_NAME)
-        recent = [r for r in logged if r.provider in providers]
-        empty = "no switches logged yet" if not logged else "only Claude Code switches are logged"
-        return rows, recent, empty
+        logged = recent_switches(root / LOG_NAME, limit=None)
+        recent = [r for r in logged if r.provider in providers][:RECENT_LIMIT]
+        return rows, recent, "no switches logged yet"
 
     def _show(self, rows: list[UpNext], recent: list[RecentSwitch], empty: str) -> None:
         self._computing = False
