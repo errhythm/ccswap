@@ -51,7 +51,13 @@ NARROW = {
     "watch-selecting": ["⏎ Confirm", "s Switch", "esc Back", "←→ View", "m Mask off"],
     "auto": ["l Go live / dry-run", "t Threshold", "s Strategy", "esc Back", "m Mask off"],
     "auto-adjusting": ["l Go live / dry-run", "t Threshold", "⏎ Done", "esc Back", "m Mask off"],
-    "settings": ["esc Back", "q Quit", "? Option help", "m Mask off"],
+    "settings": ["←→ Section", "⏎ Edit", "esc Back", "q Quit", "? Option help", "m Mask off"],
+    "settings-editing": ["←→ Change", "⏎ Done", "esc Cancel", "q Quit", "? Option help", "m Mask off"],
+}
+# Where the wide list differs by more than ^t Theme: the section pane exists.
+WIDE = {
+    "settings": ["← Sections", "⏎ Edit", "esc Back", "q Quit", "? Option help", "m Mask off"],
+    "settings-sections": ["↑↓ Section", "⏎ Open", "esc Back", "q Quit", "m Mask off"],
 }
 
 
@@ -75,12 +81,22 @@ async def _goto(pilot, state):
         app.pop_screen()  # the popup; the auto view's footer is what stays
     elif state == "settings":
         await pilot.press("comma")
+    elif state == "settings-editing":
+        await pilot.press("comma")
+        await settle(pilot)
+        await pilot.press("enter")  # Theme: edit mode
+    elif state == "settings-sections":
+        await pilot.press("comma")
+        await settle(pilot)
+        await pilot.press("left")
     await settle(pilot)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", list(NARROW))
-@pytest.mark.parametrize("width", [80, 132])
+@pytest.mark.parametrize(
+    "state, width",
+    [(state, width) for state in NARROW for width in (80, 132)] + [("settings-sections", 132)],
+)
 async def test_footer_keys_per_screen_never_clip(tmp_path, fake_engine, state, width):
     app = make_app(FakeSwitcher([make_account(1, active=True), make_account(2)], tmp_path))
     async with app.run_test(size=(width, 30)) as pilot:
@@ -88,7 +104,7 @@ async def test_footer_keys_per_screen_never_clip(tmp_path, fake_engine, state, w
         await _goto(pilot, state)
         if state == "auto-adjusting":
             assert app.screen._adjusting
-        expected = list(NARROW[state])
+        expected = list(WIDE.get(state, NARROW.get(state, [])) if width >= 100 else NARROW[state])
         if width >= 100:  # ^t Theme comes back before m Mask
             expected.insert(expected.index("m Mask off"), "^t Theme")
         assert await _footer(pilot, width) == expected
@@ -385,7 +401,7 @@ async def test_settings_view_row_steps_the_saved_view_not_the_tab(tmp_path):
         await settle(pilot)
         rows = {r.action_id: r for r in app.screen.query("SettingRow")}
         assert rows["setting:view"].value == "Combined"  # what is saved
-        await pilot.press("down", "right")
+        await pilot.press("down", "enter", "right", "enter")
         await settle(pilot)
         assert app._view == "claude" and app._saved_view == "claude"
         assert json.loads((tmp_path / "settings.json").read_text())["ui"]["view"] == "claude"
@@ -709,3 +725,144 @@ async def test_locked_watch_moves_the_cursor_but_never_switches(tmp_path):
         await pilot.press("s", "down", "enter")  # armed: Enter switches
         await settle(pilot)
         assert claude.calls == [("switch_to", "2")]
+
+
+# ---------------------------------------------------------------------------
+# settings: two panes, values change only in edit mode
+# ---------------------------------------------------------------------------
+
+
+async def _open_settings(pilot):
+    await settle(pilot)
+    await pilot.press("comma")
+    await settle(pilot)
+    return pilot.app.screen
+
+
+@pytest.mark.asyncio
+async def test_left_moves_to_the_section_pane_and_back(tmp_path):
+    from textual.widgets import ListView
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        screen = await _open_settings(pilot)
+        menu = screen.query_one("#menu", ListView)
+        await pilot.press("left")
+        await settle(pilot)
+        assert screen._pane == "sections" and menu.index is None  # one highlight: the section
+        assert _shown_rows(screen) == ["setting:theme", "setting:view", "setting:mask"]
+        await pilot.press("down")
+        await settle(pilot)
+        assert _shown_rows(screen)[0] == "setting:threshold"  # the rows follow the section
+        await pilot.press("down", "down")  # wraps
+        await settle(pilot)
+        assert screen._section == 0
+        await pilot.press("up")
+        await settle(pilot)
+        assert screen._section == 2
+        await pilot.press("right")  # into that section's rows
+        await settle(pilot)
+        assert screen._pane == "rows"
+        assert menu.highlighted_child.action_id == "claude:claude.statusline"
+        await pilot.press("left", "up", "enter")  # Enter opens a section too
+        await settle(pilot)
+        assert menu.highlighted_child.action_id == "setting:threshold"
+        await pilot.press("left", "left")  # ← on the section list leaves
+        await settle(pilot)
+        assert type(app.screen).__name__ == "DashboardScreen"
+        await pilot.press("comma")
+        await settle(pilot)
+        await pilot.press("left", "escape")  # so does Esc
+        await settle(pilot)
+        assert type(app.screen).__name__ == "DashboardScreen"
+    assert not (tmp_path / "settings.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_narrow_settings_arrows_switch_sections(tmp_path):
+    from textual.widgets import ListView
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(80, 24)) as pilot:
+        screen = await _open_settings(pilot)
+        menu = screen.query_one("#menu", ListView)
+        await pilot.press("right")
+        await settle(pilot)
+        assert menu.highlighted_child.action_id == "setting:threshold"
+        await pilot.press("right")
+        await settle(pilot)
+        assert menu.highlighted_child.action_id == "claude:claude.statusline"
+        await pilot.press("left", "left", "left")  # wraps: Claude Code → … → Claude Code
+        await settle(pilot)
+        assert screen._section == 2 and type(app.screen).__name__ == "SettingsScreen"
+    assert not (tmp_path / "settings.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_arrows_never_change_a_value_outside_edit_mode(tmp_path):
+    from tests.test_tui import setting_values
+
+    (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "dark"}}))
+    before = (tmp_path / "settings.json").read_bytes()
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        screen = await _open_settings(pilot)
+        values = setting_values(screen)
+        for key in ("right", "left", "right", "down", "right", "down", "right"):
+            await pilot.press(key)
+        await settle(pilot)
+        assert setting_values(screen) == values
+    assert (tmp_path / "settings.json").read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_enter_edits_a_row_and_esc_restores_it(tmp_path):
+    from ccswap.tui.settings_screen import SettingRow
+    from tests.test_tui import setting_values
+
+    (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "dark"}}))
+    before = (tmp_path / "settings.json").read_bytes()
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        screen = await _open_settings(pilot)
+        await pilot.press("down", "down", "down")  # Threshold (unset: 90)
+        await pilot.press("enter")
+        await settle(pilot)
+        row = next(r for r in screen.query(SettingRow) if r.action_id == "setting:threshold")
+        assert row.editing and screen._editing == "setting:threshold"
+        assert "←→ change · ⏎ done · esc cancel" in str(screen.query_one("#setting-help").render())
+        await pilot.press("right", "right")  # 90 → 95 → 75, written as it goes
+        await settle(pilot)
+        assert setting_values(screen)["setting:threshold"] == "75%"
+        assert json.loads((tmp_path / "settings.json").read_text())["autoswitch"]["threshold"] == 75.0
+        await pilot.press("escape")  # back to what it was, and no explicit copy of the default
+        await settle(pilot)
+        assert not row.editing and app.threshold_pct == 90.0
+        assert setting_values(screen)["setting:threshold"] == "90%"
+        after = json.loads((tmp_path / "settings.json").read_text())
+        after.pop("schemaVersion")  # set_setting stamps it on any write
+        assert after.get("autoswitch", {}) == {} and after["ui"] == json.loads(before)["ui"]
+        assert type(app.screen).__name__ == "SettingsScreen"  # Esc cancelled, didn't leave
+        await pilot.press("up", "up", "up", "enter", "right", "enter")  # Theme: dark → light, kept
+        await settle(pilot)
+        assert app._theme_name == "light" and screen._editing is None
+        assert json.loads((tmp_path / "settings.json").read_text())["ui"]["theme"] == "light"
+        await pilot.press("enter", "left", "escape")  # light → dark → back to light
+        await settle(pilot)
+        assert app._theme_name == "light"
+        assert json.loads((tmp_path / "settings.json").read_text())["ui"]["theme"] == "light"
+
+
+@pytest.mark.asyncio
+async def test_enter_flips_an_on_off_row_without_edit_mode(tmp_path):
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(132, 40)) as pilot:
+        screen = await _open_settings(pilot)
+        await pilot.press("down", "down")  # Mask account info
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.mask_accounts and screen._editing is None
+        assert json.loads((tmp_path / "settings.json").read_text())["ui"]["mask"] is True
+        await pilot.press("right", "left")  # not editing: ← goes to the section pane
+        await settle(pilot)
+        assert app.mask_accounts and screen._pane == "sections"

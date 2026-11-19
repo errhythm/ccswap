@@ -398,6 +398,13 @@ def setting_values(screen) -> dict[str, str]:
     return {row.action_id: row.value for row in screen.query(SettingRow)}
 
 
+async def setting_step(pilot, action_id: str, key: str = "right") -> None:
+    """Settings: highlight a row, Enter to edit, step it once, Enter to keep."""
+    await menu_select(pilot, action_id)  # highlight + Enter: edit mode
+    await pilot.press(key, "enter")
+    await pilot.pause()
+
+
 async def footer_after(pilot) -> list[str]:
     """Footer labels once the footer has recomposed (slow on Windows CI)."""
     for _ in range(50):
@@ -3102,7 +3109,10 @@ class TestSettingsScreen:
                 i for i, m in enumerate(menu.query(MenuItem)) if m.action_id == row
             )
             await pilot.pause()
-            await pilot.press(press)
+            if row == "setting:mask":  # on/off rows: Enter flips them, no edit mode
+                await pilot.press("enter")
+            else:  # Enter arms the row, the key steps it, Enter keeps it
+                await pilot.press("enter", "right" if press == "enter" else press, "enter")
             await pilot.pause()
         assert (live / "settings.json").read_text() == (
             expected_dir / "settings.json"
@@ -3166,7 +3176,7 @@ class TestSettingsMenu:
 
             await menu_select(pilot, "settings-menu")
             assert setting_values(app.screen)["setting:threshold"] == "87.5%"
-            await menu_select(pilot, "setting:threshold")
+            await setting_step(pilot, "setting:threshold")
             assert app.threshold_pct == 90.0
             assert json.loads((tmp_path / "settings.json").read_text())["autoswitch"]["threshold"] == 90.0
 
@@ -3187,9 +3197,9 @@ class TestSettingsMenu:
             assert values["setting:threshold7d"] == "inherit (90%)"
             assert values["setting:fable"] == "inherit (90%)"
 
-            await menu_select(pilot, "setting:threshold5h")
-            await menu_select(pilot, "setting:threshold7d")
-            await menu_select(pilot, "setting:fable")
+            await setting_step(pilot, "setting:threshold5h")
+            await setting_step(pilot, "setting:threshold7d")
+            await setting_step(pilot, "setting:fable")
             saved = json.loads((tmp_path / "settings.json").read_text())["autoswitch"]
             assert saved["threshold5h"] == 40.0
             assert saved["threshold7d"] == 40.0
@@ -3198,8 +3208,8 @@ class TestSettingsMenu:
             # The last stop wraps back to inherit, and Opus stays.
             app._threshold_5h = 95.0
             app._model_thresholds = "Opus=60,Fable=95"
-            await menu_select(pilot, "setting:threshold5h")
-            await menu_select(pilot, "setting:fable")
+            await setting_step(pilot, "setting:threshold5h")
+            await setting_step(pilot, "setting:fable")
             saved = json.loads((tmp_path / "settings.json").read_text())["autoswitch"]
             assert "threshold5h" not in saved
             assert saved["modelThresholds"] == "Opus=60"
@@ -3231,7 +3241,7 @@ class TestSettingsMenu:
             menu = app.screen.query_one("#menu", ListView)
             menu.index = 1  # Dashboard view: a non-zero settings row.
             await pilot.pause()
-            await pilot.press("enter")
+            await pilot.press("enter", "right")  # edit, step
             await pilot.pause()
             assert app.screen.query_one("#menu-title", Static).render().plain == "menu › settings"
             assert app._view == "claude"  # Combined → Claude Code
@@ -3240,7 +3250,7 @@ class TestSettingsMenu:
             assert list(menu.query(MenuItem))[menu.index].action_id == "setting:view"
             assert setting_values(app.screen)["setting:view"] == "Claude Code"
 
-            await pilot.press("enter")
+            await pilot.press("right", "enter")
             await pilot.pause()
             assert app._view == "codex"  # Combined → Claude Code → Codex
             assert setting_values(app.screen)["setting:view"] == "Codex"
@@ -3299,8 +3309,8 @@ class TestThemeWiring:
             assert app._theme_name == "auto"  # default
             await menu_select(pilot, "settings-menu")
             assert setting_values(app.screen)["setting:theme"] == "auto"
-            await menu_select(pilot, "setting:theme")  # auto → dark
-            await menu_select(pilot, "setting:theme")  # dark → light
+            await setting_step(pilot, "setting:theme")  # auto → dark
+            await setting_step(pilot, "setting:theme")  # dark → light
             assert app._theme_name == "light"
             assert app.theme == "cswap-light"
             assert json.loads((tmp_path / "settings.json").read_text())["ui"]["theme"] == "light"

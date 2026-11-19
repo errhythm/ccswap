@@ -8,6 +8,7 @@ rows run ``claude_integration`` off the UI thread.
 from __future__ import annotations
 
 from bisect import bisect_left
+from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Callable
 
@@ -117,6 +118,16 @@ _HINTS = {
     "claude:claude.mod": "on · off",
 }
 _TOGGLES = {"setting:mask", "claude:claude.statusline", "claude:claude.mod"}
+# The settings.json key each edited row writes (Esc restores it).
+_CONFIG_KEYS = {
+    "setting:theme": "ui.theme",
+    "setting:view": "ui.view",
+    "setting:threshold": "autoswitch.threshold",
+    "setting:threshold5h": "autoswitch.threshold5h",
+    "setting:threshold7d": "autoswitch.threshold7d",
+    "setting:fable": "autoswitch.modelThresholds",
+    "setting:strategy": "autoswitch.strategy",
+}
 NAME_W = 20  # widest row name plus a gap
 VALUE_W = 21  # "‹ inherit (90%) ›" plus a gap
 
@@ -134,6 +145,7 @@ class SettingRow(MenuItem):
         self.name_text = ""
         self.value = ""  # the value as written, e.g. "90%", "on", "inherit (90%)"
         self.toggle: bool | None = None  # on/off rows: the state, None if unknown
+        self.editing = False  # Enter armed it: ←/→ step the value
 
     def set_value(self, name: str, value: str, toggle: bool | None = None) -> None:
         self.name_text, self.value, self.toggle = name, value, toggle
@@ -158,9 +170,10 @@ class SettingRow(MenuItem):
         elif self.action_id in _TOGGLES:
             value.append(self.value, style=palette.muted)
         else:
-            value.append("‹ ", style=palette.muted)
-            value.append(self.value, style="bold")
-            value.append(" ›", style=palette.muted)
+            arrows = f"bold {palette.accent}" if self.editing else palette.muted
+            value.append("‹ ", style=arrows)
+            value.append(self.value, style=f"bold {palette.accent}" if self.editing else "bold")
+            value.append(" ›", style=arrows)
         value.pad_right(max(1, VALUE_W - value.cell_len))
         line.append(value)
         line.append(_HINTS.get(self.action_id, ""), style=palette.dim)
@@ -172,17 +185,27 @@ class SettingsScreen(Screen):
     switcher under 100 cols), the focused section's rows, and a help block
     with the row's option help and its `ccswap config set` line.
 
-    ↑/↓ walk every row in order, crossing into the next section; ←/→ and
-    Enter step a value; ← back is the last stop."""
+    Two panes. In the rows, ↑/↓ walk every row in order (crossing into the
+    next section, ← back last), Enter edits a choice row or flips an on/off
+    one, and ← moves to the section list; there ↑/↓ pick a section and →
+    or Enter go back into its rows, ← or Esc leave. A value changes only
+    while its row is being edited: ←/→ step it, Enter keeps it, Esc puts
+    back what it was. Under 100 cols the section list is a switcher, so
+    ←/→ change section instead."""
 
+    # The four keys whose meaning (and footer label) follows the state;
+    # _sync_keys rewrites them. priority: the focused list binds them too.
     BINDINGS = [
-        Binding("left", "change(-1)", mark("Change"), show=False),
-        Binding("right", "change(1)", show=False),
-        Binding("escape", "back", mark("Back")),
+        Binding("up", "up", mark("Section"), key_display="↑↓", show=False, priority=True),
+        Binding("left", "left", mark("Sections"), key_display="←", priority=True),
+        Binding("enter", "enter", mark("Edit"), priority=True),
+        Binding("escape", "escape", mark("Back")),
         Binding("q", "app.quit", mark("Quit")),
         Binding("question_mark", "option_help", mark("Option help")),
-        Binding("j", "cursor_down", show=False),
-        Binding("k", "cursor_up", show=False),
+        Binding("down", "down", show=False, priority=True),
+        Binding("k", "up", show=False, priority=True),
+        Binding("j", "down", show=False, priority=True),
+        Binding("right", "right", show=False, priority=True),
     ]
 
     app: "CswapApp"
@@ -198,6 +221,10 @@ class SettingsScreen(Screen):
         }
         self._claude_busy = False
         self._section = 0  # the section whose rows are shown
+        self._pane = "rows"  # or "sections": where ↑/↓ and ←/→ act
+        self._editing: str | None = None  # the row whose value ←/→ step
+        self._before: tuple | None = None  # (value, key was in the file) to restore
+        self._changed = False
 
     def compose(self) -> ComposeResult:
         yield HeaderBar()
@@ -227,9 +254,14 @@ class SettingsScreen(Screen):
         self.watch(self.app, "theme", lambda _theme: self._relabel())
         self._start_claude_work()
         self._show_section()
+        self._sync_keys()
 
     def on_resize(self) -> None:
-        self.call_after_refresh(self._draw_nav)  # list ↔ switcher at 100 cols
+        # list ↔ switcher at 100 cols; the switcher has no section pane
+        if self.has_class("-narrow") and self._pane == "sections":
+            self._enter_rows()
+        self.call_after_refresh(self._draw_nav)
+        self.call_after_refresh(self._sync_keys)
 
     # -- rows ---------------------------------------------------------------
 
@@ -358,13 +390,21 @@ class SettingsScreen(Screen):
             text.append(" " * max(2, width - text.cell_len - len(back)))
             text.append(back, style=back_style)
         else:
+            width = nav.content_size.width or 25
             for i, (title, _rows) in enumerate(SECTIONS):
                 current = i == self._section
-                text.append("› " if current else "  ", style=f"bold {palette.accent}")
-                text.append(
-                    tr(title) + "\n",
-                    style=f"bold {palette.accent}" if current else palette.foreground,
+                # The section pane's cursor: the rows' accent tint.
+                band = f" on {palette.cursor}" if current and self._pane == "sections" else ""
+                line = Text()
+                line.append("› " if current else "  ", style=f"bold {palette.accent}{band}")
+                line.append(
+                    tr(title),
+                    style=(f"bold {palette.accent}" if current else palette.foreground) + band,
                 )
+                if band:
+                    line.append(" " * max(0, width - line.cell_len), style=band.strip())
+                text.append(line)
+                text.append("\n")
             text.append("\n")
             text.append("› " if on_back else "  ", style=f"bold {palette.accent}")
             text.append(tr("← back"), style=back_style)
@@ -373,10 +413,19 @@ class SettingsScreen(Screen):
     def _draw_help(self) -> None:
         item = self._current()
         help_widget = self.query_one("#setting-help", Static)
+        palette = Palette.from_theme(self.app.current_theme)
+        if self._pane == "sections":
+            text = Text()
+            text.append(self.app.gettext(SECTIONS[self._section][0]), style=f"bold {palette.foreground}")
+            text.append(
+                "\n" + self.app.gettext("↑↓ choose a section · → or ⏎ open it · ← or esc leave settings"),
+                style=palette.muted,
+            )
+            help_widget.update(text)
+            return
         if item is None:
             help_widget.update("")
             return
-        palette = Palette.from_theme(self.app.current_theme)
         name = (
             self.app.gettext(_ROW_NAMES[item.action_id])
             if item.action_id in _ROW_NAMES
@@ -384,6 +433,8 @@ class SettingsScreen(Screen):
         )
         text = Text()
         text.append(name, style=f"bold {palette.foreground}")
+        if self._editing == item.action_id:
+            text.append("   " + self.app.gettext("←→ change · ⏎ done · esc cancel"), style=palette.accent)
         help_text = option_help(item.action_id)
         if help_text:
             text.append("\n" + help_text, style=palette.muted)
@@ -411,11 +462,14 @@ class SettingsScreen(Screen):
             for i, (title, _rows) in enumerate(SECTIONS):
                 width = len(self.app.gettext(title))
                 if x <= offset.x < x + width:
+                    self._finish_edit()
                     menu.index = self._first_row(i)
                     return
                 x += width + 3
         elif offset.y < len(SECTIONS):
-            menu.index = self._first_row(offset.y)
+            self._finish_edit()
+            self._section = offset.y
+            self._enter_rows()
         elif offset.y == len(SECTIONS) + 1:
             self.action_back()
 
@@ -439,32 +493,221 @@ class SettingsScreen(Screen):
     # -- actions ------------------------------------------------------------
 
     def action_back(self) -> None:
+        self._finish_edit()
         self.app.pop_screen()
-
-    def action_cursor_down(self) -> None:
-        self.query_one("#menu", ListView).action_cursor_down()
-
-    def action_cursor_up(self) -> None:
-        self.query_one("#menu", ListView).action_cursor_up()
 
     def action_option_help(self) -> None:
         item = self._current()
         if item is not None and (help_text := option_help(item.action_id)):
             self.app.push_screen(OutputModal(self.app.gettext("Option help"), help_text))
 
-    def action_change(self, delta: int) -> None:
-        item = self.query_one("#menu", ListView).highlighted_child
-        if isinstance(item, MenuItem) and item.action_id != _BACK:
-            self.change(item.action_id, int(delta))
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "option_help" and self._pane == "sections":
+            return False
+        return True
+
+    # -- keys: one meaning per state -----------------------------------------
+
+    def _state(self) -> str:
+        if self._editing is not None:
+            return "editing"
+        if self.has_class("-narrow"):
+            return "narrow"
+        return self._pane
+
+    def _sync_keys(self) -> None:
+        """Footer labels for the four state keys (descriptions, shown or not)."""
+        tr = self.app.gettext
+        state = self._state()
+        table = {
+            # key: (show, key_display, description)
+            "up": (state == "sections", "↑↓", mark("Section")),
+            "left": (
+                state != "sections",
+                "←" if state == "rows" else "←→",
+                {"editing": mark("Change"), "narrow": mark("Section"), "rows": mark("Sections")}.get(
+                    state, mark("Sections")
+                ),
+            ),
+            "enter": (True, None, {"editing": mark("Done"), "sections": mark("Open")}.get(state, mark("Edit"))),
+            "escape": (True, None, mark("Cancel") if state == "editing" else mark("Back")),
+        }
+        for key, (show, display, description) in table.items():
+            self._bindings.key_to_bindings[key] = [
+                replace(
+                    binding,
+                    show=show,
+                    description=tr(description),
+                    key_display=display if display is not None else binding.key_display,
+                )
+                for binding in self._bindings.key_to_bindings.get(key, [])
+            ]
+        self.refresh_bindings()
+
+    def _menu(self) -> ListView:
+        return self.query_one("#menu", ListView)
+
+    def action_up(self) -> None:
+        self._vertical(-1)
+
+    def action_down(self) -> None:
+        self._vertical(1)
+
+    def _vertical(self, step: int) -> None:
+        if self._pane == "sections":
+            self._section = (self._section + step) % len(SECTIONS)
+            self._show_section()
+            return
+        self._finish_edit()  # moving off a row keeps what it was set to
+        if step > 0:
+            self._menu().action_cursor_down()
+        else:
+            self._menu().action_cursor_up()
+
+    def action_left(self) -> None:
+        state = self._state()
+        if state == "editing":
+            self._step(-1)
+        elif state == "narrow":
+            self._jump_section(-1)
+        elif state == "rows":
+            self._pane = "sections"
+            self._menu().index = None
+            self._show_section()
+            self._sync_keys()
+        else:
+            self.action_back()
+
+    def action_right(self) -> None:
+        state = self._state()
+        if state == "editing":
+            self._step(1)
+        elif state == "narrow":
+            self._jump_section(1)
+        elif state == "sections":
+            self._enter_rows()
+
+    def action_enter(self) -> None:
+        if self._editing is not None:
+            self._finish_edit()
+        elif self._pane == "sections":
+            self._enter_rows()
+        elif (item := self._current()) is not None:
+            self._activate(item)
+
+    def action_escape(self) -> None:
+        if self._editing is not None:
+            self._cancel_edit()
+        else:
+            self.action_back()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """A click on a row: the same as Enter on it."""
         item = event.item
         if not isinstance(item, MenuItem):
             return
+        if self._editing == item.action_id:
+            self._finish_edit()
+        else:
+            self._finish_edit()
+            self._activate(item)
+
+    def _enter_rows(self) -> None:
+        self._pane = "rows"
+        self._menu().index = self._first_row(self._section)
+        self._show_section()
+        self._sync_keys()
+
+    def _jump_section(self, step: int) -> None:
+        self._section = (self._section + step) % len(SECTIONS)
+        self._menu().index = self._first_row(self._section)
+
+    # -- editing ---------------------------------------------------------------
+
+    def _activate(self, item: MenuItem) -> None:
         if item.action_id == _BACK:
             self.action_back()
+        elif item.action_id in _TOGGLES:
+            self.change(item.action_id, 1)  # on/off: Enter flips it, no edit mode
         else:
-            self.change(item.action_id, 1)
+            self._editing = item.action_id
+            self._before = (self._saved_value(item.action_id), self._in_file(item.action_id))
+            self._changed = False
+            self._set_row_editing(True)
+
+    def _step(self, delta: int) -> None:
+        if self._editing is not None:
+            self._changed = True
+            self.change(self._editing, delta)
+
+    def _finish_edit(self) -> None:
+        if self._editing is None:
+            return
+        self._set_row_editing(False)
+        self._editing = self._before = None
+
+    def _cancel_edit(self) -> None:
+        """Esc: write back the value the row had before editing."""
+        action_id, before, changed = self._editing, self._before, self._changed
+        self._finish_edit()
+        if action_id is None or before is None or not changed:
+            return
+        value, in_file = before
+        app = self.app
+        key = action_id.split(":", 1)[1]
+        if key == "theme":
+            app.apply_theme(value)
+        elif key == "view":
+            app.apply_view(value)
+        elif key == "threshold":
+            app.apply_threshold(value)
+        elif key == "threshold5h":
+            app.apply_window_gate("5h", value)
+        elif key == "threshold7d":
+            app.apply_window_gate("7d", value)
+        elif key == "fable":
+            app._model_thresholds = value
+            app._write_optional_setting(_CONFIG_KEYS[action_id], value, app.gettext("Fable gate"))
+            app._refresh_accounts_panels()
+        elif key == "strategy":
+            app.apply_strategy(value)
+        if not in_file:  # it was the default: leave no explicit copy behind
+            app._write_optional_setting(_CONFIG_KEYS[action_id], None, _CONFIG_KEYS[action_id])
+        self._relabel()
+
+    def _saved_value(self, action_id: str):
+        app = self.app
+        return {
+            "setting:theme": app._theme_name,
+            "setting:view": app._saved_view,
+            "setting:threshold": app.threshold_pct,
+            "setting:threshold5h": app._threshold_5h,
+            "setting:threshold7d": app._threshold_7d,
+            "setting:fable": app._model_thresholds,
+            "setting:strategy": app._strategy_name,
+        }.get(action_id)
+
+    def _in_file(self, action_id: str) -> bool:
+        """Whether settings.json sets this row's key (else it is the default)."""
+        import json
+
+        from ccswap.settings import settings_path
+
+        section, _dot, name = _CONFIG_KEYS.get(action_id, ".").partition(".")
+        try:
+            raw = json.loads(settings_path(self.app.switcher_for("claude").backup_dir).read_text())
+        except (OSError, ValueError):
+            return False
+        node = raw.get(section) if isinstance(raw, dict) else None
+        return isinstance(node, dict) and name in node
+
+    def _set_row_editing(self, on: bool) -> None:
+        for row in self._menu().query(SettingRow):
+            if row.action_id == self._editing:
+                row.editing = on
+                row.redraw()
+        self._draw_help()
+        self._sync_keys()
 
     def change(self, action_id: str, delta: int) -> None:
         """Step one row forward (Enter, →) or back (←)."""
