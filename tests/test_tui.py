@@ -19,12 +19,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from textual.widgets import ListView, Static
 
 from ccswap.autoswitch import NoSwitchEvent, SwitchEvent
 from ccswap.json_output import USAGE_API_KEY, USAGE_TOKEN_EXPIRED
 from ccswap.models import AccountSnapshot, AccountsSnapshot
 from ccswap.switcher import ClaudeAccountSwitcher
 from ccswap.tui import data as tui_data
+from ccswap.tui.widgets import MenuItem
 from ccswap.usage_store import UsageEntry
 
 
@@ -3040,6 +3042,100 @@ class TestBareInvocation:
 # ---------------------------------------------------------------------------
 # Theme wiring
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestSettingsScreen:
+    @pytest.mark.parametrize(
+        "row, key, raw, press",
+        [
+            ("setting:theme", "ui.theme", "dark", "enter"),
+            ("setting:theme", "ui.theme", "light", "left"),
+            ("setting:view", "ui.view", "claude", "right"),
+            ("setting:view", "ui.view", "agy", "left"),
+            ("setting:mask", "ui.mask", "on", "enter"),
+            ("setting:threshold", "autoswitch.threshold", "95.0", "enter"),
+            ("setting:threshold", "autoswitch.threshold", "85.0", "left"),
+            ("setting:threshold5h", "autoswitch.threshold5h", "40.0", "enter"),
+            ("setting:threshold5h", "autoswitch.threshold5h", "95.0", "left"),
+            ("setting:threshold7d", "autoswitch.threshold7d", "40.0", "right"),
+            ("setting:fable", "autoswitch.modelThresholds", "Fable=40", "enter"),
+            ("setting:strategy", "autoswitch.strategy", "consume-first", "enter"),
+            ("setting:strategy", "autoswitch.strategy", "consume-first", "left"),
+        ],
+    )
+    async def test_row_writes_what_config_set_writes(
+        self, tmp_path, row, key, raw, press
+    ):
+        from ccswap.settings import set_setting
+        from ccswap.tui.settings_screen import SettingsScreen
+        from ccswap.tui.widgets import MenuItem
+
+        expected_dir = tmp_path / "expected"
+        expected_dir.mkdir()
+        set_setting(expected_dir, key, raw)
+        live = tmp_path / "live"
+        live.mkdir()
+        app = make_app(FakeSwitcher([make_account(1, active=True)], live))
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            await menu_select(pilot, "settings-menu")
+            assert isinstance(app.screen, SettingsScreen)
+            menu = app.screen.query_one("#menu", ListView)
+            menu.index = next(
+                i for i, m in enumerate(menu.query(MenuItem)) if m.action_id == row
+            )
+            await pilot.pause()
+            await pilot.press(press)
+            await pilot.pause()
+        assert (live / "settings.json").read_text() == (
+            expected_dir / "settings.json"
+        ).read_text()
+
+    async def test_comma_opens_settings_and_escape_goes_back(self, tmp_path):
+        from ccswap.tui.dashboard import DashboardScreen
+        from ccswap.tui.settings_screen import SettingsScreen
+
+        app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            await pilot.press("comma")
+            await pilot.pause()
+            assert isinstance(app.screen, SettingsScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, DashboardScreen)
+
+    async def test_unreadable_claude_state_shows_unavailable_not_checking(
+        self, tmp_path
+    ):
+        from ccswap import claude_integration as ci
+
+        def boom(key):
+            raise OSError("no claude")
+
+        app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+        with patch.object(ci, "is_enabled", side_effect=boom):
+            async with app.run_test(size=(100, 32)) as pilot:
+                await settle(pilot)
+                await pilot.press("comma")
+                await settle(pilot)
+                menu = app.screen.query_one("#menu", ListView)
+                labels = [m.query_one(Static).render().plain for m in menu.query(MenuItem)]
+                assert "Claude statusline: unavailable" in labels
+                assert "Claude Code mod: unavailable" in labels
+
+    async def test_mask_key_relabels_the_open_settings_screen(self, tmp_path):
+        app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            await pilot.press("comma")
+            await pilot.pause()
+            await pilot.press("m")
+            await pilot.pause()
+            menu = app.screen.query_one("#menu", ListView)
+            labels = [m.query_one(Static).render().plain for m in menu.query(MenuItem)]
+            assert "Mask account info: on" in labels
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,6 @@ No global command palette: actions live where their context is.
 
 from __future__ import annotations
 
-from bisect import bisect_left
 from functools import partial
 from typing import TYPE_CHECKING, Callable
 
@@ -28,7 +27,6 @@ from textual.widgets import Footer, ListView, Static
 
 from ccswap.i18n import localize_bindings, mark
 from ccswap.models import AccountSnapshot, AccountsSnapshot
-from ccswap.settings import parse_model_thresholds
 from ccswap.tui.data import (
     PROVIDER_LABELS,
     PROVIDERS,
@@ -38,6 +36,7 @@ from ccswap.tui.data import (
     present_tag,
 )
 from ccswap.tui.option_help import option_help
+from ccswap.tui.settings_screen import SettingsScreen
 from ccswap.tui.modals import OutputModal
 from ccswap.tui.widgets import (
     AccountItem,
@@ -51,43 +50,10 @@ if TYPE_CHECKING:
     from ccswap.tui.app import CswapApp
 
 FLASH_S = 1.5  # how long a just-refreshed row stays highlighted
-DEFAULT_THRESHOLD_PCT = 90.0
 
 MenuEntries = list[tuple[str, str]]  # (label, action_id)
 
 _BACK = ("← back", "back")
-
-# None is "inherit autoswitch.threshold". Exact values outside this ladder
-# are still `ccswap config set`; selecting the row steps to the next stop,
-# and the last stop wraps back to inherit.
-_GATE_STOPS = (40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0)
-
-
-def _gate_label(
-    pct: float | None, inherited: float, tr: Callable[[str], str] = str
-) -> str:
-    if pct is None:
-        return tr("inherit ({inherited:g}%)").format(inherited=inherited)
-    return f"{pct:g}%"
-
-
-def _fable_pct(model_thresholds: str | None) -> float | None:
-    for name, pct in parse_model_thresholds(model_thresholds):
-        if name.lower() == "fable":
-            return pct
-    return None
-
-
-def _next_gate(current: float | None) -> float | None:
-    if current is None:
-        return _GATE_STOPS[0]
-    index = bisect_left(_GATE_STOPS, current)
-    if index < len(_GATE_STOPS) and _GATE_STOPS[index] == current:
-        index += 1
-    if index >= len(_GATE_STOPS):
-        return None
-    return _GATE_STOPS[index]
-
 
 _LOGIN_LABELS = {
     "claude": mark("Claude Code — current login"),
@@ -104,6 +70,7 @@ class DashboardScreen(Screen):
         Binding("q", "app.quit", mark("Quit")),
         Binding("question_mark", "option_help", mark("Option help")),
         # Power shortcuts; the menu is the discoverable path.
+        Binding("comma", "open_settings", mark("Settings"), show=False),
         Binding("g", "app.open_auto", mark("Auto view"), show=False),
         Binding("f", "app.refresh_full", mark("Refresh usage"), show=False),
         Binding("j", "cursor_down", show=False),
@@ -116,13 +83,6 @@ class DashboardScreen(Screen):
         super().__init__()
         # Stack of (title, entries); depth 1 = root menu.
         self._menu_stack: list[tuple[str, MenuEntries]] = []
-        # Live Claude Code integration state; None until the first off-thread
-        # read (`claude plugin list` takes about a second).
-        self._claude_state: dict[str, bool | None] = {
-            "claude.statusline": None,
-            "claude.mod": None,
-        }
-        self._claude_busy = False
 
     def compose(self) -> ComposeResult:
         yield AccountsPanel(
@@ -231,143 +191,6 @@ class DashboardScreen(Screen):
         entries.append(_BACK)
         return entries
 
-    def _settings_entries(self) -> MenuEntries:
-        """Inline preference cycles keep settings one level deep."""
-        view_labels = {
-            "combined": self.app.gettext("Combined"),
-            **{provider: PROVIDER_LABELS[provider] for provider in PROVIDERS},
-        }
-        threshold = self.app.threshold_pct
-        threshold_value = threshold if threshold is not None else DEFAULT_THRESHOLD_PCT
-        threshold_label = f"{threshold_value:g}"
-        return [
-            (
-                self.app.gettext("Theme: {theme_name}").format(
-                    theme_name=self.app._theme_name
-                ),
-                "setting:theme",
-            ),
-            (
-                self.app.gettext("Dashboard view: {view}").format(
-                    view=view_labels[self.app._view]
-                ),
-                "setting:view",
-            ),
-            (
-                self.app.gettext("Mask account info: {state}").format(
-                    state=self.app.gettext("on")
-                    if self.app.mask_accounts
-                    else self.app.gettext("off")
-                ),
-                "setting:mask",
-            ),
-            (
-                self.app.gettext("Auto-switch threshold: {threshold_label}%").format(
-                    threshold_label=threshold_label
-                ),
-                "setting:threshold",
-            ),
-            (
-                self.app.gettext("5h gate: {gate}").format(
-                    gate=_gate_label(
-                        self.app._threshold_5h, threshold_value, self.app.gettext
-                    )
-                ),
-                "setting:threshold5h",
-            ),
-            (
-                self.app.gettext("Weekly gate: {gate}").format(
-                    gate=_gate_label(
-                        self.app._threshold_7d, threshold_value, self.app.gettext
-                    )
-                ),
-                "setting:threshold7d",
-            ),
-            (
-                self.app.gettext("Fable gate: {gate}").format(
-                    gate=_gate_label(
-                        _fable_pct(self.app._model_thresholds),
-                        threshold_value,
-                        self.app.gettext,
-                    )
-                ),
-                "setting:fable",
-            ),
-            (
-                self.app.gettext("Auto-switch strategy: {strategy_name}").format(
-                    strategy_name=self.app._strategy_name
-                ),
-                "setting:strategy",
-            ),
-            (
-                self.app.gettext("Claude statusline: {state}").format(
-                    state=self._claude_label("claude.statusline")
-                ),
-                "claude:claude.statusline",
-            ),
-            (
-                self.app.gettext("Claude Code mod: {state}").format(
-                    state=self._claude_label("claude.mod")
-                ),
-                "claude:claude.mod",
-            ),
-            _BACK,
-        ]
-
-    def _claude_label(self, key: str) -> str:
-        state = self._claude_state[key]
-        if self._claude_busy or state is None:
-            return "…"
-        return self.app.gettext("on") if state else self.app.gettext("off")
-
-    def _start_claude_work(self, key: str | None = None, on: bool = False) -> None:
-        """Read (and with ``key``, first toggle) the Claude integrations off
-        the UI thread: install/uninstall shells out to `claude plugin`."""
-        self._claude_busy = True
-        self.run_worker(
-            partial(self._claude_work, key, on),
-            thread=True,
-            group="claude",
-            exit_on_error=False,
-        )
-
-    def _claude_work(self, key: str | None, on: bool) -> None:
-        from ccswap.claude_integration import is_enabled, set_enabled
-
-        message, severity = None, "information"
-        if key is not None:
-            try:
-                message = set_enabled(
-                    self.app.switcher_for("claude").backup_dir, key, on
-                )
-            except Exception as exc:  # surface any failure; never crash the UI
-                message, severity = (
-                    self.app.gettext("Could not change {key}: {exc}").format(
-                        key=key, exc=exc
-                    ),
-                    "error",
-                )
-        state = {k: is_enabled(k) for k in self._claude_state}
-        self.app.call_from_thread(self._claude_done, state, message, severity)
-
-    async def _claude_done(
-        self, state: dict[str, bool | None], message: str | None, severity: str
-    ) -> None:
-        self._claude_busy = False
-        self._claude_state = state
-        if message:
-            self.app.notify(message, severity=severity, timeout=6)
-        if self._menu_stack and self._menu_stack[-1][0] == "settings":
-            await self._refresh_settings_menu()
-
-    async def _refresh_settings_menu(self) -> None:
-        menu = self.query_one("#menu", ListView)
-        index = menu.index
-        self._menu_stack[-1] = ("settings", self._settings_entries())
-        await self._render_menu()
-        # Unlike a new menu, cycling refreshes this menu in place: keep its row.
-        menu.index = index
-
     async def _push_menu(self, title: str, entries: MenuEntries) -> None:
         self._menu_stack.append((title, entries))
         await self._render_menu()
@@ -381,7 +204,6 @@ class DashboardScreen(Screen):
         title, entries = self._menu_stack[-1]
         titles = {
             "menu": mark("menu"),
-            "settings": mark("settings"),
             "add account": mark("add account"),
             "remove account": mark("remove account"),
             "disable / enable": mark("disable / enable"),
@@ -454,66 +276,7 @@ class DashboardScreen(Screen):
             )
             app.confirm_remove(provider, number, email)
         elif action_id == "settings-menu":
-            await self._push_menu("settings", self._settings_entries())
-            if not self._claude_busy:
-                self._start_claude_work()
-        elif action_id.startswith("claude:"):
-            key = action_id.split(":", 1)[1]
-            state = self._claude_state[key]
-            if self._claude_busy or state is None:
-                app.notify(
-                    self.app.gettext(
-                        "Still checking Claude Code, try again in a moment"
-                    )
-                )
-                return
-            self._start_claude_work(key, not state)
-            await self._refresh_settings_menu()
-        elif action_id.startswith("setting:"):
-            key = action_id.split(":", 1)[1]
-            if key == "theme":
-                order = ("dark", "light", "auto")
-                value = order[(order.index(app._theme_name) + 1) % len(order)]
-                app.apply_theme(value)
-                app.notify(self.app.gettext("Theme: {value}").format(value=value))
-            elif key == "view":
-                order = ("combined", *PROVIDERS)
-                value = order[(order.index(app._view) + 1) % len(order)]
-                app.apply_view(value)
-            elif key == "threshold":
-                # ponytail: 95% is this compact TUI ladder's ceiling; use
-                # `ccswap config set autoswitch.threshold` for exact values.
-                ladder = (75.0, 80.0, 85.0, 90.0, 95.0)
-                current = (
-                    app.threshold_pct
-                    if app.threshold_pct is not None
-                    else DEFAULT_THRESHOLD_PCT
-                )
-                index = bisect_left(ladder, current)
-                if index < len(ladder) and ladder[index] == current:
-                    index += 1
-                app.apply_threshold(ladder[index % len(ladder)])
-            elif key == "threshold5h":
-                app.apply_window_gate("5h", _next_gate(app._threshold_5h))
-            elif key == "threshold7d":
-                app.apply_window_gate("7d", _next_gate(app._threshold_7d))
-            elif key == "fable":
-                app.apply_fable_gate(_next_gate(_fable_pct(app._model_thresholds)))
-            elif key == "mask":
-                app.apply_mask(not app.mask_accounts)
-            elif key == "strategy":
-                order = ("best", "consume-first")
-                value = order[(order.index(app._strategy_name) + 1) % len(order)]
-                # AutoScreen owns a running engine for its whole lifetime.
-                # Reaching Settings first unmounts it and stops that engine,
-                # and the next AutoScreen re-reads this file: no live strategy
-                # reach-in or misleading warning is needed. Its on_unmount
-                # threshold restore cannot strand a Settings change either,
-                # because Settings is unreachable until that unmount. This
-                # depends on AutoScreen staying top for its engine's whole
-                # lifetime; if the screen model changes, guards belong here.
-                app.apply_strategy(value)
-            await self._refresh_settings_menu()
+            self.action_open_settings()
         elif action_id == "disable-menu":
             await self._push_menu("disable / enable", self._disable_entries())
         elif action_id.startswith("disable:"):
@@ -531,6 +294,10 @@ class DashboardScreen(Screen):
             return
         if not isinstance(self.app.screen, SwitchScreen):
             self.app.push_screen(SwitchScreen())
+
+    def action_open_settings(self) -> None:
+        if not isinstance(self.app.screen, SettingsScreen):
+            self.app.push_screen(SettingsScreen())
 
     async def action_menu_back(self) -> None:
         await self._pop_menu()
@@ -559,7 +326,6 @@ class DashboardScreen(Screen):
         builders = {
             "remove account": self._remove_entries,
             "disable / enable": self._disable_entries,
-            "settings": self._settings_entries,
         }
         builder = builders.get(title)
         if builder is None:
