@@ -110,9 +110,10 @@ CSWAP_DARK = Theme(
         # Footer keys pick up the accent instead of the default blue.
         "footer-key-foreground": ACCENT,
         # The highlighted row: a soft full-width surface band (Figma 16:3).
-        "block-cursor-background": SURFACE,
+        # the focused row must be obvious: an accent tint plus bold (SURFACE alone was invisible)
+        "block-cursor-background": f"{ACCENT} 22%",
         "block-cursor-foreground": FOREGROUND,
-        "block-cursor-text-style": "none",
+        "block-cursor-text-style": "bold",
         "block-cursor-blurred-background": SURFACE,
         "block-cursor-blurred-foreground": FOREGROUND,
         "block-cursor-blurred-text-style": "none",
@@ -158,9 +159,10 @@ CSWAP_LIGHT = Theme(
     dark=False,
     variables={
         "footer-key-foreground": ACCENT_LIGHT,
-        "block-cursor-background": SURFACE_LIGHT,
+        # the focused row must be obvious: an accent tint plus bold (SURFACE alone was invisible)
+        "block-cursor-background": f"{ACCENT_LIGHT} 22%",
         "block-cursor-foreground": FOREGROUND_LIGHT,
-        "block-cursor-text-style": "none",
+        "block-cursor-text-style": "bold",
         "block-cursor-blurred-background": SURFACE_LIGHT,
         "block-cursor-blurred-foreground": FOREGROUND_LIGHT,
         "block-cursor-blurred-text-style": "none",
