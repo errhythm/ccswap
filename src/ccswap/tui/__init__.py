@@ -14,17 +14,20 @@ if TYPE_CHECKING:
     from ccswap.switcher import ClaudeAccountSwitcher
 
 
-def run(switcher: "ClaudeAccountSwitcher", start: str = "dashboard") -> int:
+def run(
+    switcher: "ClaudeAccountSwitcher", start: str = "dashboard", mouse: bool = True
+) -> int:
     """Run the TUI over an existing switcher. Returns the process exit code.
 
     ``start="watch"`` (the ``cswap watch`` command) opens directly on the
-    live watch page, stacked over the dashboard.
+    live watch page, stacked over the dashboard. ``mouse=False`` (``--no-mouse``)
+    leaves mouse capture off so the terminal can select text.
     """
     from ccswap.appearance import detect_terminal_background, drain_stdin
     from ccswap.tui.app import CswapApp
 
     # Sense the terminal background while we still own stdin in cooked mode
-    # (Textual's driver starts inside app.run()). Always detect so cycling to
+    # (Textual's driver starts inside app.run(mouse=mouse)). Always detect so cycling to
     # 'auto' works even when the initial theme is explicit. Both calls are
     # meant to fail safe on their own, but they're wrapped here too: a
     # detection bug must never crash the TUI launch.
@@ -39,5 +42,5 @@ def run(switcher: "ClaudeAccountSwitcher", start: str = "dashboard") -> int:
         drain_stdin()
     except Exception:
         pass
-    app.run()
+    app.run(mouse=mouse)
     return app.return_code or 0

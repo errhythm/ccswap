@@ -1742,8 +1742,10 @@ def main() -> None:
     # Bare `cswap` in an interactive terminal opens the TUI dashboard (like
     # lazygit/k9s). TTY-gated on both ends so scripts and pipes keep getting
     # the usage error, and `cswap tui` stays the explicit spelling.
-    if not argv and sys.stdout.isatty() and sys.stdin.isatty():
-        argv = ["--tui"]
+    if argv[:1] == ["--no-mouse"] and len(argv) > 1:
+        argv = [*argv[1:], "--no-mouse"]  # so `--no-mouse watch` still finds its verb
+    if (not argv or argv == ["--no-mouse"]) and sys.stdout.isatty() and sys.stdin.isatty():
+        argv = ["--tui", *argv]
 
     # Memorable subcommands (`ccswap switch <email>`, `cswap list`, `cswap help`, ...)
     # are rewritten to the equivalent flags so the original `--flag` interface
@@ -1896,6 +1898,14 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         "--alias",
         metavar="NAME",
         help="Set a short display alias for the account (use with 'add')",
+    )
+    parser.add_argument(
+        "--no-mouse",
+        action="store_true",
+        help=(
+            "with the TUI (tui, watch, or bare ccswap): turn off mouse capture "
+            "so the terminal can select text"
+        ),
     )
     parser.add_argument(
         "--force",
@@ -2242,11 +2252,11 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         elif args.tui:
             from ccswap.tui import run as tui_run
 
-            sys.exit(tui_run(switcher))
+            sys.exit(tui_run(switcher, mouse=not args.no_mouse))
         elif args.watch:
             from ccswap.tui import run as tui_run
 
-            sys.exit(tui_run(switcher, start="watch"))
+            sys.exit(tui_run(switcher, start="watch", mouse=not args.no_mouse))
         elif args.menubar:
             if sys.platform != "darwin":
                 error("The menu bar is only available on macOS.")

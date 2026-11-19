@@ -2891,8 +2891,9 @@ class TestBareInvocation:
 
         launched = {}
 
-        def fake_run(switcher):
+        def fake_run(switcher, mouse=True):
             launched["switcher"] = switcher
+            launched["mouse"] = mouse
             return 0
 
         monkeypatch.setattr(sys, "argv", ["cswap"])
@@ -2920,8 +2921,9 @@ class TestBareInvocation:
 
         launched = {}
 
-        def fake_run(switcher, start="dashboard"):
+        def fake_run(switcher, start="dashboard", mouse=True):
             launched["start"] = start
+            launched["mouse"] = mouse
             return 0
 
         monkeypatch.setattr(sys, "argv", ["cswap", "watch"])
@@ -2930,6 +2932,48 @@ class TestBareInvocation:
             cli.main()
         assert excinfo.value.code == 0
         assert launched["start"] == "watch"
+        assert launched["mouse"] is True
+
+    @pytest.mark.parametrize(
+        "argv, tty, start",
+        [
+            (["--no-mouse"], True, "dashboard"),
+            (["tui", "--no-mouse"], False, "dashboard"),
+            (["watch", "--no-mouse"], False, "watch"),
+            (["--no-mouse", "watch"], False, "watch"),
+        ],
+    )
+    def test_no_mouse_reaches_the_tui(self, monkeypatch, temp_home, argv, tty, start):
+        import ccswap.cli as cli
+        import ccswap.tui as tui
+
+        launched = {}
+
+        def fake_run(switcher, start="dashboard", mouse=True):
+            launched.update(start=start, mouse=mouse)
+            return 0
+
+        monkeypatch.setattr(sys, "argv", ["cswap", *argv])
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: tty)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: tty)
+        monkeypatch.setattr(tui, "run", fake_run)
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main()
+        assert excinfo.value.code == 0
+        assert launched == {"start": start, "mouse": False}
+
+    def test_run_passes_mouse_to_textual(self, monkeypatch):
+        import ccswap.tui as tui
+        from ccswap.tui.app import CswapApp
+
+        seen = {}
+        monkeypatch.setattr(CswapApp, "run", lambda self, **kw: seen.update(kw))
+        monkeypatch.setattr("ccswap.appearance.detect_terminal_background", lambda: None)
+        monkeypatch.setattr("ccswap.appearance.drain_stdin", lambda: None)
+        monkeypatch.setattr(CswapApp, "__init__", lambda self, *a, **k: None)
+        monkeypatch.setattr(CswapApp, "return_code", 0, raising=False)
+        tui.run(object(), mouse=False)
+        assert seen == {"mouse": False}
 
 
 # ---------------------------------------------------------------------------
