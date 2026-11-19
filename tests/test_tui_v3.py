@@ -230,6 +230,14 @@ async def test_tabs_work_in_locked_watch_and_select_nothing(tmp_path):
     assert _saved(tmp_path) is None
 
 
+async def until(pilot, condition, tries: int = 100) -> None:
+    """Pause until ``condition()`` holds; a slow runner may need more than settle."""
+    for _ in range(tries):
+        if condition():
+            return
+        await pilot.pause(0.02)
+
+
 @pytest.mark.asyncio
 async def test_switch_screen_refilters_and_keeps_a_valid_cursor(tmp_path):
     from textual.widgets import ListView
@@ -246,10 +254,12 @@ async def test_switch_screen_refilters_and_keeps_a_valid_cursor(tmp_path):
         await pilot.press("right")  # combined → Claude Code
         await settle(pilot)
         listview = app.screen.query_one("#accounts", ListView)
+        await until(pilot, lambda: {i.provider for i in listview.query(AccountItem)} == {"claude"})
         assert {i.provider for i in listview.query(AccountItem)} == {"claude"}
         assert isinstance(listview.highlighted_child, AccountItem)
         await pilot.press("right")  # → Codex
         await settle(pilot)
+        await until(pilot, lambda: len(listview.query(AccountItem)) == 3)
         assert [(i.provider, i.number) for i in listview.query(AccountItem)] == [
             ("codex", "1"), ("codex", "2"), ("codex", "3"),
         ]
