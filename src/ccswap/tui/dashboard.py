@@ -64,12 +64,28 @@ _LOGIN_LABELS = {
 }
 
 
-class DashboardScreen(Screen):
+# The header tabs: ←/→ step the view for this session (app.step_view).
+# priority: the focused list (a scroll container) binds ←/→ to scrolling.
+_TAB_KEYS = [
+    Binding("left", "view_tab(-1)", mark("View"), key_display="←→", priority=True),
+    Binding("right", "view_tab(1)", show=False, priority=True),
+]
+
+
+class ViewTabs:
+    """Screens whose header tabs respond to ←/→ and clicks."""
+
+    def action_view_tab(self, delta: int) -> None:
+        self.app.step_view(int(delta))
+
+
+class DashboardScreen(ViewTabs, Screen):
     BINDINGS = [
         Binding("s", "open_switch", mark("Switch accounts")),
         Binding("w", "app.open_watch", mark("Watch")),
-        Binding("escape,left", "menu_back", mark("Back"), show=False),
+        Binding("escape", "menu_back", mark("Back"), show=False),
         Binding("q", "app.quit", mark("Quit")),
+        *_TAB_KEYS,
         Binding("question_mark", "option_help", mark("Option help")),
         # Power shortcuts; the menu is the discoverable path.
         Binding("comma", "open_settings", mark("Settings"), show=False),
@@ -344,7 +360,7 @@ class DashboardScreen(Screen):
             menu.index = min(index, len(menu.children) - 1)
 
 
-class AccountListScreen(Screen):
+class AccountListScreen(ViewTabs, Screen):
     """Shared machinery: a live ListView of full account cards.
 
     Subclasses decide what the cursor does — :class:`SwitchScreen` is
@@ -493,6 +509,7 @@ class SwitchScreen(AccountListScreen):
         Binding("enter", "select_highlighted", mark("Switch"), priority=True),
         Binding("b", "switch_best", mark("Switch (best)")),
         Binding("escape,q,s", "back", mark("Back")),
+        *_TAB_KEYS,
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
     ]
@@ -552,6 +569,7 @@ class WatchScreen(AccountListScreen):
         Binding("enter", "select_highlighted", mark("Confirm"), priority=True),
         Binding("f", "app.refresh_full", mark("Refresh"), show=False),
         Binding("escape,q", "back", mark("Back")),
+        *_TAB_KEYS,
         Binding("down,j", "nav_down", show=False),
         Binding("up,k", "nav_up", show=False),
     ]

@@ -228,7 +228,7 @@ async def test_resize_follows_breakpoints_without_duplicating(tmp_path, frozen):
 
 
 @pytest.mark.asyncio
-async def test_tabs_show_the_view_setting_and_change_only_through_it(tmp_path, frozen):
+async def test_tabs_show_the_view_setting_and_number_keys_do_nothing(tmp_path, frozen):
     from ccswap.tui.overview import HeaderBar
 
     app = _app(tmp_path)
@@ -245,9 +245,6 @@ async def test_tabs_show_the_view_setting_and_change_only_through_it(tmp_path, f
         header = app.screen.query_one(HeaderBar).render()
         codex_at = header.plain.index("Codex")
         assert any("underline" in str(span.style) and span.start == codex_at for span in header.spans)
-        await pilot.click(HeaderBar, offset=(40, 0))  # tabs are a display, not buttons
-        await settle(pilot)
-        assert app._view == "codex"
 
 
 @pytest.mark.asyncio

@@ -628,15 +628,46 @@ def account_count_note(provider: str, count: int) -> str:
 
 class HeaderBar(Static):
     """Brand mark and the ``ui.view`` filter as tabs, over a border-bottom
-    rule. The right side carries the snapshot-age / long-refresh note."""
+    rule. The right side carries the snapshot-age / long-refresh note.
+
+    On screens with ``action_view_tab`` (dashboard, Switch, Watch) a click on
+    a tab switches the view for this session; hovering one tints it."""
 
     def __init__(self, *, id: str | None = "header", tab: str | None = None) -> None:
         super().__init__(id=id)
         self.tab = tab  # a screen bound to one provider (the auto view) marks it
+        self._spans: list[tuple[int, int, str]] = []  # (start, end, tab) last drawn
+        self._hover: str | None = None
 
     def on_mount(self) -> None:
         self.watch(self.app, "refresh_status", lambda _s: self.refresh())
         self.watch(self.app, "theme", lambda _t: self.refresh())
+
+    def _clickable(self) -> bool:
+        return self.tab is None and hasattr(self.screen, "action_view_tab")
+
+    def _tab_at(self, event) -> str | None:
+        offset = event.get_content_offset(self)
+        if offset is None or offset.y != 0 or not self._clickable():
+            return None
+        return next((tab for start, end, tab in self._spans if start <= offset.x < end), None)
+
+    def on_mouse_move(self, event) -> None:
+        hover = self._tab_at(event)
+        if hover != self._hover:
+            self._hover = hover
+            self.refresh()
+
+    def on_leave(self, _event) -> None:
+        if self._hover is not None:
+            self._hover = None
+            self.refresh()
+
+    def on_click(self, event) -> None:
+        tab = self._tab_at(event)
+        if tab is not None and tab != self.app._view:
+            order = tabs()
+            self.app.step_view(order.index(tab) - order.index(self.app._view))
 
     def render(self) -> Text:
         app: "CswapApp" = self.app  # type: ignore[assignment]
@@ -646,6 +677,7 @@ class HeaderBar(Static):
         status = Text(app.refresh_status, style=palette.sev_warn)
         for short in (False, True):
             text = Text()
+            spans: list[tuple[int, int, str]] = []
             text.append("◔ ", style=palette.accent)
             text.append("ccswap", style=f"bold {palette.foreground}")
             for tab in tabs():
@@ -654,12 +686,16 @@ class HeaderBar(Static):
                     label = "All" if short else "Overview"
                 else:
                     label = short_label(tab) if short else PROVIDER_LABELS[tab]
+                hover = f" on {palette.hover}" if tab == self._hover else ""
+                start = text.cell_len
                 if tab == current:
-                    text.append(label, style=f"bold underline {palette.accent}")
+                    text.append(label, style=f"bold underline {palette.accent}{hover}")
                 else:
-                    text.append(label, style=palette.muted)
+                    text.append(label, style=f"{palette.muted}{hover}")
+                spans.append((start, text.cell_len, tab))
             if text.cell_len <= width:
                 break
+        self._spans = spans
         if status and text.cell_len + 3 + status.cell_len <= width:
             text.append(" " * (width - text.cell_len - status.cell_len))
             text.append(status)

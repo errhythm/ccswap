@@ -49,7 +49,7 @@ from ccswap.tui.data import (
     mask_emails_in_text,
     run_action,
 )
-from ccswap.tui.overview import BREAKPOINTS, HeaderBar
+from ccswap.tui.overview import BREAKPOINTS, HeaderBar, tabs
 from ccswap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
 from ccswap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
 from ccswap.tui.widgets import AccountsPanel
@@ -157,11 +157,13 @@ class CswapApp(App):
             ui_settings = load_ui_settings(switcher.backup_dir)
             self._theme_name = ui_settings.theme
             self._view = ui_settings.view
+            self._saved_view = ui_settings.view  # Settings' row; tabs never write it
             self.mask_accounts = ui_settings.mask
             self.org_tag = ui_settings.org_tag
         except Exception:
             self._theme_name = "auto"
             self._view = "combined"
+            self._saved_view = "combined"
             self.mask_accounts = False
             self.org_tag = "auto"
 
@@ -179,7 +181,7 @@ class CswapApp(App):
         # Our own tokens, so the stylesheet parses before cswap-* is applied.
         return {
             key: CSWAP_DARK.variables[key]
-            for key in ("line", "dim", "codex", "antigravity", "track")
+            for key in ("line", "dim", "codex", "antigravity", "track", "mark")
         }
 
     def switcher_for(self, provider: str):
@@ -711,8 +713,16 @@ class CswapApp(App):
             for panel in screen.query(AccountsPanel):
                 panel.refresh(layout=True)
 
-    def apply_view(self, name: str) -> None:
-        """Apply the dashboard-only provider filter without refetching data."""
+    def step_view(self, delta: int) -> None:
+        """Header tabs (←/→, a click): this session only, never saved, so they
+        stay a read-only act even in locked watch."""
+        order = tabs()
+        current = order.index(self._view) if self._view in order else 0
+        self.apply_view(order[(current + delta) % len(order)], persist=False)
+
+    def apply_view(self, name: str, *, persist: bool = True) -> None:
+        """Apply the dashboard-only provider filter without refetching data.
+        ``persist`` (Settings, the palette) also saves it as ``ui.view``."""
         self._view = name
         for screen in self.screen_stack:
             for header in screen.query(HeaderBar):
@@ -727,6 +737,9 @@ class CswapApp(App):
                 # A view flip does not change `snapshots`, so its watcher would
                 # otherwise leave this stacked list stale until the next poll.
                 screen.call_after_refresh(screen._on_snapshot, self.snapshots)
+        if not persist:
+            return
+        self._saved_view = name
         try:
             set_setting(self.switcher_for("claude").backup_dir, "ui.view", name)
         except Exception as exc:  # persistence is best-effort; never crash the UI
