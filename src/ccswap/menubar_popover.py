@@ -198,9 +198,19 @@ class ActionRunner:
     ``wake()`` asks the main thread to drain now instead of on the next tick.
     """
 
-    def __init__(self, controller, deliver, wake=lambda: None, confirm=None):
+    def __init__(self, controller, deliver, wake=lambda: None, confirm=None,
+                 reply_terminate=lambda ok: None):
         self.controller, self.deliver, self.wake, self.confirm = controller, deliver, wake, confirm
+        self.reply_terminate = reply_terminate  # NSApp.replyToApplicationShouldTerminate_
         self.running = None  # the action on the action thread, until its reply is delivered
+        self.quit_pending = False
+
+    def should_terminate(self) -> int:
+        """applicationShouldTerminate: Later (1) while an action runs, else Now (0)."""
+        if self.running:
+            self.quit_pending = True  # _finish answers once the credential write is done
+            return 1
+        return 0
 
     def handle(self, body) -> None:
         get = getattr(body, "get", None)
@@ -225,7 +235,10 @@ class ActionRunner:
                 self.deliver(reply)  # invalid request, or the user cancelled
                 return
         self.running = action
-        self.controller._spawn(self._work, body)
+        try:
+            self.controller._spawn(self._work, body)
+        except Exception as exc:
+            self._finish({"ok": False, "action": action, "error": type(exc).__name__})
 
     def _work(self, body) -> None:  # action thread
         reply = {"ok": False, "action": self.running, "error": "internal error"}
@@ -237,7 +250,12 @@ class ActionRunner:
 
     def _finish(self, reply) -> None:  # main thread
         self.running = None
-        self.deliver(reply)
+        try:
+            self.deliver(reply)
+        finally:
+            if self.quit_pending:  # a quit (logout, restart, osascript) waited for this action
+                self.quit_pending = False
+                self.reply_terminate(True)
 
 
 def notify(title: str, subtitle: str, message: str) -> None:
@@ -334,6 +352,7 @@ def _make_shell_class():
                 # run tick: now so the reply doesn't wait for the 1 s timer
                 wake=lambda: self.performSelectorOnMainThread_withObject_waitUntilDone_("tick:", None, False),
                 confirm=_confirm,
+                reply_terminate=lambda ok: NSApplication.sharedApplication().replyToApplicationShouldTerminate_(ok),
             )
             self.item = NSStatusBar.systemStatusBar().statusItemWithLength_(
                 NSVariableStatusItemLength
@@ -452,6 +471,10 @@ def _make_shell_class():
             self.page_ready = False
             web.reload()
 
+        # --- app delegate ---
+        def applicationShouldTerminate_(self, _app):
+            return self.actions.should_terminate()
+
         # --- JS bridge ---
         def userContentController_didReceiveScriptMessage_(self, _ucc, message):
             # Next run-loop turn, so the page's busy state is on screen before a
@@ -490,6 +513,7 @@ def run(controller) -> int:
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(accessory)
     shell = Shell.alloc().initWithController_(controller)  # strong ref while app.run() blocks
+    app.setDelegate_(shell)  # no other delegate: lets a quit wait for a running action
     shell.repaint()
     app.run()  # quit goes through terminate_, so this rarely returns
     del shell

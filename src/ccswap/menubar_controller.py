@@ -312,7 +312,10 @@ class MenuBarController:
         with self._lock:
             calls, self._calls = self._calls, []
         for fn, args in calls:
-            fn(*args)
+            try:  # one failing call must not drop the rest (an action's reply among them)
+                fn(*args)
+            except Exception:
+                self._logger.exception("menubar main-thread call failed")
         changed = self._apply_results() or bool(calls)
         note, self._claude_note = self._claude_note, None
         if note is not None:

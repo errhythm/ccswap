@@ -268,3 +268,52 @@ def test_remove_confirms_on_main_before_the_action_thread():
 
     runner.handle({"action": "remove", "provider": "claude", "number": "x"})  # invalid: no dialog
     assert got[-1][0]["error"] == "invalid request"
+
+
+def test_a_failing_queued_call_does_not_strand_the_runner(tmp_path):
+    from ccswap.providers import PROVIDERS
+
+    ctl = MenuBarController(None, tmp_path, tmp_path / "l.log", notify=lambda *a: None,
+                            alert=lambda *a: None, providers={"claude": PROVIDERS["claude"]})
+    started = []
+    ctl._spawn = lambda fn, *a: started.append((fn, a))
+    runner, got, _ = _runner(ctl)
+    runner.handle({"action": "refreshCreds"})
+
+    def boom():
+        raise RuntimeError("notify failed")
+
+    t = threading.Thread(target=lambda: (ctl._on_main(boom), started[0][0](*started[0][1])))
+    t.start()
+    t.join(5)
+    ctl.tick()  # boom runs first and raises; the reply queued after it still lands
+    assert runner.running is None and got and got[-1][0]["action"] == "refreshCreds"
+
+
+def test_spawn_failure_clears_running():
+    ctl = ThreadedCtl()
+    ctl._spawn = lambda *a: (_ for _ in ()).throw(RuntimeError("no threads"))
+    runner, got, _ = _runner(ctl)
+    runner.handle({"action": "switch", "provider": "claude", "number": 2})
+    assert runner.running is None and got[0][0] == {"ok": False, "action": "switch", "error": "RuntimeError"}
+
+
+def test_quit_from_outside_waits_for_the_running_action():
+    gate = threading.Event()
+    ctl = ThreadedCtl(gate)
+    replies = []  # stands in for NSApp.replyToApplicationShouldTerminate_
+    runner = mp.ActionRunner(ctl, lambda r: None, reply_terminate=replies.append)
+    assert runner.should_terminate() == 0  # idle: NSTerminateNow
+    runner.handle({"action": "switch", "provider": "claude", "number": 2})
+    assert runner.should_terminate() == 1 and replies == []  # NSTerminateLater
+    gate.set()
+    ctl.drain()
+    assert replies == [True] and runner.running is None
+
+
+def test_shell_is_the_terminate_delegate():
+    pytest.importorskip("WebKit")
+    shell = mp._make_shell_class()[0]
+    assert shell.instancesRespondToSelector_("applicationShouldTerminate:")
+    sig = shell.instanceMethodSignatureForSelector_("applicationShouldTerminate:")
+    assert sig.methodReturnType() in (b"Q", b"L", b"I")  # NSApplicationTerminateReply, not an object
