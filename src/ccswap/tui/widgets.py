@@ -86,6 +86,29 @@ def credit_allowance_text(
     return text
 
 
+# The CLI command that saves each provider's current login.
+ADD_COMMANDS = {"claude": "ccswap add", "codex": "ccswap codex add", "agy": "ccswap agy add"}
+
+
+def empty_state(
+    providers: tuple[str, ...], palette: Palette, tr: Callable[[str], str] = str
+) -> Text:
+    """No accounts in the view: how to save a login, one line per provider shown."""
+    text = Text(tr("No accounts yet. Sign in to a tool, then save that login:"), style=palette.muted)
+    text.append("\n")
+    name_w = max(len(PROVIDER_LABELS[p]) for p in providers)
+    for provider in providers:
+        text.append("\n  ")
+        text.append(PROVIDER_LABELS[provider].ljust(name_w), style=f"bold {palette.provider(provider)}")
+        text.append("   ")
+        text.append(ADD_COMMANDS.get(provider, f"ccswap {provider} add"), style=palette.foreground)
+    text.append("\n\n")
+    text.append(tr("Or pick "), style=palette.muted)
+    text.append(tr("Add account…"), style=palette.foreground)
+    text.append(tr(" in the menu below."), style=palette.muted)
+    return text
+
+
 class AccountsPanel(VerticalScroll, can_focus=False):
     """Static account overview: one rounded panel per provider, the active
     account full-size and the others as one-line rows. The dashboard's (and,
@@ -152,12 +175,7 @@ class AccountsPanel(VerticalScroll, can_focus=False):
         )
         empty.display = none
         empty.update(
-            Text(
-                self.app.gettext(
-                    "No managed accounts yet.\nUse the menu below to add a Claude Code or Codex login."
-                ),
-                style=Palette.from_theme(app.current_theme).muted,
-            )
+            empty_state(providers, Palette.from_theme(app.current_theme), app.gettext)
             if none
             else ""
         )

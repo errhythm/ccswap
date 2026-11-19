@@ -1867,15 +1867,41 @@ class TestDashboard:
             await settle(pilot)
             assert not any(call[0] == "add_token" for call in fake.calls)
 
-    async def test_empty_state_hint_in_panel(self, tmp_path):
+    @pytest.mark.parametrize(
+        "view, shown",
+        [
+            ("combined", ["Claude Code", "Codex", "Antigravity"]),
+            ("claude", ["Claude Code"]),
+            ("codex", ["Codex"]),
+            ("agy", ["Antigravity"]),
+        ],
+    )
+    async def test_empty_state_lists_the_view_providers_commands(self, tmp_path, view, shown):
+        from ccswap.tui.widgets import AccountsPanel
+
+        (tmp_path / "settings.json").write_text(json.dumps({"ui": {"view": view}}))
         fake = FakeSwitcher([], tmp_path)
         app = make_app(fake)
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
-            from ccswap.tui.widgets import AccountsPanel
-
             panel = app.screen.query_one(AccountsPanel).render_text().plain
-            assert "No managed accounts yet" in panel
+            lines = panel.splitlines()
+            assert lines[0] == "No accounts yet. Sign in to a tool, then save that login:"
+            listed = [line.split()[0] for line in lines if line.startswith("  ")]
+            assert listed == [name.split()[0] for name in shown]
+            commands = {"Claude Code": "ccswap add", "Codex": "ccswap codex add",
+                        "Antigravity": "ccswap agy add"}
+            for name in shown:
+                assert any(l.strip().startswith(name) and l.endswith(commands[name]) for l in lines)
+            assert lines[-1] == "Or pick Add account… in the menu below."
+
+    async def test_empty_state_needs_every_view_provider_empty(self, tmp_path):
+        from ccswap.tui.widgets import AccountsPanel
+
+        app = make_app(FakeSwitcher([], tmp_path), FakeSwitcher([make_account(1, active=True)], tmp_path))
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            assert "No accounts yet" not in app.screen.query_one(AccountsPanel).render_text().plain
 
     async def test_palette_offers_only_ccswap_commands(self, tmp_path):
         from ccswap.tui.app import CswapApp
