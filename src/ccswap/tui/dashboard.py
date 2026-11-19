@@ -17,6 +17,7 @@ No global command palette: actions live where their context is.
 
 from __future__ import annotations
 
+import asyncio
 from functools import partial
 from typing import TYPE_CHECKING, Callable
 
@@ -353,6 +354,7 @@ class AccountListScreen(Screen):
         self._keys: list[tuple[str, str | None]] = []
         self._rows: list[tuple[str, AccountSnapshot]] = []
         self._stamps: dict[tuple[str, str], float | None] = {}
+        self._rebuild_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         yield Static("", id="list-title")
@@ -364,6 +366,12 @@ class AccountListScreen(Screen):
         self.watch(self.app, "snapshots", self._on_snapshot)
 
     async def _on_snapshot(self, snapshots: dict[str, AccountsSnapshot | None]) -> None:
+        # Serialize rebuilds: two snapshots arriving while clear()/extend()
+        # are awaited would both rebuild and duplicate provider sections.
+        async with self._rebuild_lock:
+            await self._rebuild(snapshots)
+
+    async def _rebuild(self, snapshots: dict[str, AccountsSnapshot | None]) -> None:
         rows = iter_accounts(
             snapshots,
             None if self.app._view == "combined" else self.app._view,

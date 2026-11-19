@@ -111,3 +111,44 @@ async def test_ctrl_p_then_enter_never_mutates(tmp_path):
         await settle(pilot)
         assert claude.calls == [] and codex.calls == []
         assert not (tmp_path / "settings.json").exists()
+
+
+async def test_back_to_back_snapshots_keep_one_divider_per_provider(tmp_path, monkeypatch):
+    """Two snapshots racing through clear()/extend() used to duplicate sections."""
+    import asyncio
+    import dataclasses
+
+    from textual.widgets import ListView
+
+    from ccswap.tui.widgets import ProviderDivider
+
+    claude, codex, app = _apps(tmp_path)
+    async with app.run_test(size=(100, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("w")
+        await pilot.pause()
+        screen = app.screen
+        # Make extend() yield, as a real mount does, so the rebuilds interleave.
+        real_extend = ListView.extend
+
+        async def slow_extend(self, items):
+            await asyncio.sleep(0.05)
+            return await real_extend(self, items)
+
+        monkeypatch.setattr(ListView, "extend", slow_extend)
+        base = dict(app.snapshots)
+        more = dataclasses.replace(
+            base["codex"], accounts=base["codex"].accounts + (make_account(3),)
+        )
+        await asyncio.gather(
+            screen._on_snapshot(base),
+            screen._on_snapshot({**base, "codex": more}),
+            screen._on_snapshot(base),
+        )
+        await pilot.pause()
+        dividers = [
+            c.provider
+            for c in screen.query_one("#accounts", ListView).children
+            if isinstance(c, ProviderDivider)
+        ]
+        assert sorted(dividers) == sorted(set(dividers)) == ["claude", "codex"]
