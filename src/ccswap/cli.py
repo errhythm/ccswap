@@ -1779,6 +1779,7 @@ Commands:
   %(prog)s swap <a> <b>               exchange two accounts' slot numbers
   %(prog)s move <a> <slot>            assign an account to a slot (swaps if taken)
   %(prog)s codex <command>            manage Codex CLI accounts
+  %(prog)s agy <command>              manage Antigravity accounts
   %(prog)s auto                       auto-switch when nearing rate limits
   %(prog)s hub install | serve | key  serve usage to T3 Code as a CLIProxyAPI hub
   %(prog)s config [set KEY VALUE]     show or change settings (settings.json)

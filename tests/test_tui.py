@@ -3420,3 +3420,21 @@ def test_root_menu_hides_entries_no_provider_supports(monkeypatch):
     only = [action for _, action in DashboardScreen._root_entries(fake_self)]
     assert "switch" not in only and "auto" not in only and "disable-menu" not in only
     assert "watch" in only and "add-menu" in only and "remove-menu" in only
+
+
+def test_view_help_names_all_four_views():
+    from ccswap.tui.overview import tabs
+    from ccswap.tui.option_help import option_help
+
+    text = option_help("setting:view")
+    assert len(tabs()) == 4
+    assert all(word in text for word in ("all providers", "Claude Code", "Codex", "Antigravity"))
+
+
+def test_top_level_help_lists_agy():
+    import subprocess
+
+    out = subprocess.run(
+        [sys.executable, "-m", "ccswap", "--help"], capture_output=True, text=True, check=True
+    ).stdout
+    assert "agy <command>" in out

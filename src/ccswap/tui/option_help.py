@@ -11,7 +11,7 @@ OPTION_HELP = {
     "quit": "Close this app. Any auto-switch engine started by this app stops; separately running auto processes are not stopped.",
     "back": "Return to the previous menu without changing a setting.",
     "setting:theme": "Cycle dark, light and auto. Auto follows the terminal background.",
-    "setting:view": "Cycle both providers, Claude only and Codex only. This filters the dashboard, Switch and Watch lists; administrative menus still show all accounts.",
+    "setting:view": "Cycle all providers, Claude Code only, Codex only and Antigravity only. This filters the dashboard, Switch and Watch lists; administrative menus still show all accounts.",
     "setting:mask": "Hide account emails and organization names in supported displays. This does not remove credentials or change the active login.",
     "setting:threshold": "Cycle the default utilization threshold for automatic switching. More specific gates override it; weekly gates may inherit weeklyThreshold first. Disabled windows do not trigger switching.",
     "setting:threshold5h": "Cycle the 5-hour gate, then inherit. Automatic switching can trigger when any configured gate reaches its threshold.",
