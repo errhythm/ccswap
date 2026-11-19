@@ -100,6 +100,8 @@ class DashboardScreen(ViewTabs, Screen):
         Binding("down,j", "cursor_down", show=False, priority=True),
         Binding("up,k", "cursor_up", show=False, priority=True),
         Binding("enter", "select_cursor", show=False, priority=True),
+        Binding("pageup", "page(-1)", show=False, priority=True),
+        Binding("pagedown", "page(1)", show=False, priority=True),
     ]
 
     app: "CswapApp"
@@ -324,11 +326,21 @@ class DashboardScreen(ViewTabs, Screen):
                 return
 
     def _keep_cursor(self) -> None:
-        """New snapshots: an account under the cursor that is gone hands the
-        cursor back to the menu."""
-        if self._cursor[0] == "account" and self._cursor not in self._stops():
-            self._cursor = ("menu", 0)
+        """New snapshots or a view change: an account under the cursor that
+        is no longer shown hands the cursor to the first shown account, or to
+        the menu when none is."""
+        if self._cursor[0] == "account" and self._cursor not in (stops := self._stops()):
+            self._cursor = next((stop for stop in stops if stop[0] == "account"), ("menu", 0))
+            self._clicked = None
             self._place_cursor()
+
+    def action_page(self, step: int) -> None:
+        """PgUp/PgDn scroll the panels a page (a block taller than they are)."""
+        panel = self.query_one("#accounts-panel", AccountsPanel)
+        if int(step) > 0:
+            panel.scroll_page_down(animate=False)
+        else:
+            panel.scroll_page_up(animate=False)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         # A click on a menu entry moves the one cursor there too.
@@ -346,6 +358,8 @@ class DashboardScreen(ViewTabs, Screen):
     def account_clicked(self, provider: str, number: str) -> None:
         """First click moves the cursor; a second click on the same row picks it."""
         key = (provider, number)
+        if ("account", *key) not in self._stops():
+            return
         if self._clicked == key and self._cursor == ("account", *key):
             self._clicked = None
             self._switch_to(provider, number)
@@ -359,6 +373,8 @@ class DashboardScreen(ViewTabs, Screen):
         Antigravity ask first (they restart), a disabled one still switches."""
         from ccswap.tui.commands import _switch_or_ask
 
+        if ("account", provider, number) not in self._stops():
+            return  # a row the view no longer shows is never a target
         snap = self.app.snapshots.get(provider)
         acc = next((a for a in (snap.accounts if snap else ()) if a.number == number), None)
         if acc is None or acc.is_active or not capabilities(provider).switch:
@@ -366,6 +382,9 @@ class DashboardScreen(ViewTabs, Screen):
         _switch_or_ask(self.app, provider, partial(self.app.do_switch, provider, number))()
 
     def action_option_help(self) -> None:
+        if self._cursor[0] == "account":  # Enter on this row switches to it
+            self.app.push_screen(OutputModal(self.app.gettext("Option help"), option_help("switch")))
+            return
         menu = self.query_one("#menu", ListView)
         item = menu.highlighted_child
         if isinstance(item, MenuItem) and (help_text := option_help(item.action_id)):

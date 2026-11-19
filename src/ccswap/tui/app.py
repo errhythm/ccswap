@@ -738,6 +738,8 @@ class CswapApp(App):
                 panel.refresh(layout=True)
                 for sidebar in screen.query(Sidebar):
                     sidebar.update_panels()
+                # The cursor never stays on a row the new view hides.
+                screen.call_after_refresh(screen._keep_cursor)
             elif isinstance(screen, AccountListScreen):
                 # A view flip does not change `snapshots`, so its watcher would
                 # otherwise leave this stacked list stale until the next poll.

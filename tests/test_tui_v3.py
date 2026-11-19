@@ -866,3 +866,91 @@ async def test_enter_flips_an_on_off_row_without_edit_mode(tmp_path):
         await pilot.press("right", "left")  # not editing: ← goes to the section pane
         await settle(pilot)
         assert app.mask_accounts and screen._pane == "sections"
+
+
+# ---------------------------------------------------------------------------
+# review round 1: hidden rows, paging, row help
+# ---------------------------------------------------------------------------
+
+
+async def _cursor_on(pilot, target):
+    panel = pilot.app.screen.query_one("#accounts-panel")
+    for _ in range(20):
+        if panel.cursor == target:
+            return panel
+        await pilot.press("up")
+    raise AssertionError(f"cursor never reached {target}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["keys", "click", "settings"])
+async def test_a_view_change_moves_the_cursor_off_hidden_rows(tmp_path, how):
+    from ccswap.tui.overview import HeaderBar
+
+    app, claude, codex, agy = _three_providers(tmp_path)
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        panel = await _cursor_on(pilot, ("claude", "2"))
+        if how == "keys":
+            await pilot.press("right", "right")  # → Codex
+        elif how == "click":
+            header = app.screen.query_one(HeaderBar)
+            start = next(s for s, _e, t in header._spans if t == "codex")
+            await pilot.click(HeaderBar, offset=(2 + start + 1, 0))
+        else:
+            app.apply_view("codex")  # what Settings and the palette call
+        await settle(pilot)
+        assert app._view == "codex"
+        assert panel.cursor == ("codex", "1")  # the first shown account row
+        await pilot.press("down", "enter")  # Codex #2: asks first
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        assert claude.calls == [] and codex.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_stale_cursor_or_click_never_switches(tmp_path):
+    app, claude, *_ = _three_providers(tmp_path)
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        app.step_view(2)  # Codex only
+        await settle(pilot)
+        screen = app.screen
+        screen._cursor = ("account", "claude", "2")  # stale, as before the fix
+        screen.action_select_cursor()
+        screen.account_clicked("claude", "2")
+        screen.account_clicked("claude", "2")
+        await settle(pilot)
+        assert claude.calls == []
+
+
+@pytest.mark.asyncio
+async def test_page_keys_scroll_the_panels(tmp_path):
+    app, *_ = _three_providers(tmp_path)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(pilot)
+        panel = app.screen.query_one("#accounts-panel")
+        assert panel.scroll_y == 0 and panel.max_scroll_y > 0
+        await pilot.press("pagedown")
+        await settle(pilot)
+        assert panel.scroll_y > 0
+        await pilot.press("pageup")
+        await settle(pilot)
+        assert panel.scroll_y == 0
+        assert ("pagedown" not in str(k) for k in app.screen.query("FooterKey"))
+
+
+@pytest.mark.asyncio
+async def test_question_mark_on_an_account_row_explains_switching(tmp_path):
+    from ccswap.tui.modals import OutputModal
+    from ccswap.tui.option_help import option_help
+
+    app, *_ = _three_providers(tmp_path)
+    async with app.run_test(size=(132, 60)) as pilot:
+        await settle(pilot)
+        await _cursor_on(pilot, ("claude", "2"))
+        await pilot.press("question_mark")
+        await settle(pilot)
+        assert isinstance(app.screen, OutputModal)
+        assert app.screen._output == option_help("switch")
