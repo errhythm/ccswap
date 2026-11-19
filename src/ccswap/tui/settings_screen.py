@@ -110,6 +110,7 @@ class SettingsScreen(Screen):
 
     async def on_mount(self) -> None:
         localize_bindings(self, self.app.gettext)
+        self.query_one("#accounts-panel").can_focus = True  # Tab in to scroll it without a mouse
         self.query_one("#menu-title", Static).update(
             " › ".join(self.app.gettext(t) for t in (mark("menu"), mark("settings")))
         )

@@ -301,3 +301,15 @@ def test_gauge_glyphs_half_cell_and_threshold_tick():
     assert overview.gauge(25, 10, palette).plain == "━━╸───────"
     assert overview.gauge(None, 4, palette).plain == "────"
     assert overview.gauge(30, 10, palette, tick=90).plain == "━━━──────┃"
+
+
+@pytest.mark.asyncio
+async def test_settings_account_panel_is_keyboard_scrollable(tmp_path):
+    from tests.test_tui import FakeSwitcher, make_account, make_app, settle
+
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot)
+        await pilot.press("comma")
+        await settle(pilot)
+        assert app.screen.query_one("#accounts-panel").can_focus
