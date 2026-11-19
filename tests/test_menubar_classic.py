@@ -142,8 +142,9 @@ def test_use_popover_saves_then_restarts_in_the_popover(monkeypatch):
     row = mc.MenuRow("Use popover", action="set_display", args=("style", "popover"))
     execs, stops = [], []
     monkeypatch.setattr(mc.os, "execv", lambda path, argv: execs.append(argv))
-    ctl = SimpleNamespace(set_display=lambda *a: False, stop=lambda wait: stops.append(wait))
+    ctl = SimpleNamespace(set_display=lambda *a: False, stop=lambda wait: stops.append(wait),
+                          join_workers=lambda: stops.append("workers"))
     assert mc._activate(ctl, row) and execs == []  # the save failed: stay
     ctl.set_display = lambda *a: True
     assert mc._activate(ctl, row)
-    assert stops == [10] and execs == [[sys.executable, "-m", "ccswap", "menubar"]]
+    assert stops == [10, "workers"] and execs == [[sys.executable, "-m", "ccswap", "menubar"]]

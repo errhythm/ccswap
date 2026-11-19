@@ -210,6 +210,7 @@ class MenuBarController:
         self._claude_note: tuple[bool, str] | None = None
         self._claude_dirty = False
         self._spawn = _spawn  # tests swap in a synchronous runner
+        self._workers: list[threading.Thread] = []  # refresh and integration threads
         self._engine_threads: dict[str, threading.Thread | None] = {}
         for pid, spec in providers.items():
             self.states[pid] = self._build_state(pid, spec, claude_switcher)
@@ -258,6 +259,17 @@ class MenuBarController:
         for thread in threads:
             thread.join(max(0.0, deadline - time.monotonic()))
 
+    def _track(self, thread) -> None:
+        if isinstance(thread, threading.Thread):
+            self._workers = [t for t in self._workers if t.is_alive()] + [thread]
+
+    def join_workers(self, wait: float = 60) -> None:
+        """Before a re-exec: let refresh and integration workers finish. One
+        may be between spending a refresh token and saving its replacement."""
+        deadline = time.monotonic() + wait
+        for thread in self._workers:
+            thread.join(max(0.0, deadline - time.monotonic()))
+
     # ---- refresh plumbing -----------------------------------------------------
     def refresh(self, provider_id: str | None = None, full: bool = False) -> None:
         """Start a background refresh for one provider (None = all), one worker each."""
@@ -266,7 +278,7 @@ class MenuBarController:
             if state is None or state.switcher is None or state.refreshing:
                 continue  # in-flight guard: a provider's pacing state has one writer
             state.refreshing = True
-            self._spawn(self._worker, pid, full)
+            self._track(self._spawn(self._worker, pid, full))
 
     def _worker(self, pid: str, full: bool) -> None:
         # Worker thread: rebinds plain attributes and queues the result; the main
@@ -543,7 +555,7 @@ class MenuBarController:
     # ---- Claude Code integrations (statusline, mod) ---------------------------
     def _start_claude_work(self, key: str | None = None, on: bool = False) -> None:
         self._claude_busy = True
-        self._spawn(self._claude_work, key, on)
+        self._track(self._spawn(self._claude_work, key, on))
 
     def _claude_work(self, key, on) -> None:
         from ccswap.claude_integration import is_enabled, set_enabled

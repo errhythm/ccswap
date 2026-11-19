@@ -350,3 +350,14 @@ test("header mark fills with the title provider's tightest window, like the menu
   boot(p);
   assert.ok($("#head .tile path.mt") && !$("#head .tile path.mf"), "track only when nothing is used");
 });
+
+test("an unknown reading shows ? in a neutral colour, never a green 0%", () => {
+  const p = payload();
+  p.providers[0].accounts[0].windows[0].pct = null;
+  boot(p);
+  open("Claude Code");
+  const wins = $$(".win");
+  const five = wins.find((el) => el.classList.contains("unknown"));
+  assert.ok(five, "the null window is marked unknown");
+  assert.ok(five.textContent.includes("?") && !five.textContent.includes("0%"));
+});

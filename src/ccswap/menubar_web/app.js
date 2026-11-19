@@ -220,7 +220,7 @@
   function bar(pct, notch) {
     const kids = [h("i", { style: `width:${Math.min(100, Math.max(0, pct || 0))}%` })];
     if (typeof notch === "number") kids.push(h("b", { style: `left:${Math.min(100, Math.max(0, notch))}%` }));
-    return h("div", { class: "bar " + level(pct || 0) }, ...kids);
+    return h("div", { class: "bar " + (typeof pct === "number" ? level(pct) : "unknown") }, ...kids);
   }
   const chipWarn = (text) => h("span", { class: "chip warn" }, h("i"), text);
   function runsOutChip(w) {
@@ -307,13 +307,14 @@
   function winBlock(x) {
     const w = x.w;
     const name = x.model ? x.label : kindName(x);
-    const wrap = h("div", { class: "win " + level(w.pct || 0) + (x.model ? " model" : "") },
+    const known = typeof w.pct === "number";  // null: no reading, not 0% used
+    const wrap = h("div", { class: "win " + (known ? level(w.pct) : "unknown") + (x.model ? " model" : "") },
       h("div", { class: "l" },
         h("span", { class: "n" }, name, x.model ? h("small", { text: "per-model" }) : (x.kind === "wk" ? h("small", { text: "all models" }) : null)),
-        h("span", { style: "color:var(--level);font-weight:600", text: `${round(w.pct || 0)}%` })),
+        h("span", { style: "color:var(--level);font-weight:600", text: known ? `${round(w.pct)}%` : "?" })),
       bar(w.pct, w.expectedPct),
       w.resetsAt ? h("div", { class: "muted", text: `Resets in ${countdown(w.resetsAt)} (${clock(w.resetsAt)})` }) : null);
-    if (typeof w.expectedPct === "number" && !x.model) {
+    if (known && typeof w.expectedPct === "number" && !x.model) {
       const d = round(w.pct - w.expectedPct);
       const ro = runsOut(w);
       wrap.append(h("div", { class: "pace" + (w.aheadOfPace ? " ahead" : ""),

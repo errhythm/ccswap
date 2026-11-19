@@ -80,7 +80,7 @@ footer span { flex: 1; }
 .big .bar { height: 8px; border-radius: 4px; position: relative; overflow: visible; }
 .big .bar i { border-radius: 4px; }
 .bar b { position: absolute; top: -3px; width: 2px; height: 14px; border-radius: 1px; background: #fff; margin-left: -1px; }
-.ok { --level: var(--ok); } .warn { --level: var(--warn); } .bad { --level: var(--bad); }
+.ok { --level: var(--ok); } .warn { --level: var(--warn); } .bad { --level: var(--bad); } .unknown { --level: var(--neutral); }
 .ring { position: relative; width: 54px; height: 54px; flex: none; }
 .ring svg { width: 54px; height: 54px; transform: rotate(-90deg); overflow: visible; }
 .ring .t { fill: none; stroke: var(--track); }

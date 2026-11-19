@@ -247,6 +247,7 @@ def _activate(controller, row) -> bool:
     elif getattr(controller, row.action)(*row.args) and row.args[:1] == ("style",):
         # The style is saved; start again in it, as the popover's setStyle does.
         controller.stop(wait=10)
+        controller.join_workers()
         os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
     return True
 

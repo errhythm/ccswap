@@ -1423,3 +1423,42 @@ async def test_star_hint_in_the_header_star_key_and_settings_row(tmp_path, monke
         await settle(pilot)
         assert app.star_hint == "" and "★" not in str(header.render())
         assert json.loads((tmp_path / "settings.json").read_text())["ui"]["starPrompt"] is False
+
+
+def test_up_next_names_only_windows_the_engine_watches(tmp_path):
+    from ccswap.models import AccountsSnapshot
+    from ccswap.tui.sidebar import up_next
+
+    last_good = {"five_hour": _w(50, 3600), "seven_day": _w(60, 3 * 86400),
+                 "scoped": [{"name": "Fable", "pct": 100.0, "resets_at": _w(0, 86400)["resets_at"]}]}
+    entry = UsageEntry(last_good=last_good, fetched_at=_NOW, age_s=1.0)
+    accounts = [make_account(1, active=True, entry=entry)]
+    fake = FakeSwitcher(accounts, tmp_path)
+    snap = AccountsSnapshot(active_number=fake.active, accounts=tuple(accounts), taken_at=_NOW)
+
+    def window(**kw):
+        return up_next("claude", fake, snap, strategy="best", gate_for=lambda _l: 90.0, **kw).window
+
+    assert window(models=()) == "7d"  # Fable at 100% is ignored without autoswitch.model
+    assert window(models=("fable",)) == "Fable"
+    assert window(models=("all",)) == "Fable"
+    assert window(models=(), windows=("5h",)) == "5h"  # autoswitch.windows=5h
+
+
+@pytest.mark.asyncio
+async def test_up_next_reads_the_saved_strategy_live(tmp_path, monkeypatch):
+    from ccswap.settings import set_setting
+    from ccswap.tui import sidebar
+
+    seen = []
+    real = sidebar.up_next
+    monkeypatch.setattr(sidebar, "up_next", lambda *a, **kw: seen.append(kw["strategy"]) or real(*a, **kw))
+    claude = FakeSwitcher([_acc(1, 50, 20, active=True), _acc(2, 5, 10)], tmp_path)
+    app = make_app(claude)
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        assert seen[-1] == "best"
+        set_setting(tmp_path, "autoswitch.strategy", "consume-first")  # from another terminal
+        app.screen.query_one(sidebar.Sidebar).update_panels()
+        await settle(pilot)
+        assert seen[-1] == "consume-first"

@@ -191,6 +191,12 @@ BACKGROUND_ACTIONS = frozenset({"switch", "rotate", "remove", "addLogin", "addTo
 WHILE_BUSY = frozenset({"ready", "refresh"})
 
 
+# AppKit's NSApplicationTerminateReply (NSTerminateCancel is 0); plain ints so
+# this module imports without pyobjc. A test checks them against AppKit.
+NS_TERMINATE_NOW = 1
+NS_TERMINATE_LATER = 2
+
+
 class ActionRunner:
     """One page action at a time; the slow ones run off the main thread.
 
@@ -207,11 +213,11 @@ class ActionRunner:
         self.quit_pending = False
 
     def should_terminate(self) -> int:
-        """applicationShouldTerminate: Later (1) while an action runs, else Now (0)."""
+        """applicationShouldTerminate: Later while an action runs, else Now."""
         if self.running:
             self.quit_pending = True  # _finish answers once the credential write is done
-            return 1
-        return 0
+            return NS_TERMINATE_LATER
+        return NS_TERMINATE_NOW
 
     def handle(self, body) -> None:
         get = getattr(body, "get", None)
@@ -499,6 +505,7 @@ def _make_shell_class():
                 return
             if action == "setStyle" and reply["ok"]:
                 self.controller.stop(wait=10)  # let a switch in progress finish before the exec
+                self.controller.join_workers()
                 os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
             if self.web is not None:
                 self.web.evaluateJavaScript_completionHandler_(

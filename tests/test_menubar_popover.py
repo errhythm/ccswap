@@ -303,9 +303,9 @@ def test_quit_from_outside_waits_for_the_running_action():
     ctl = ThreadedCtl(gate)
     replies = []  # stands in for NSApp.replyToApplicationShouldTerminate_
     runner = mp.ActionRunner(ctl, lambda r: None, reply_terminate=replies.append)
-    assert runner.should_terminate() == 0  # idle: NSTerminateNow
+    assert runner.should_terminate() == mp.NS_TERMINATE_NOW  # idle
     runner.handle({"action": "switch", "provider": "claude", "number": 2})
-    assert runner.should_terminate() == 1 and replies == []  # NSTerminateLater
+    assert runner.should_terminate() == mp.NS_TERMINATE_LATER and replies == []
     gate.set()
     ctl.drain()
     assert replies == [True] and runner.running is None
@@ -317,3 +317,9 @@ def test_shell_is_the_terminate_delegate():
     assert shell.instancesRespondToSelector_("applicationShouldTerminate:")
     sig = shell.instanceMethodSignatureForSelector_("applicationShouldTerminate:")
     assert sig.methodReturnType() in (b"Q", b"L", b"I")  # NSApplicationTerminateReply, not an object
+
+
+def test_terminate_replies_are_appkits():
+    appkit = pytest.importorskip("AppKit")
+    assert (mp.NS_TERMINATE_NOW, mp.NS_TERMINATE_LATER) == (appkit.NSTerminateNow, appkit.NSTerminateLater)
+    assert appkit.NSTerminateCancel not in (mp.NS_TERMINATE_NOW, mp.NS_TERMINATE_LATER)

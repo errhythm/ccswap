@@ -82,6 +82,18 @@ def _eta(raw: dict, fetched_at: float | None) -> float | None:
     return at
 
 
+def _watched(provider: str, label: str, models: tuple[str, ...], windows: tuple[str, ...]) -> bool:
+    """Whether the auto-switch engine looks at this window: Claude's
+    ``autoswitch.windows`` picks 5h/7d, and a per-model window counts only
+    when ``autoswitch.model`` names it (or says "all")."""
+    if label in ("5h", "7d"):
+        return provider != "claude" or label in windows
+    if label == "wk":
+        return True
+    wanted = {m.lower() for m in models}
+    return provider == "claude" and ("all" in wanted or label.lower() in wanted)
+
+
 def up_next(
     provider: str,
     switcher,
@@ -90,6 +102,7 @@ def up_next(
     strategy: str,
     models: tuple[str, ...],
     gate_for: Callable[[str], float | None],
+    windows: tuple[str, ...] = ("5h", "7d"),
 ) -> UpNext:
     if not capabilities(provider).auto_switch:
         return UpNext(provider, manual=True)
@@ -103,6 +116,8 @@ def up_next(
     tightest = None  # (pct - gate, window, gate)
     for window in account_windows(active.usage.last_good):
         if window.pct is None or window.label == "$$":
+            continue
+        if not _watched(provider, window.label, models, windows):
             continue
         gate = gate_for("Weekly" if window.label == "wk" else window.label)
         gate = DEFAULT_GATE_PCT if gate is None else gate
@@ -281,22 +296,27 @@ class Sidebar(Vertical):
             self._computing = False
 
     def _compute_once(self, providers: tuple[str, ...], snapshots: dict) -> tuple:
-        from ccswap.settings import load_settings, parse_model_names
+        from ccswap.settings import parse_model_names, parse_window_selection
 
         app: "CswapApp" = self.app  # type: ignore[assignment]
         root = app.switcher_for("claude").backup_dir
+        # The saved settings, as the engines read them: a `ccswap config set`
+        # made while the dashboard is open counts.
         try:
-            models = parse_model_names(load_settings(root).model)
+            saved = app._saved_settings()
+            models = parse_model_names(saved.model)
+            strategy, windows = saved.strategy, parse_window_selection(saved.windows)
         except Exception:
-            models = ()
+            models, strategy, windows = (), app._strategy_name, ("5h", "7d")
         rows = [
             up_next(
                 provider,
                 app.switcher_for(provider),
                 snapshots.get(provider),
-                strategy=app._strategy_name,
+                strategy=strategy,
                 models=models if provider == "claude" else (),
                 gate_for=app.bar_threshold,  # the ticks' source: one place for gates
+                windows=windows,
             )
             for provider in providers
         ]

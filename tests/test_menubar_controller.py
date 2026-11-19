@@ -609,3 +609,15 @@ def test_a_popover_toggle_keeps_keys_changed_from_the_cli(env):
     settings.set_setting(ctl.backup_root, "menubar.titlePct", "5h")  # `ccswap config set` while running
     assert ctl.set_display("show_account_name", not ctl.settings.show_account_name)
     assert menubar.MenuBarSettings.load(ctl.backup_root).title_pct == "5h"
+
+
+def test_join_workers_waits_for_a_running_refresh(env):
+    import threading
+
+    ctl = env.ctl
+    gate, done = threading.Event(), []
+    ctl._spawn = mc._spawn  # real threads
+    ctl._track(mc._spawn(lambda: (gate.wait(5), done.append(1))))
+    threading.Timer(0.1, gate.set).start()
+    ctl.join_workers(wait=5)
+    assert done == [1]
