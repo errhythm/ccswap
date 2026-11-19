@@ -617,7 +617,11 @@ def test_quiesce_waits_for_a_refresh_and_refuses_while_one_runs(env):
     ctl = env.ctl
     gate, done, stopped = threading.Event(), [], []
     ctl.stop = lambda wait=0: stopped.append(wait) or True
+    engine_gate = threading.Event()
+    ctl._engine_threads["claude"] = mc._spawn(lambda: engine_gate.wait(5))  # mid-tick when stopped
     ctl._track(mc._spawn(lambda: (gate.wait(5), done.append(1))))
     assert ctl.quiesce(wait=0.05) is False and stopped == []  # still running: engines untouched
     threading.Timer(0.1, gate.set).start()
+    threading.Timer(0.3, engine_gate.set).start()
     assert ctl.quiesce(wait=5) is True and done == [1] and len(stopped) == 1
+    assert not ctl._engine_threads["claude"].is_alive()  # waited for, not given up on

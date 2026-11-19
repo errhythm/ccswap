@@ -268,16 +268,23 @@ class MenuBarController:
 
     def quiesce(self, wait: float = 60) -> bool:
         """Before a re-exec: True once no thread can still be writing
-        credentials. Refresh and integration workers go first (one may be
-        between spending a refresh token and saving its replacement); only
-        then are the engines stopped and joined. False means something is
-        still running and the process must not be replaced."""
+        credentials. Refresh and integration workers go first, for up to
+        ``wait`` seconds (one may be between spending a refresh token and
+        saving its replacement). If one is still running, False, with the
+        engines untouched, so auto-switching carries on. Otherwise the engines
+        are stopped and joined to the end: a stopped engine finishes its
+        current tick, which network timeouts bound, so there is no point
+        where they are stopped but the restart is refused."""
         deadline = time.monotonic() + wait
         for thread in self._workers:
             thread.join(max(0.0, deadline - time.monotonic()))
         if any(t.is_alive() for t in self._workers):
-            return False  # engines untouched: the menu bar carries on as it was
-        return self.stop(wait=max(0.0, deadline - time.monotonic()))
+            return False
+        threads = [t for t in self._engine_threads.values() if t is not None]
+        self.stop()
+        for thread in threads:
+            thread.join()
+        return True
 
     # ---- refresh plumbing -----------------------------------------------------
     def refresh(self, provider_id: str | None = None, full: bool = False) -> None:
