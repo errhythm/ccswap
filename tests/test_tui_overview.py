@@ -35,6 +35,8 @@ def _no_claude_plugin_list():
 @pytest.fixture
 def frozen(monkeypatch):
     """One clock for every view, in UTC."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("POSIX timezone selection")
     monkeypatch.setenv("TZ", "UTC")
     time.tzset()
     monkeypatch.setattr(overview, "clock", lambda: FROZEN)

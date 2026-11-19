@@ -1,0 +1,2 @@
+# Logo files are pinned by hash (tests/test_brand.py): no line-ending conversion.
+*.svg -text
