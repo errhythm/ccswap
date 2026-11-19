@@ -116,7 +116,7 @@ const PROVIDERS = JSON.stringify({
           active: true,
           usage: null,
           windows: [
-            { id: "b1/weekly", label: "Gemini Pro", pct: 12, countdown: "3d" },
+            { id: "Gemini/b1/weekly", label: "Gemini Pro", pct: 12, countdown: "3d" },
           ],
         },
       ],

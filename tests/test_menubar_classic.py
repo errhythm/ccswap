@@ -135,3 +135,15 @@ def test_health_row_restarts_failed_engine():
 def test_paint_glyph_falls_back_when_the_image_cannot_be_built():
     # no rumps app / status item: must report False so the text icon stays
     assert mc._paint_glyph(object(), Fake(), True) is False
+
+
+def test_use_popover_saves_then_restarts_in_the_popover(monkeypatch):
+    monkeypatch.setitem(sys.modules, "rumps", SimpleNamespace(alert=lambda **kw: 1))
+    row = mc.MenuRow("Use popover", action="set_display", args=("style", "popover"))
+    execs, stops = [], []
+    monkeypatch.setattr(mc.os, "execv", lambda path, argv: execs.append(argv))
+    ctl = SimpleNamespace(set_display=lambda *a: False, stop=lambda wait: stops.append(wait))
+    assert mc._activate(ctl, row) and execs == []  # the save failed: stay
+    ctl.set_display = lambda *a: True
+    assert mc._activate(ctl, row)
+    assert stops == [10] and execs == [[sys.executable, "-m", "ccswap", "menubar"]]

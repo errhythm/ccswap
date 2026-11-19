@@ -1141,3 +1141,12 @@ def test_scoped_title_lists_extras_only_next_to_account_wide_windows():
     claude = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 69.0},
               "scoped": [{"name": "Fable", "pct": 0.0}]}
     assert menubar.format_title("a@x.io", claude, s, now=0, icon=False) == "10% · 69% · Fable 0%"
+
+
+def test_a_cli_menubar_key_imports_the_old_file_first(tmp_path: Path):
+    from ccswap import settings
+
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True, "title_pct": "5h"}))
+    settings.set_setting(tmp_path, "menubar.refreshInterval", "30")  # before the menu bar ever ran
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.auto_switch_enabled is True and s.title_pct == "5h" and s.refresh_interval == 30

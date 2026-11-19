@@ -1247,6 +1247,10 @@ def set_setting(backup_root: Path, dotted_key: str, raw_value: str):
         return value
     path = settings_path(backup_root)
     raw = _read_raw_for_write(path)
+    if spec.section == "menubar" and not isinstance(raw.get("menubar"), dict):
+        # Creating the section would skip the one-time import for good.
+        _import_legacy_menubar(backup_root)
+        raw = _read_raw_for_write(path)
     raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
     section = raw.get(spec.section)
     if not isinstance(section, dict):

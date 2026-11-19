@@ -1,7 +1,6 @@
 """UI-agnostic menu bar state and actions, shared by the popover and classic shells.
 
-Signatures and the payload shape below are frozen (menu bar phase). Plan:
-/private/tmp/claude-501/-Users-rhythm-Developer-cc-swap/380a1ec1-9bdb-4323-b32b-2e763919b93a/scratchpad/phase-menubar/plan.md
+Signatures and the payload shape below are frozen (menu bar phase).
 
 Threading: shells own the timers. ``tick()`` and ``payload()`` run on the main
 thread; refresh workers only rebind plain attributes and append to lock-guarded
@@ -764,9 +763,12 @@ class MenuBarController:
         return True
 
     def _save_setting(self, field: str, value) -> bool:
-        """Persist first, then apply in memory, so the file and the menu never disagree."""
-        candidate = replace(self.settings, **{field: value})
+        """Persist first, then apply in memory, so the file and the menu never disagree.
+
+        The file is re-read so a key changed with `ccswap config set` since
+        launch keeps that value instead of the copy loaded at start."""
         try:
+            candidate = replace(MenuBarSettings.load(self.backup_root), **{field: value})
             candidate.save(self.backup_root)
         except (ClaudeSwitchError, OSError) as e:
             self.alert(APP, f"Couldn't save the setting: {e}")

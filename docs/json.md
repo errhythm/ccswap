@@ -74,7 +74,7 @@ Every account row, on every provider, also carries `windows`: one uniform list o
 ```
 
 - `scope` is `null` (account-wide), `{"model": "Fable"}` (Claude per-model weekly) or `{"group": "...", "bucket": "..."}` (an Antigravity bucket). `pct` can be `null`.
-- Ids: `5h`, `7d` (Claude), `weekly` (Codex), `model:<name>`, and `<bucketId>/5h` or `<bucketId>/weekly` for Antigravity.
+- Ids: `5h`, `7d` (Claude), `weekly` (Codex), `model:<name>`, and `<group>/<bucketId>/5h` or `<group>/<bucketId>/weekly` for Antigravity (groups can share a bucket).
 - Weekly windows add the pace fields (`expectedPct`, `aheadOfPace`, ...) when computable; `countdown`/`clock` follow `resetsAt`.
 - `spend`, `credits` and `creditAllowance` have no fixed period and stay only in `usage`.
 

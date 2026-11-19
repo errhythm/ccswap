@@ -835,7 +835,8 @@ class CodexAccountSwitcher:
                 raise
         from ccswap.logging_config import log_switch
 
-        log_switch(self.backup_dir, "codex", current, number)
+        if current != number:
+            log_switch(self.backup_dir, "codex", current, number)
         result = {
             "switched": True,
             "from": {"number": int(current) if current else None, "email": ""},

@@ -10,6 +10,9 @@ rumps is imported inside functions so this module imports without it.
 
 from __future__ import annotations
 
+import os
+import sys
+
 from dataclasses import dataclass
 
 from ccswap import menubar
@@ -241,8 +244,10 @@ def _activate(controller, row) -> bool:
         return False
     if row.action == "add_token" and not row.args:
         _ask_token(controller)
-    else:
-        getattr(controller, row.action)(*row.args)
+    elif getattr(controller, row.action)(*row.args) and row.args[:1] == ("style",):
+        # The style is saved; start again in it, as the popover's setStyle does.
+        controller.stop(wait=10)
+        os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
     return True
 
 

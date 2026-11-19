@@ -600,3 +600,12 @@ def test_action_thread_alerts_and_refresh_reach_main_via_tick(env):
     assert env.notes == [] and shown == []  # notify and the follow-up refresh wait for tick
     env.ctl.tick()
     assert env.notes and shown == [threading.main_thread()]
+
+
+def test_a_popover_toggle_keeps_keys_changed_from_the_cli(env):
+    from ccswap import settings
+
+    ctl = env.ctl
+    settings.set_setting(ctl.backup_root, "menubar.titlePct", "5h")  # `ccswap config set` while running
+    assert ctl.set_display("show_account_name", not ctl.settings.show_account_name)
+    assert menubar.MenuBarSettings.load(ctl.backup_root).title_pct == "5h"

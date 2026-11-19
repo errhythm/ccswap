@@ -1051,10 +1051,13 @@ class TestUsageWindows:
              "window": "weekly", "pct": 30.0, "resets_at": "2026-11-23T12:00:00Z"},
         ]}
         five, week = usage_windows(usage)
-        assert five["id"] == "b1/5h" and five["label"] == "Pro · 5h"
+        assert five["id"] == "Pro/b1/5h" and five["label"] == "Pro · 5h"
         assert five["scope"] == {"group": "Pro", "bucket": "Flash"}
         assert five["durationS"] == 18000 and "expectedPct" not in five
-        assert week["id"] == "b1/weekly" and week["durationS"] == 604800
+        assert week["id"] == "Pro/b1/weekly" and week["durationS"] == 604800
+        shared = dict(usage["scoped"][1], group="Ultra", name="Ultra · weekly")
+        ids = [w["id"] for w in usage_windows({"scoped": [*usage["scoped"], shared]})]
+        assert len(set(ids)) == 3  # two groups on one bucket keep their own ids
 
     def test_rows_carry_windows_and_source(self):
         from ccswap.json_output import usage_row_fields

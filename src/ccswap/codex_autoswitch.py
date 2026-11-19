@@ -328,8 +328,11 @@ class CodexAutoSwitchEngine:
     def run_loop(self) -> int:
         # Never clear _stop: a stop() before the thread gets here must stick
         # (engines are single-use, as in AutoSwitchEngine).
-        while not self._stop.is_set():
+        while True:
+            # Clear before the tick, not after the wait, as AutoSwitchEngine
+            # does: a wake() racing the wait's timeout is never lost.
+            self._wake.clear()
+            if self._stop.is_set():
+                return 0
             self.tick()
             self._wake.wait(self.settings.interval_seconds)
-            self._wake.clear()
-        return 0

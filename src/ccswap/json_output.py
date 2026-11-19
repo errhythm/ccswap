@@ -231,7 +231,8 @@ def usage_windows(usage: dict, fetched_at: float | None = None) -> list[dict]:
         duration = _DURATION_5H_S if entry.get("window") == "5h" else _DURATION_7D_S
         if "group" in entry:
             window = entry.get("window", "weekly")
-            add(f"{entry['bucket_id']}/{window}", entry["name"], entry, duration,
+            # Groups can share a bucket, so the group is part of the id.
+            add(f"{entry['group']}/{entry['bucket_id']}/{window}", entry["name"], entry, duration,
                 {"group": entry["group"], "bucket": entry.get("bucket_name")})
         else:
             add(f"model:{entry['name']}", entry["name"], entry, duration,
