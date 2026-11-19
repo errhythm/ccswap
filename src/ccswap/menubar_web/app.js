@@ -25,8 +25,8 @@
   let dirty = false;
 
   const post = (msg) => window.webkit.messageHandlers.ccswap.postMessage(msg);
-  // An account action runs on the app's main thread and freezes the popover until it
-  // replies, so mark it busy and let that frame reach the screen before posting.
+  // Mark an account action busy until it replies, and let that frame reach the screen
+  // before posting (actions that stay on the app's main thread hold it until they finish).
   let busy = null; // key of the action awaiting its reply
   let busyTimer = 0;
   const keyOf = (m) => [m.action, m.provider, m.number, m.strategy].filter((x) => x != null).join(":");
@@ -573,6 +573,8 @@
       draw();
     },
     reply(r) {
+      // refused because another action is still running: that one's reply clears busy
+      if (r.busy) { note = { text: r.error || "Another action is still running", bad: true, until: Date.now() + 5000 }; if (!editing()) draw(); return; }
       busy = null;
       clearTimeout(busyTimer);
       if (r.note && r.ok) note = { text: r.note, until: Date.now() + 8000 };

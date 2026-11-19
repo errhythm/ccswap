@@ -578,3 +578,25 @@ def test_add_login_says_what_happened(env):
     sw.add_account = add
     assert ctl.add_login("codex") is True
     assert any("account 2 added" in n[1] and n[2] == "new@x.com" for n in env.notes)
+
+
+def test_action_thread_alerts_and_refresh_reach_main_via_tick(env):
+    import threading
+
+    shown = []
+    env.sw["claude"].raise_on = ClaudeSwitchError("locked")
+    t = threading.Thread(target=env.ctl.switch_to, args=("claude", 2))
+    t.start()
+    t.join(5)
+    assert env.alerts == []  # queued, not shown off the main thread
+    env.ctl.tick()
+    assert env.alerts == [("ccswap", "locked")]
+
+    env.sw["claude"].raise_on = None
+    env.ctl._spawn = lambda fn, *a: shown.append(threading.current_thread()) or fn(*a)
+    t = threading.Thread(target=env.ctl.switch_to, args=("claude", 2))
+    t.start()
+    t.join(5)
+    assert env.notes == [] and shown == []  # notify and the follow-up refresh wait for tick
+    env.ctl.tick()
+    assert env.notes and shown == [threading.main_thread()]

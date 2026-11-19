@@ -302,6 +302,18 @@ test("an action shows its busy label until the reply, and blocks other actions",
   assert.ok(btns("Remove").every((b) => !b.disabled));
 });
 
+test("a busy refusal for another message keeps the running action's spinner", async () => {
+  boot(payload(), { live: true });
+  open("Claude Code");
+  click(btn("Switch", card("Switch account")));
+  await frames();
+  w.ccswap.reply({ ok: false, action: "toggleName", busy: true, error: "Another action is still running" });
+  assert.equal($("button.busy").textContent, "Switching…");
+  assert.match($("#view").textContent, /still running/);
+  w.ccswap.reply({ ok: true, action: "rotate" });
+  assert.equal($("button.busy"), null);
+});
+
 test("+ Add shows Adding… while the current login is saved", async () => {
   boot(payload(), { live: true });
   open("Claude Code");

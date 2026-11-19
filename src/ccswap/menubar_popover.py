@@ -183,6 +183,63 @@ _PROVIDER_ACTIONS = frozenset({
 })
 
 
+# Credential writes, Keychain reads and network calls: seconds on the main
+# thread would freeze the page's spinner, so they run on an action thread.
+BACKGROUND_ACTIONS = frozenset({"switch", "rotate", "remove", "addLogin", "addToken", "refreshCreds"})
+# Allowed while one runs: a page reload, and a refresh that only starts its own worker.
+WHILE_BUSY = frozenset({"ready", "refresh"})
+
+
+class ActionRunner:
+    """One page action at a time; the slow ones run off the main thread.
+
+    ``handle`` runs on the main thread. ``deliver(reply)`` is always called on
+    the main thread: directly, or from the controller's ``tick()`` queue, which
+    ``wake()`` asks the main thread to drain now instead of on the next tick.
+    """
+
+    def __init__(self, controller, deliver, wake=lambda: None, confirm=None):
+        self.controller, self.deliver, self.wake, self.confirm = controller, deliver, wake, confirm
+        self.running = None  # the action on the action thread, until its reply is delivered
+
+    def handle(self, body) -> None:
+        get = getattr(body, "get", None)
+        action = get("action") if get else None
+        if self.running and action in BRIDGE_ACTIONS and action not in WHILE_BUSY:
+            # the page blocks its own buttons while busy, but the bridge doesn't rely on it
+            self.deliver({"ok": False, "action": action, "busy": True,
+                          "error": "Another action is still running"})
+            return
+        if action not in BACKGROUND_ACTIONS:
+            reply = dispatch(self.controller, body, confirm=self.confirm)
+            if reply is not None:
+                self.deliver(reply)
+            return
+        if action == "remove" and self.confirm:
+            # Validate and ask here (NSAlert is main-thread only), stopping before the
+            # controller call; the action thread then removes without asking again.
+            said = []
+            reply = dispatch(self.controller, body,
+                             confirm=lambda *a: said.append(self.confirm(*a)) and False)
+            if said != [True]:
+                self.deliver(reply)  # invalid request, or the user cancelled
+                return
+        self.running = action
+        self.controller._spawn(self._work, body)
+
+    def _work(self, body) -> None:  # action thread
+        reply = {"ok": False, "action": self.running, "error": "internal error"}
+        try:
+            reply = dispatch(self.controller, body)  # catches the controller's exceptions itself
+        finally:
+            self.controller._on_main(self._finish, reply)
+            self.wake()
+
+    def _finish(self, reply) -> None:  # main thread
+        self.running = None
+        self.deliver(reply)
+
+
 def notify(title: str, subtitle: str, message: str) -> None:
     from Foundation import NSUserNotification, NSUserNotificationCenter
 
@@ -272,6 +329,12 @@ def _make_shell_class():
             self.page_ready = False
             self.refresh_timer = None
             self.interval = None
+            self.actions = ActionRunner(
+                controller, self.deliver,
+                # run tick: now so the reply doesn't wait for the 1 s timer
+                wake=lambda: self.performSelectorOnMainThread_withObject_waitUntilDone_("tick:", None, False),
+                confirm=_confirm,
+            )
             self.item = NSStatusBar.systemStatusBar().statusItemWithLength_(
                 NSVariableStatusItemLength
             )
@@ -391,20 +454,21 @@ def _make_shell_class():
 
         # --- JS bridge ---
         def userContentController_didReceiveScriptMessage_(self, _ucc, message):
-            # An action can hold the main thread for seconds. Run it on the next
-            # run-loop turn so the page's busy state is on screen first.
+            # Next run-loop turn, so the page's busy state is on screen before a
+            # main-thread action (or the remove confirm) runs.
             self.performSelector_withObject_afterDelay_("handleMessage:", message.body(), 0.02)
 
         def handleMessage_(self, body):
-            reply = dispatch(self.controller, body, confirm=_confirm)
-            if reply is None:
-                return
+            self.actions.handle(body)
+
+        @objc.python_method
+        def deliver(self, reply):  # main thread
             action = reply["action"]
             if action == "ready":
                 self.page_ready = True
                 self.push()
                 return
-            if action == "quit":
+            if action == "quit" and reply["ok"]:  # not a busy refusal
                 self.controller.stop()
                 NSApplication.sharedApplication().terminate_(None)
                 return

@@ -3,9 +3,11 @@
 Signatures and the payload shape below are frozen (menu bar phase). Plan:
 /private/tmp/claude-501/-Users-rhythm-Developer-cc-swap/380a1ec1-9bdb-4323-b32b-2e763919b93a/scratchpad/phase-menubar/plan.md
 
-Threading: shells own the timers. ``tick()``, ``payload()`` and every action
-run on the main thread; refresh workers only rebind plain attributes and
-append to lock-guarded queues, so nothing here touches AppKit.
+Threading: shells own the timers. ``tick()`` and ``payload()`` run on the main
+thread; refresh workers only rebind plain attributes and append to lock-guarded
+queues, so nothing here touches AppKit. Actions run on the main thread, or (the
+popover's slow ones) on one action thread at a time: ``notify``, ``alert`` and
+the follow-up refresh from there queue for ``tick()`` via ``_on_main``.
 
 Payload (``build_payload``), pushed to the popover page as JSON::
 
@@ -185,8 +187,9 @@ class MenuBarController:
         self.providers = providers
         self.backup_root = backup_root
         self.log_path = log_path
-        self.notify = notify
-        self.alert = alert
+        # AppKit is main-thread only: from an action thread these queue for tick()
+        self.notify = lambda *a: self._on_main(notify, *a)
+        self.alert = lambda *a: self._on_main(alert, *a)
         self.on_interval_changed = on_interval_changed
         self.last_note: str | None = None  # outcome of the last add_login, for the popover reply
         self.last_switch_changed = True  # False when the last rotate kept the same account
@@ -198,6 +201,7 @@ class MenuBarController:
         self._lock = threading.Lock()
         self._results: list = []  # worker -> main: (pid, snapshot | None, error | None)
         self._events: list = []  # engine threads -> main: (pid, event)
+        self._calls: list = []  # action thread -> main: (fn, args), run by tick()
         self._errors_surfaced: dict[str, dict[str, float]] = {}
         self._last_usage_log: dict = {}  # (provider, account num) -> last-logged key
         self._checked_at: float | None = None
@@ -305,7 +309,11 @@ class MenuBarController:
     # ---- main-thread tick -----------------------------------------------------
     def tick(self) -> bool:
         """Main thread, about once a second. True when the shell should repaint."""
-        changed = self._apply_results()
+        with self._lock:
+            calls, self._calls = self._calls, []
+        for fn, args in calls:
+            fn(*args)
+        changed = self._apply_results() or bool(calls)
         note, self._claude_note = self._claude_note, None
         if note is not None:
             ok, message = note
@@ -335,6 +343,14 @@ class MenuBarController:
                 state.snapshot, state.adapted = raw, snap
                 self._checked_at = time.time()
         return bool(results)
+
+    def _on_main(self, fn, *args) -> None:
+        """Call now on the main thread; from any other thread, queue it for tick()."""
+        if threading.current_thread() is threading.main_thread():
+            fn(*args)
+            return
+        with self._lock:
+            self._calls.append((fn, args))
 
     def _detect_active_change(self, pid: str) -> None:
         # Reflect switches from any source within ~1s, refreshing only this
@@ -541,7 +557,7 @@ class MenuBarController:
             self._claude_busy = False
             self._claude_dirty = True
 
-    # ---- actions (main thread) ------------------------------------------------
+    # ---- actions (main thread, or the popover's action thread) ----------------
     def _guard(self, fn) -> bool:
         """Run a switcher action, surfacing ClaudeSwitchError via an alert."""
         try:
@@ -559,7 +575,7 @@ class MenuBarController:
         return state.switcher
 
     def _done(self, pid: str) -> bool:
-        self.refresh(pid)
+        self._on_main(self.refresh, pid)  # refresh()'s in-flight guard has one writer: main
         return True
 
     def switch_to(self, provider_id: str, number: int) -> bool:
