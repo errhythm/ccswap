@@ -409,3 +409,13 @@ def test_best_ranks_candidates_by_distance_to_their_gates(tmp_path, monkeypatch)
     # Polls continue reporting real quota headroom, not policy-adjusted values.
     assert events[0].headroom["2"] == 60
     assert events[0].headroom["3"] == 50
+
+
+def test_stop_before_run_loop_is_not_lost(tmp_path):
+    switcher = FakeCodexSwitcher(tmp_path, (_account("1", 10, active=True),))
+    engine = CodexAutoSwitchEngine(
+        switcher, AutoSwitchSettings(), lambda e: None, clock=lambda: 1_000
+    )
+    engine.stop()
+    assert engine.run_loop() == 0  # returns at once instead of ticking forever
+    assert switcher.fetches == []

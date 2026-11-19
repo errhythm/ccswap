@@ -326,7 +326,8 @@ class CodexAutoSwitchEngine:
         self.settings = settings
 
     def run_loop(self) -> int:
-        self._stop.clear()
+        # Never clear _stop: a stop() before the thread gets here must stick
+        # (engines are single-use, as in AutoSwitchEngine).
         while not self._stop.is_set():
             self.tick()
             self._wake.wait(self.settings.interval_seconds)
