@@ -24,6 +24,7 @@ from textual.widgets import ListView, Static
 from ccswap.autoswitch import NoSwitchEvent, SwitchEvent
 from ccswap.json_output import USAGE_API_KEY, USAGE_TOKEN_EXPIRED
 from ccswap.models import AccountSnapshot, AccountsSnapshot
+from ccswap.codex import CodexAccountSwitcher
 from ccswap.switcher import ClaudeAccountSwitcher
 from ccswap.tui import data as tui_data
 from ccswap.tui.widgets import MenuItem
@@ -132,6 +133,26 @@ class FakeSwitcher:
         self.calls: list[tuple] = []
         self.fetch_sets: list[set[str] | None] = []
         self.plan_refreshes = 0
+
+    # -- read-only ranking: the real switchers' selectors over these rows ---
+
+    def _get_sequence_data(self) -> dict:
+        return {
+            "sequence": [int(a.number) for a in self._accounts],
+            "accounts": {
+                a.number: {"email": a.email, "disabled": a.disabled} for a in self._accounts
+            },
+        }
+
+    def _account_is_switchable(self, number: str) -> bool:
+        return any(a.number == str(number) and a.switchable for a in self._accounts)
+
+    _disabled_from_data = staticmethod(ClaudeAccountSwitcher._disabled_from_data)
+    _select_best_switchable = ClaudeAccountSwitcher._select_best_switchable
+    _select_consume_first_switchable = ClaudeAccountSwitcher._select_consume_first_switchable
+    _strategy_usage = staticmethod(CodexAccountSwitcher._strategy_usage)
+    _select_best = CodexAccountSwitcher._select_best
+    _select_consume_first = CodexAccountSwitcher._select_consume_first
 
     # -- surface the TUI consumes ------------------------------------------
 

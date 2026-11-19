@@ -52,6 +52,7 @@ from ccswap.tui.data import (
 from ccswap.tui.overview import BREAKPOINTS, HeaderBar, tabs
 from ccswap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
 from ccswap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
+from ccswap.tui.sidebar import Sidebar
 from ccswap.tui.widgets import AccountsPanel
 
 
@@ -733,6 +734,8 @@ class CswapApp(App):
                 panel = screen.query_one("#accounts-panel", AccountsPanel)
                 panel.provider = provider
                 panel.refresh(layout=True)
+                for sidebar in screen.query(Sidebar):
+                    sidebar.update_panels()
             elif isinstance(screen, AccountListScreen):
                 # A view flip does not change `snapshots`, so its watcher would
                 # otherwise leave this stacked list stale until the next poll.

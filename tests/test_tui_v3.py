@@ -376,3 +376,145 @@ async def test_settings_view_row_steps_the_saved_view_not_the_tab(tmp_path):
         await settle(pilot)
         assert app._view == "claude" and app._saved_view == "claude"
         assert json.loads((tmp_path / "settings.json").read_text())["ui"]["view"] == "claude"
+
+
+# ---------------------------------------------------------------------------
+# sidebar: Up next + Recent switches
+# ---------------------------------------------------------------------------
+
+import time as _time  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+
+from ccswap.usage_store import UsageEntry  # noqa: E402
+
+_NOW = _time.time()
+
+
+def _w(pct, reset_s):
+    at = datetime.fromtimestamp(_NOW + reset_s, tz=timezone.utc).isoformat()
+    return {"pct": pct, "resets_at": at}
+
+
+def _acc(n, five, week, *, active=False, weekly_key="seven_day", reset=3 * 86400):
+    last_good = {"five_hour": _w(five, 3600), weekly_key: _w(week, reset)}
+    entry = UsageEntry(last_good=last_good, fetched_at=_NOW, age_s=1.0)
+    return make_account(n, active=active, entry=entry)
+
+
+def _rank(provider, accounts, strategy, tmp_path):
+    from ccswap.models import AccountsSnapshot
+    from ccswap.tui.sidebar import up_next
+
+    fake = FakeSwitcher(accounts, tmp_path)
+    snap = AccountsSnapshot(active_number=fake.active, accounts=tuple(accounts), taken_at=_NOW)
+    return up_next(provider, fake, snap, strategy=strategy, models=(), gate_for=lambda _l: 90.0)
+
+
+@pytest.mark.parametrize("provider, weekly_key", [("claude", "seven_day"), ("codex", "weekly")])
+def test_up_next_picks_what_the_switch_strategy_picks(tmp_path, provider, weekly_key):
+    from ccswap.switcher import ClaudeAccountSwitcher
+    from ccswap.codex import CodexAccountSwitcher
+
+    accounts = [
+        _acc(1, 80, 50, active=True, weekly_key=weekly_key, reset=5 * 86400),
+        _acc(2, 10, 20, weekly_key=weekly_key, reset=6 * 86400),  # most headroom
+        _acc(3, 30, 40, weekly_key=weekly_key, reset=1 * 86400),  # resets soonest
+    ]
+    best = _rank(provider, accounts, "best", tmp_path)
+    consume = _rank(provider, accounts, "consume-first", tmp_path)
+    assert (best.active, best.target) == ("1", "2")
+    assert (consume.active, consume.target) == ("1", "3")
+    assert (best.window, best.pct, best.gate) == ("5h", 80.0, 90.0)  # closest to its gate
+    # The same answer the switch command's own selector gives on this data.
+    fake = FakeSwitcher(accounts, tmp_path)
+    if provider == "claude":
+        usage = {a.number: a.usage.decision_value() for a in accounts}
+        assert ClaudeAccountSwitcher._select_best_switchable(fake, "1", (), usage)[0] == "2"
+        assert ClaudeAccountSwitcher._select_consume_first_switchable(fake, "1", (), usage)[0] == "3"
+    else:
+        assert CodexAccountSwitcher._select_best(fake, accounts[0], accounts[1:])[0] == "2"
+        assert CodexAccountSwitcher._select_consume_first(fake, accounts[0], accounts[1:])[0] == "3"
+
+
+def test_up_next_says_stays_on_when_the_active_account_is_best(tmp_path):
+    from ccswap.tui.sidebar import up_next_text
+    from ccswap.tui.theme import Palette
+
+    accounts = [_acc(1, 10, 20, active=True, reset=86400), _acc(2, 60, 70, reset=5 * 86400)]
+    for strategy in ("best", "consume-first"):
+        row = _rank("claude", accounts, strategy, tmp_path)
+        assert row.target is None
+        assert up_next_text([row], Palette.DARK).plain == "Claude  stays on #1 · 20% 7d"
+
+
+def test_up_next_text_and_manual_providers(tmp_path):
+    from ccswap.tui.sidebar import UpNext, up_next, up_next_text
+    from ccswap.tui.theme import Palette
+
+    agy = up_next("agy", None, None, strategy="best", models=(), gate_for=lambda _l: None)
+    assert agy.manual
+    row = UpNext("claude", active="1", target="3", window="5h", pct=94.0, gate=90.0)
+    assert up_next_text([row, agy], Palette.DARK).plain.splitlines() == [
+        "Claude       #1 → #3 at 90% of 5h",
+        "Antigravity  manual switching only",
+    ]
+
+
+def test_expected_around_only_with_projection_data(tmp_path):
+    from ccswap.tui.sidebar import up_next_text
+    from ccswap.tui.theme import Palette
+
+    # 7d 80% two days into the week: list --json projects exhaustion before the reset.
+    burning = [_acc(1, 5, 80, active=True, reset=5 * 86400), _acc(2, 5, 10)]
+    row = _rank("claude", burning, "best", tmp_path)
+    assert row.window == "7d" and row.eta is not None
+    assert "expected around" in up_next_text([row], Palette.DARK).plain
+    # 7d 30% six days in: on pace, no projectedExhaustionAt, no line.
+    calm = [_acc(1, 5, 30, active=True, reset=86400), _acc(2, 5, 10)]
+    row = _rank("claude", calm, "best", tmp_path)
+    assert row.eta is None
+    assert "expected" not in up_next_text([row], Palette.DARK).plain
+    # A 5h-bound account never has one (pace is weekly only).
+    five = [_acc(1, 85, 20, active=True), _acc(2, 5, 10)]
+    assert _rank("claude", five, "best", tmp_path).eta is None
+
+
+def test_recent_switches_read_the_switch_log(tmp_path):
+    from ccswap.tui.sidebar import recent_switches, recent_text, when
+    from ccswap.tui.theme import Palette
+
+    log = tmp_path / "claude-swap.log"
+    assert recent_switches(log) == []  # no log yet
+    lines = [f"2026-11-1{d} 1{d}:0{d}:00,000 - INFO - Switched from account {d} to {d + 1}" for d in range(1, 8)]
+    log.write_text("\n".join(lines[:3] + ["2026-11-14 10:00:00,000 - INFO - Updated config file"] + lines[3:]) + "\n")
+    rows = recent_switches(log)
+    assert [(r.source, r.target) for r in rows] == [("7", "8"), ("6", "7"), ("5", "6"), ("4", "5"), ("3", "4")]
+    now = datetime(2026, 11, 17, 20, 0).timestamp()  # local, like the log
+    assert when(rows[0].at, now) == "17:07"
+    assert when(rows[1].at, now) == "Mon"
+    assert when(datetime(2026, 11, 1, 9, 0).timestamp(), now) == "Nov 01"
+    text = recent_text(rows[:2], Palette.DARK, now).plain.splitlines()
+    assert text == ["17:07  Claude  #7 → #8", "Mon    Claude  #6 → #7"]
+    assert recent_text([], Palette.DARK, now).plain == "no switches logged yet"
+
+
+@pytest.mark.asyncio
+async def test_sidebar_shows_at_120_cols_and_hides_below_live(tmp_path):
+    (tmp_path / "claude-swap.log").write_text(
+        "2026-11-19 11:02:30,000 - INFO - Switched from account 2 to 1\n"
+    )
+    claude = FakeSwitcher([_acc(1, 50, 20, active=True), _acc(2, 5, 10)], tmp_path)
+    app = make_app(claude)
+    async with app.run_test(size=(132, 40)) as pilot:
+        await settle(pilot)
+        sidebar = app.screen.query_one("#sidebar")
+        assert sidebar.display and sidebar.region.width == 44
+        assert "#1 → #2 at 90% of 5h" in str(app.screen.query_one("#up-next").render())
+        assert "#2 → #1" in str(app.screen.query_one("#recent-switches").render())
+        for width, shown in ((119, False), (120, True), (100, False), (80, False), (125, True)):
+            await pilot.resize_terminal(width, 40)
+            await settle(pilot)
+            assert (sidebar.region.width > 0) is shown, width
+            panels = app.screen.query_one("#accounts-panel")
+            assert panels.region.right <= (sidebar.region.x if shown else width)
+        assert not any(c[0] in ("switch", "switch_to") for c in claude.calls)  # read-only

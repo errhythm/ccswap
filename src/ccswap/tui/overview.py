@@ -38,7 +38,7 @@ def clock() -> float:
 
 
 # Screen classes from HORIZONTAL_BREAKPOINTS (set on every account screen).
-BREAKPOINTS = [(0, "-narrow"), (100, "-medium"), (132, "-wide")]
+BREAKPOINTS = [(0, "-narrow"), (100, "-medium"), (120, "-wide")]
 
 GAUGE_W = 20  # widest gauge (Figma wide view: ~20 cells)
 GROUP_GAUGE_W = 10  # Antigravity model-group gauges

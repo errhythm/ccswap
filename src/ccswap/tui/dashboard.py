@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Callable
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import ListView, Static
 
@@ -39,6 +40,7 @@ from ccswap.tui.data import (
 from ccswap.tui.option_help import option_help
 from ccswap.tui.overview import HeaderBar, account_count_note
 from ccswap.tui.settings_screen import SettingsScreen
+from ccswap.tui.sidebar import Sidebar
 from ccswap.tui.modals import OutputModal
 from ccswap.tui.widgets import (
     AccountItem,
@@ -105,13 +107,19 @@ class DashboardScreen(ViewTabs, Screen):
 
     def compose(self) -> ComposeResult:
         yield HeaderBar()
-        yield AccountsPanel(
-            provider=None if self.app._view == "combined" else self.app._view,
-            id="accounts-panel",
-        )
+        with Horizontal(id="dashboard-top"):
+            yield AccountsPanel(
+                provider=None if self.app._view == "combined" else self.app._view,
+                id="accounts-panel",
+            )
+            yield Sidebar(id="sidebar")
         yield Static("", id="menu-title")
         yield CyclingListView(id="menu")
         yield CswapFooter()
+
+    def on_resize(self) -> None:
+        # The -wide class (and the sidebar with it) follows the same resize.
+        self.call_after_refresh(self.query_one(Sidebar).update_panels)
 
     async def on_mount(self) -> None:
         localize_bindings(self, self.app.gettext)

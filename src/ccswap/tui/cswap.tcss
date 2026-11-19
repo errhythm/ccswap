@@ -67,6 +67,35 @@ Screen {
     padding: 0 1;
 }
 
+/* -- sidebar: Up next + Recent switches beside the panels at >= 120 cols ------- */
+
+#dashboard-top {
+    height: 1fr;
+}
+
+#sidebar {
+    display: none;
+    width: 44;
+    height: auto;
+    max-height: 100%;
+    padding: 1 2 0 0;
+    background: $background;
+}
+
+DashboardScreen.-wide #sidebar {
+    display: block;
+}
+
+.side-panel {
+    height: auto;
+    border: round $line;
+    border-title-color: $foreground;
+    border-title-style: bold;
+    padding: 0 1;
+    margin-bottom: 1;
+    background: $background;
+}
+
 /* -- dashboard menu ----------------------------------------------------------- */
 
 #menu-title {
