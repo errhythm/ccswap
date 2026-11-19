@@ -514,7 +514,7 @@ async def test_sidebar_shows_at_120_cols_and_hides_below_live(tmp_path):
         app.step_view(-1)  # Antigravity: the log has no switches of its own
         await settle(pilot)
         assert str(app.screen.query_one("#recent-switches").render()) == (
-            "the log records Claude Code switches only"
+            "only Claude Code switches are logged"
         )
         assert str(app.screen.query_one("#up-next").render()) == "Antigravity  manual switching only"
         app.step_view(1)

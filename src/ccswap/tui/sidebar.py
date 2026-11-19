@@ -277,7 +277,7 @@ class Sidebar(Vertical):
         ]
         logged = recent_switches(root / LOG_NAME)
         recent = [r for r in logged if r.provider in providers]
-        empty = "no switches logged yet" if not logged else "the log records Claude Code switches only"
+        empty = "no switches logged yet" if not logged else "only Claude Code switches are logged"
         try:
             app.call_from_thread(self._show, rows, recent, empty)
         except RuntimeError:  # the app closed meanwhile
