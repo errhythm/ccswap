@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, Callable
 
 from rich.text import Text
+from textual.containers import Vertical
 from textual.widgets import ListItem, ListView, Static
 
 from ccswap import pace
@@ -21,6 +22,7 @@ from ccswap.reset_credit_display import ResetCreditDisplay, reset_credit_display
 from ccswap.switcher import ERROR_NOTES
 from ccswap.tui import data
 from ccswap.tui.data import PROVIDER_LABELS, PROVIDERS
+from ccswap.tui.overview import ProviderPanel, account_block
 from ccswap.tui.theme import Palette
 from ccswap.usage_store import STALE_OK_S
 
@@ -531,10 +533,13 @@ def section_header_text(label: str, width: int, *, palette: Palette) -> Text:
     return text
 
 
-class AccountsPanel(Static):
-    """Static account overview: the active account full-size, others as
-    one-line minis (in slot order, expanded in place). The dashboard's — and
-    with ``show_minis=False`` the auto screen's — always-visible monitor."""
+class AccountsPanel(Vertical):
+    """Static account overview: one rounded panel per provider, the active
+    account full-size and the others as one-line rows. The dashboard's (and,
+    with ``show_minis=False``, the auto and settings screens') monitor.
+
+    The panels are composed once, one per registered provider, and only
+    repaint on new snapshots, so a provider can never be drawn twice."""
 
     def __init__(
         self,
@@ -543,104 +548,93 @@ class AccountsPanel(Static):
         provider: str | None = None,
         id: str | None = None,
     ) -> None:
-        super().__init__(id=id)
+        super().__init__(id=id, classes="accounts-panel")
         self._show_minis = show_minis
-        self.provider = provider
+        self._provider = provider
+
+    @property
+    def provider(self) -> str | None:
+        return self._provider
+
+    @provider.setter
+    def provider(self, value: str | None) -> None:
+        self._provider = value
+        if self.is_mounted:
+            self._sync()
+
+    def compose(self):
+        yield Static("", classes="panel-empty")
+        for provider in PROVIDERS:
+            yield ProviderPanel(provider, show_minis=self._show_minis)
 
     def on_mount(self) -> None:
-        self.watch(self.app, "snapshots", lambda _snap: self.refresh(layout=True))
-        self.watch(self.app, "theme", lambda _t: self.refresh(layout=True))
-        self.watch(self.app, "mask_accounts", lambda _on: self.refresh(layout=True))
-        self.set_interval(30.0, lambda: self.refresh(layout=True))
+        self.watch(self.app, "snapshots", lambda _snap: self._sync())
+        self.watch(self.app, "theme", lambda _t: self._sync())
+        self.watch(self.app, "mask_accounts", lambda _on: self._sync())
+        self.set_interval(30.0, self._sync)
 
-    def render(self) -> Text:
+    def refresh(self, *args, **kwargs):  # noqa: D102 - repaint the panels too
+        if self.is_mounted:
+            for panel in self.query(ProviderPanel):
+                panel.refresh(layout=True)
+        return super().refresh(*args, **kwargs)
+
+    def _sync(self) -> None:
         app: "CswapApp" = self.app  # type: ignore[assignment]
-        palette = Palette.from_theme(app.current_theme)
-        providers = (self.provider,) if self.provider is not None else PROVIDERS
-        if all(
-            app.snapshots[provider] is not None and not app.snapshots[provider].accounts
-            for provider in providers
-        ):
-            return Text(
+        providers = (self._provider,) if self._provider is not None else tuple(PROVIDERS)
+        for panel in self.query(ProviderPanel):
+            snap = app.snapshots.get(panel.provider)
+            # A configured provider with zero accounts stays out of the way.
+            panel.display = panel.provider in providers and (snap is None or bool(snap.accounts))
+            panel.update_border()
+        empty = self.query_one(".panel-empty", Static)
+        none = all(
+            app.snapshots.get(p) is not None and not app.snapshots[p].accounts
+            for p in providers
+        )
+        empty.display = none
+        empty.update(
+            Text(
                 self.app.gettext(
                     "No managed accounts yet.\nUse the menu below to add a Claude Code or Codex login."
                 ),
-                style=palette.muted,
+                style=Palette.from_theme(app.current_theme).muted,
             )
-        now = time.time()
-        width = (self.size.width or 80) - 2
-        text = Text()
-        rendered_sections = 0
-        for provider in providers:
-            snap = app.snapshots[provider]
-            error = app._last_refresh_error[provider]
-            # A configured provider with zero accounts stays out of the way;
-            # the Add-account menu remains the discovery path.
-            if snap is not None and not snap.accounts:
-                continue
-            if rendered_sections:
-                text.append("\n\n")
-            label = PROVIDER_LABELS[provider]
-            text.append(section_header_text(label, width, palette=palette))
-            text.append("\n")
-            if snap is None:
-                text.append(error or self.app.gettext("loading…"), style=palette.muted)
-                rendered_sections += 1
-                continue
+            if none
+            else ""
+        )
+        self.refresh(layout=True)
 
-            blocks: list[Text] = []
-            for acc in snap.accounts:
-                if acc.is_active:
-                    blocks.append(
-                        account_card_text(
-                            acc,
-                            width,
-                            threshold_for=app.bar_threshold,
-                            now=now,
-                            palette=palette,
-                            mask=app.mask_accounts,
-                            tr=app.gettext,
-                            show_tag=app.tag_shown(acc),
-                        )
-                    )
-                elif self._show_minis:
-                    blocks.append(
-                        mini_account_text(
-                            acc,
-                            now,
-                            palette=palette,
-                            mask=app.mask_accounts,
-                            tr=app.gettext,
-                            show_tag=app.tag_shown(acc),
-                        )
-                    )
-            if not blocks:
-                text.append(
-                    self.app.gettext("no active managed login"), style=palette.muted
-                )
-            previous_multiline = False
-            for i, block in enumerate(blocks):
-                multiline = "\n" in block.plain
-                if i:
-                    text.append("\n\n" if (multiline or previous_multiline) else "\n")
-                text.append(block)
-                previous_multiline = multiline
-            rendered_sections += 1
+    def render_text(self) -> Text:
+        """Every shown panel's title and content as one Text (tests, logs)."""
+        text = Text()
+        empty = self.query_one(".panel-empty", Static)
+        if empty.display:
+            return Text(str(empty.render()))
+        for panel in self.query(ProviderPanel):
+            if not panel.display:
+                continue
+            if text:
+                text.append("\n\n")
+            text.append(f"{PROVIDER_LABELS[panel.provider]}  {panel.border_subtitle}\n")
+            text.append(panel.render())
         return text
 
 
 class AccountCard(Static):
-    """One account rendered full-size (used by the switch screen's list)."""
+    """One account rendered full-size (the switch and watch lists)."""
 
     def __init__(
         self,
         acc: AccountSnapshot,
         *,
+        provider: str = "claude",
         threshold: float | None = None,
         tag: str | None = None,
     ) -> None:
         super().__init__()
         self._acc = acc
+        self._provider = provider
         self._threshold = threshold
         self._tag = tag
 
@@ -653,15 +647,19 @@ class AccountCard(Static):
         self.set_interval(30.0, lambda: self.refresh(layout=True))
 
     def render(self) -> Text:
-        return account_card_text(
+        item = self.parent
+        highlighted = isinstance(item, ListItem) and item.highlighted
+        return account_block(
             self._acc,
-            self.size.width or 80,
-            threshold=self._threshold,
-            tag=self._tag,
+            self._provider,
+            width=max(20, self.content_size.width or 80),
+            now=overview_clock(),
             palette=Palette.from_theme(self.app.current_theme),
             mask=bool(getattr(self.app, "mask_accounts", False)),
-            tr=self.app.gettext,
             show_tag=self.app.tag_shown(self._acc),
+            narrow=self.screen.has_class("-narrow"),
+            marker="› " if highlighted else "  ",
+            tag=self._tag,
         )
 
 
@@ -669,10 +667,14 @@ class AccountItem(ListItem):
     """ListView row wrapping an :class:`AccountCard`; remembers its slot."""
 
     def __init__(self, acc: AccountSnapshot, provider: str) -> None:
-        super().__init__(AccountCard(acc, tag=PROVIDER_LABELS[provider]))
+        super().__init__(AccountCard(acc, provider=provider))
         self.provider = provider
         self.number = acc.number
         self.email = acc.email
+
+    def watch_highlighted(self, value: bool) -> None:
+        super().watch_highlighted(value)
+        self.query_one(AccountCard).refresh()
 
     def set_account(self, acc: AccountSnapshot) -> None:
         self.number = acc.number
@@ -681,18 +683,17 @@ class AccountItem(ListItem):
 
 
 class ProviderDivider(ListItem):
-    """A non-selectable provider heading inside an account list."""
+    """A non-selectable provider heading inside an account list: the top edge
+    of a rounded panel (the rows below draw its sides, the last one its
+    bottom), with the provider's name as the border title."""
 
     def __init__(self, provider: str) -> None:
-        super().__init__(disabled=True)
+        super().__init__(disabled=True, classes=f"-provider-{provider}")
         self.provider = provider
+        self.border_title = PROVIDER_LABELS[provider]
 
     def render(self) -> Text:
-        return section_header_text(
-            PROVIDER_LABELS[self.provider],
-            self.size.width or 80,
-            palette=Palette.from_theme(self.app.current_theme),
-        )
+        return Text()
 
 
 class CyclingListView(ListView):
@@ -733,3 +734,9 @@ class MenuItem(ListItem):
         super().__init__(item)
         self.action_id = action_id
         self.tooltip = Text(help_text) if help_text else None
+
+
+def overview_clock() -> float:
+    from ccswap.tui import overview
+
+    return overview.clock()

@@ -20,3 +20,4 @@ docs/superpowers/
 
 # menu bar page tests
 tests/js/node_modules/
+snapshot_report.html

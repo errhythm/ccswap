@@ -1035,13 +1035,13 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
-            assert "user1@example.com" in panel and "● active" in panel
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
+            assert "user1@example.com" in panel and "ACTIVE" in panel
             assert "resets" in panel  # the active card is the full one
             assert "user2@example.com" in panel and "92%" in panel
-            # the mini line has no bars — bar glyphs only in the active card
+            # the mini row is one line: short gauges, no reset countdowns
             mini_part = panel.split("user2@example.com", 1)[1]
-            assert "━" not in mini_part
+            assert "\n" not in mini_part.strip() and "resets" not in mini_part
 
     async def test_disabled_marker_on_active_card_and_mini(self, tmp_path):
         # A disabled account is still shown; it's just annotated so the user
@@ -1059,8 +1059,8 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
-            assert "● active" in panel  # still the active card
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
+            assert "ACTIVE" in panel  # still the active card
             # both the active card and the mini row carry the marker
             assert panel.count("(disabled)") == 2
 
@@ -1080,7 +1080,7 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
             assert "5h" in panel
             assert "7d" not in panel  # annual plan: no invented row
             assert "usage unknown" not in panel
@@ -1099,9 +1099,9 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
             mini_part = panel.split("user2@example.com", 1)[1]
-            assert "5h 92%" in mini_part
+            assert "5h ━━━━━╸  92%" in mini_part  # short gauge, then the figure
             assert "7d" not in mini_part
 
     async def test_menu_is_default_navigation_and_nests(self, tmp_path):
@@ -1161,7 +1161,7 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            assert "Fourth AI" in app.screen.query_one(AccountsPanel).render().plain
+            assert "Fourth AI" in app.screen.query_one(AccountsPanel).render_text().plain
 
             def ids() -> list[str]:
                 menu = app.screen.query_one("#menu", ListView)
@@ -1203,7 +1203,7 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
             assert "Codex" in panel
             assert "Claude Code" not in panel
 
@@ -1323,7 +1323,7 @@ class TestDashboard:
             await app.workers.wait_for_complete(
                 [w for w in app.workers if w.group != "engine"]
             )
-            assert tags(app.screen.query_one(AccountsPanel).render().plain) == {
+            assert tags(app.screen.query_one(AccountsPanel).render_text().plain) == {
                 "orgA", "orgB"
             }
             await app.screen._dispatch("remove-menu")
@@ -1372,7 +1372,7 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
             assert panel.index("Claude Code") < panel.index("Codex")
             claude_section, codex_section = panel.split("Codex", 1)
             assert "claude-active@example.com" in claude_section
@@ -1390,8 +1390,9 @@ class TestDashboard:
             ):
                 active_part, mini_part = section.split(mini_email, 1)
                 active_part = active_part.split(active_email, 1)[1]
-                assert "● active" in active_part and "━" in active_part
-                assert "● active" not in mini_part and "━" not in mini_part
+                assert "ACTIVE" in active_part and "━" in active_part
+                # The mini row is one line of short gauges, no reset text.
+                assert "ACTIVE" not in mini_part and "resets" not in mini_part
 
     async def test_dashboard_collects_both_provider_sources_without_mode_toggle(
         self, tmp_path
@@ -1606,7 +1607,7 @@ class TestDashboard:
             ) == ("", "Codex Org", "codex-alias", 77.0)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
             claude_section, codex_section = panel.split("Codex", 1)
             assert (
                 claude_section.count(shared) == 1
@@ -1657,7 +1658,7 @@ class TestDashboard:
 
             assert isinstance(app.screen, DashboardScreen) and widget.is_mounted
             assert refresh_errors == ["malformed Codex sequence.json"]
-            mounted_panel = widget.render().plain
+            mounted_panel = widget.render_text().plain
             assert "safe@example.com" in mounted_panel
             assert "Codex" in mounted_panel
             assert "malformed Codex sequence.json" in mounted_panel
@@ -1676,7 +1677,7 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
             assert "only-claude@example.com" in panel
             assert "Claude Code" in panel
             assert "Codex" not in panel
@@ -1924,7 +1925,7 @@ class TestDashboard:
             await settle(pilot)
             from ccswap.tui.widgets import AccountsPanel
 
-            panel = app.screen.query_one(AccountsPanel).render().plain
+            panel = app.screen.query_one(AccountsPanel).render_text().plain
             assert "No managed accounts yet" in panel
 
     async def test_palette_offers_only_ccswap_commands(self, tmp_path):
@@ -2809,12 +2810,12 @@ class TestMaskToggle:
             from ccswap.tui.widgets import AccountsPanel
 
             assert "Mask off" in footer_labels(app.screen)
-            assert "alice@acme.com" in app.screen.query_one(AccountsPanel).render().plain
+            assert "alice@acme.com" in app.screen.query_one(AccountsPanel).render_text().plain
             await pilot.press("m")
             await settle(pilot)
             assert "Mask on" in footer_labels(app.screen)
             assert "Mask off" not in footer_labels(app.screen)
-            plain = app.screen.query_one(AccountsPanel).render().plain
+            plain = app.screen.query_one(AccountsPanel).render_text().plain
             assert "alice@acme.com" not in plain
             assert "dev (a•••e@a•••.com)" in plain
             assert json.loads((tmp_path / "settings.json").read_text())["ui"]["mask"] is True
@@ -3211,11 +3212,11 @@ class TestSettingsMenu:
             from ccswap.tui.widgets import AccountsPanel
 
             panel = app.screen.query_one(AccountsPanel)
-            before = panel.render().plain
+            before = panel.render_text().plain
             with patch.object(panel, "refresh", wraps=panel.refresh) as refresh:
                 app.apply_threshold(75.0)
                 assert refresh.called
-            after = panel.render().plain
+            after = panel.render_text().plain
             assert after.index("┃") < before.index("┃")
 
     async def test_cycling_row_stays_on_the_settings_menu(self, tmp_path):
@@ -3383,10 +3384,11 @@ async def test_two_expiring_minis_keep_local_times_in_narrow_panel(tmp_path):
     async with app.run_test(size=(40, 32)) as pilot:
         await settle(pilot)
         from textual.geometry import Region
-        widget = app.screen.query_one(AccountsPanel)
-        assert "\n\n 2" in widget.render().plain
+        assert "\n○ 2" in app.screen.query_one(AccountsPanel).render_text().plain
+        widget = app.screen.query_one("#panel-codex")
         strips = widget.render_lines(Region(0, 0, widget.outer_size.width, widget.outer_size.height))
-        visible = "".join("".join(strip.text for strip in strips).split())
+        # The panel's side borders are drawn on every row; read the text inside.
+        visible = "".join("".join(strip.text.strip("│ ") + " " for strip in strips).split())
         clock = "".join(expiry.astimezone().strftime("%Y-%m-%d %H:%M %Z (%z)").split())
         assert visible.count(clock) == 2
         assert "usageunknown" not in visible

@@ -6,19 +6,54 @@ Screen {
     background: $background;
 }
 
-/* -- accounts panel (the always-visible monitor) --------------------------- */
+/* -- header: brand + the ui.view filter as tabs, one rule under it ---------- */
 
-#accounts-panel {
-    height: auto;
-    padding: 1 3;
+#header {
+    height: 2;
+    width: 1fr;
+    padding: 0 2;
+    border-bottom: solid $line;
     background: $background;
-    border-bottom: solid $panel;
+}
+
+/* -- accounts panel: one rounded panel per provider ------------------------- */
+
+.accounts-panel {
+    height: auto;
+    width: 1fr;
+    padding: 1 2 0 2;
+    background: $background;
+}
+
+/* The dashboard keeps room for its menu: the panels scroll past 60%. */
+#accounts-panel {
+    max-height: 60%;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
 }
 
 #auto-active-panel {
+    padding: 1 2 0 2;
+}
+
+.provider-panel {
+    width: 1fr;
     height: auto;
-    padding: 1 3 0 3;
+    border: round $line;
+    border-title-color: $primary;
+    border-title-style: bold;
+    border-subtitle-color: $secondary;
+    border-subtitle-align: right;
+    padding: 0 1;
     background: $background;
+}
+
+#panel-codex { border-title-color: $codex; }
+#panel-agy { border-title-color: $antigravity; }
+
+.panel-empty {
+    height: auto;
+    padding: 0 1;
 }
 
 /* -- dashboard menu ----------------------------------------------------------- */
@@ -40,25 +75,39 @@ Screen {
     background-tint: $foreground 0%;
 }
 
-#menu ListItem, #accounts ListItem {
-    background: transparent;
+/* Highlight colours come from the theme's block-cursor-* variables. */
+#menu ListItem {
     padding: 0 1;
-    border-left: thick $background;
 }
 
-#accounts ListItem {
-    margin-bottom: 1;
+/* Each provider's rows form one rounded panel: the divider is the top
+   edge, the rows the sides, the last row the bottom with the count. */
+#accounts AccountItem {
+    border-left: round $line;
+    border-right: round $line;
+    padding: 0 1 1 1;
 }
 
-#menu ListItem.-highlight,
-#menu:focus ListItem.-highlight,
-#accounts ListItem.-highlight,
-#accounts:focus ListItem.-highlight {
-    color: $foreground;
-    background: $surface;
-    text-style: none;
-    border-left: thick $primary;
+#accounts AccountItem.-last {
+    border-bottom: round $line;
+    border-subtitle-color: $secondary;
+    border-subtitle-align: right;
+    padding: 0 1;
 }
+
+#accounts ProviderDivider {
+    height: 1;
+    margin-top: 1;
+    padding: 0;
+    border: round $line;
+    border-bottom: none;
+    border-title-color: $primary;
+    border-title-style: bold;
+}
+
+#accounts ProviderDivider:first-child { margin-top: 0; }
+#accounts ProviderDivider.-provider-codex { border-title-color: $codex; }
+#accounts ProviderDivider.-provider-agy { border-title-color: $antigravity; }
 
 #accounts ListItem.flash {
     background: $panel;
@@ -66,6 +115,14 @@ Screen {
 
 MenuItem Static { color: $foreground; }
 MenuItem Static.menu-item-muted { color: $secondary; }
+
+/* -- footer: one rule above the keys ------------------------------------------ */
+
+Footer {
+    height: 2;
+    border-top: solid $line;
+    padding: 0 1;
+}
 
 /* -- switch / watch screens --------------------------------------------------- */
 
@@ -235,4 +292,15 @@ CommandList > .option-list--option-highlighted {
     color: $foreground;
     background: $panel;
     text-style: none;
+}
+
+/* -- scrollbars: quiet, in the line colour ------------------------------------ */
+
+#menu, #accounts, #accounts-panel, #event-log {
+    scrollbar-color: $line;
+    scrollbar-color-hover: $secondary;
+    scrollbar-color-active: $primary;
+    scrollbar-background: $background;
+    scrollbar-background-hover: $background;
+    scrollbar-background-active: $background;
 }

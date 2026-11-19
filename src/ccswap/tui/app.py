@@ -49,6 +49,7 @@ from ccswap.tui.data import (
     mask_emails_in_text,
     run_action,
 )
+from ccswap.tui.overview import BREAKPOINTS, HeaderBar, tabs
 from ccswap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
 from ccswap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
 from ccswap.tui.widgets import AccountsPanel
@@ -69,6 +70,9 @@ class CswapApp(App):
         # shows the live state, not just the key.
         Binding("m", "toggle_mask", mark("Mask off")),
     ]
+
+    # Screen classes -narrow / -medium / -wide drive the layout from TCSS.
+    HORIZONTAL_BREAKPOINTS = BREAKPOINTS
 
     POLL_INTERVAL_S = 3.0  # matches the old watch view's recapture cadence
     # Snapshot age stays hidden while polling is healthy (age never exceeds
@@ -170,6 +174,13 @@ class CswapApp(App):
         # set_setting. "Keys" and "Quit" are in static_commands.
         for c in static_commands(self):
             yield SystemCommand(c.label, c.help, c.run, discover=c.lead)
+
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        # Our own tokens, so the stylesheet parses before cswap-* is applied.
+        return {
+            key: CSWAP_DARK.variables[key]
+            for key in ("line", "dim", "codex", "antigravity", "track")
+        }
 
     def switcher_for(self, provider: str):
         """Return a switcher only when its provider is explicit."""
@@ -700,9 +711,17 @@ class CswapApp(App):
             for panel in screen.query(AccountsPanel):
                 panel.refresh(layout=True)
 
+    def action_view_tab(self, index: int) -> None:
+        """1-4: the ``ui.view`` filter, one tab per key."""
+        if index < len(tabs()):
+            self.apply_view(tabs()[index])
+
     def apply_view(self, name: str) -> None:
         """Apply the dashboard-only provider filter without refetching data."""
         self._view = name
+        for screen in self.screen_stack:
+            for header in screen.query(HeaderBar):
+                header.refresh()
         provider = None if name == "combined" else name
         for screen in self.screen_stack:
             if isinstance(screen, DashboardScreen):

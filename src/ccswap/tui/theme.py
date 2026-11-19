@@ -1,11 +1,9 @@
-"""The "cswap-dark" Textual theme and shared color constants.
+"""The "cswap-dark" / "cswap-light" Textual themes and shared color constants.
 
-A subtle modern dark theme: neutral charcoal backgrounds in the VS Code
-register, one warm terracotta accent (the same xterm-173 tone printer.py has
-always used for the CLI — a deliberate nod to Claude Code's orange, used
-sparingly), and desaturated severity colors so usage bars read calmly on a
-dark background. Deliberately *not* a wholesale copy of any other tool's
-palette.
+The dark theme uses the Figma design's tokens: near-black background, one
+terracotta accent (also Claude's provider colour), a colour per provider, and a
+green/amber/red severity ramp. The light theme keeps the same roles, tuned for a
+warm near-white base.
 """
 
 from __future__ import annotations
@@ -15,20 +13,25 @@ from typing import ClassVar
 
 from textual.theme import Theme
 
-# Core palette (single source of truth — widgets import these for rich
-# renderables, the Theme below maps them onto Textual's design tokens).
-ACCENT = "#d7875f"  # warm terracotta (xterm 173)
-FOREGROUND = "#e8e4de"  # soft, slightly warm off-white
-MUTED = "#8a8a8a"  # secondary text
-BACKGROUND = "#141414"
-SURFACE = "#1e1e1e"
-PANEL = "#262626"
+# Core palette: the Figma "TUI" page tokens (file VBQgujeuhCWkriwLE9ouzm,
+# frame 18:2). Widgets import these for Rich renderables; the Theme below maps
+# them onto Textual's design tokens.
+ACCENT = "#e07a5f"  # brand terracotta, also Claude's provider colour
+FOREGROUND = "#e6e3de"  # text
+MUTED = "#8c8984"  # secondary text
+DIM = "#55524e"  # tertiary text
+BACKGROUND = "#121212"
+SURFACE = "#1a1918"  # highlighted row
+PANEL = "#262422"
+LINE = "#3a3734"  # panel borders, header rule, gauge track
+CODEX = "#d6d3ce"
+ANTIGRAVITY = "#8ab4f8"
 
-# Usage severity ramp (desaturated for dark backgrounds).
-SEV_OK = "#87af87"  # calm green: plenty of headroom
-SEV_WARN = "#d7af5f"  # amber: climbing (>= 70%)
-SEV_CRIT = "#d75f5f"  # soft red: near the limit (>= 90%)
-TRACK = "#3a3a3a"  # unfilled bar track
+# Usage severity ramp.
+SEV_OK = "#8cbf88"  # < 70%
+SEV_WARN = "#e2b45a"  # 70-89%
+SEV_CRIT = "#e8655a"  # >= 90%
+TRACK = LINE  # unfilled gauge track
 
 # Severity band edges. WARN mirrors where a user starts caring; CRIT mirrors
 # the auto-switch default threshold so bar color and switch behavior agree.
@@ -53,6 +56,10 @@ class Palette:
     sev_warn: str
     sev_crit: str
     track: str
+    dim: str = DIM
+    line: str = LINE
+    codex: str = CODEX
+    antigravity: str = ANTIGRAVITY
 
     DARK: ClassVar["Palette"]
 
@@ -75,7 +82,15 @@ class Palette:
             sev_warn=theme.warning,
             sev_crit=theme.error,
             track=theme.variables.get("track", TRACK),
+            dim=theme.variables.get("dim", DIM),
+            line=theme.variables.get("line", LINE),
+            codex=theme.variables.get("codex", CODEX),
+            antigravity=theme.variables.get("antigravity", ANTIGRAVITY),
         )
+
+    def provider(self, provider: str) -> str:
+        """The provider's own colour (panel titles, tab marks, active dots)."""
+        return {"codex": self.codex, "agy": self.antigravity}.get(provider, self.accent)
 
 
 CSWAP_DARK = Theme(
@@ -94,10 +109,21 @@ CSWAP_DARK = Theme(
     variables={
         # Footer keys pick up the accent instead of the default blue.
         "footer-key-foreground": ACCENT,
-        "block-cursor-background": PANEL,
+        # The highlighted row: a soft full-width surface band (Figma 16:3).
+        "block-cursor-background": SURFACE,
         "block-cursor-foreground": FOREGROUND,
         "block-cursor-text-style": "none",
+        "block-cursor-blurred-background": SURFACE,
+        "block-cursor-blurred-foreground": FOREGROUND,
+        "block-cursor-blurred-text-style": "none",
+        "block-hover-background": SURFACE,
         "track": TRACK,
+        "dim": DIM,
+        "line": LINE,
+        "codex": CODEX,
+        "antigravity": ANTIGRAVITY,
+        "footer-background": BACKGROUND,
+        "footer-description-foreground": MUTED,
     },
 )
 
@@ -112,6 +138,10 @@ SEV_OK_LIGHT = "#3d6b3d"  # forest green — deepened for AA on panel
 SEV_WARN_LIGHT = "#795911"  # deep ochre — deepened for AA on panel
 SEV_CRIT_LIGHT = "#ad3128"  # brick red — deepened for AA on panel
 TRACK_LIGHT = "#cec7ba"
+DIM_LIGHT = "#8a8378"
+LINE_LIGHT = TRACK_LIGHT
+CODEX_LIGHT = "#3f3a34"
+ANTIGRAVITY_LIGHT = "#2a5db0"
 
 CSWAP_LIGHT = Theme(
     name="cswap-light",
@@ -128,10 +158,20 @@ CSWAP_LIGHT = Theme(
     dark=False,
     variables={
         "footer-key-foreground": ACCENT_LIGHT,
-        "block-cursor-background": PANEL_LIGHT,
+        "block-cursor-background": SURFACE_LIGHT,
         "block-cursor-foreground": FOREGROUND_LIGHT,
         "block-cursor-text-style": "none",
+        "block-cursor-blurred-background": SURFACE_LIGHT,
+        "block-cursor-blurred-foreground": FOREGROUND_LIGHT,
+        "block-cursor-blurred-text-style": "none",
+        "block-hover-background": SURFACE_LIGHT,
         "track": TRACK_LIGHT,
+        "dim": DIM_LIGHT,
+        "line": LINE_LIGHT,
+        "codex": CODEX_LIGHT,
+        "antigravity": ANTIGRAVITY_LIGHT,
+        "footer-background": BACKGROUND_LIGHT,
+        "footer-description-foreground": MUTED_LIGHT,
     },
 )
 

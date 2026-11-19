@@ -567,8 +567,10 @@ async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider
     app.title = "ccswap · synthetic test data"
     async with app.run_test(size=terminal_size) as pilot:
         await settle(pilot)
-        panel = app.screen.query_one(AccountsPanel).render().plain
-        assert "Antigravity" in panel and "Gemini Models · 5h" in panel
+        panel = app.screen.query_one(AccountsPanel).render_text().plain
+        assert "Antigravity" in panel
+        # One row per model group, its 5h and weekly windows side by side.
+        assert any("Gemini Models" in line and "5h" in line for line in panel.splitlines())
         assert "usage unavailable" not in panel
         screen = app.screen
         assert all(action != "auto:agy" for _, action in screen._auto_entries())
@@ -1055,7 +1057,7 @@ async def test_dashboard_shows_pending_recovery_with_cached_quota(provider, monk
     app.title = "ccswap · synthetic recovery test data"
     async with app.run_test(size=(120, 48)) as pilot:
         await settle(pilot)
-        panel = app.screen.query_one(AccountsPanel).render().plain
+        panel = app.screen.query_one(AccountsPanel).render_text().plain
         assert "Recovery required" in panel and "ccswap agy add" in panel
         assert account.usage.recovery.path in panel
         assert "Gemini Models" in panel

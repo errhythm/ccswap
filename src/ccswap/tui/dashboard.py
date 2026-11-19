@@ -37,6 +37,7 @@ from ccswap.tui.data import (
     present_tag,
 )
 from ccswap.tui.option_help import option_help
+from ccswap.tui.overview import HeaderBar, account_count_note
 from ccswap.tui.settings_screen import SettingsScreen
 from ccswap.tui.modals import OutputModal
 from ccswap.tui.widgets import (
@@ -65,6 +66,11 @@ _LOGIN_LABELS = {
 
 class DashboardScreen(Screen):
     BINDINGS = [
+        # 1-4 step through the ui.view filter (Overview, then each provider).
+        Binding("1", "app.view_tab(0)", mark("view"), key_display="1-4"),
+        Binding("2", "app.view_tab(1)", show=False),
+        Binding("3", "app.view_tab(2)", show=False),
+        Binding("4", "app.view_tab(3)", show=False),
         Binding("s", "open_switch", mark("Switch accounts")),
         Binding("w", "app.open_watch", mark("Watch")),
         Binding("escape,left", "menu_back", mark("Back"), show=False),
@@ -86,6 +92,7 @@ class DashboardScreen(Screen):
         self._menu_stack: list[tuple[str, MenuEntries]] = []
 
     def compose(self) -> ComposeResult:
+        yield HeaderBar()
         yield AccountsPanel(
             provider=None if self.app._view == "combined" else self.app._view,
             id="accounts-panel",
@@ -356,7 +363,16 @@ class AccountListScreen(Screen):
         self._stamps: dict[tuple[str, str], float | None] = {}
         self._rebuild_lock = asyncio.Lock()
 
+    BINDINGS = [
+        # 1-4 step through the ui.view filter (Overview, then each provider).
+        Binding("1", "app.view_tab(0)", mark("view"), key_display="1-4"),
+        Binding("2", "app.view_tab(1)", show=False),
+        Binding("3", "app.view_tab(2)", show=False),
+        Binding("4", "app.view_tab(3)", show=False),
+    ]
+
     def compose(self) -> ComposeResult:
+        yield HeaderBar()
         yield Static("", id="list-title")
         yield CyclingListView(id="accounts")
         yield Footer()
@@ -388,7 +404,11 @@ class AccountListScreen(Screen):
                 continue
             children.append(ProviderDivider(provider))
             keys.append((provider, None))
-            children.extend(AccountItem(acc, provider) for acc in provider_rows)
+            items = [AccountItem(acc, provider) for acc in provider_rows]
+            # The divider is the panel's top edge, the last row its bottom.
+            items[-1].add_class("-last")
+            items[-1].border_subtitle = account_count_note(provider, len(items))
+            children.extend(items)
             keys.extend((provider, acc.number) for acc in provider_rows)
         if keys != self._keys:
             first_build = not self._keys
