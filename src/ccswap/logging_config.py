@@ -1,6 +1,7 @@
 """Logging configuration for Claude Swap."""
 
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -71,6 +72,9 @@ def log_switch(log_dir: Path, provider: str, source: object, target: object) -> 
     the provider so readers that only want Claude (the menu bar) skip them.
     """
     logger = logging.getLogger("ccswap")
-    if not logger.handlers:  # a provider-only process (`ccswap codex switch`)
+    log_file = os.path.abspath(Path(log_dir) / "claude-swap.log")
+    # A provider-only process (`ccswap codex switch`) has no handler yet; one
+    # set up for another root must not receive this line either.
+    if not any(getattr(h, "baseFilename", None) == log_file for h in logger.handlers):
         setup_logging(log_dir)
     logger.info(f"Switched {provider} from account {source or '?'} to {target}")

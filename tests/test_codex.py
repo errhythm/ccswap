@@ -1171,3 +1171,18 @@ def test_switch_is_recorded_in_the_shared_switch_log(switcher, monkeypatch):
     lines = (instance.backup_dir / "claude-swap.log").read_text().splitlines()
     assert [line.split(" - ")[-1] for line in lines if "Switched" in line] == [
         "Switched codex from account 2 to 1"]
+
+
+def test_switch_log_goes_to_its_own_root_not_a_stale_handler(tmp_path, monkeypatch):
+    import logging
+
+    from ccswap.logging_config import log_switch, setup_logging
+
+    monkeypatch.setattr(logging.getLogger("ccswap"), "handlers", [])
+    setup_logging(tmp_path / "other")  # another root's handler, never written
+    log_switch(tmp_path / "mine", "codex", "1", "2")
+    for handler in logging.getLogger("ccswap").handlers:
+        handler.close()
+    assert not (tmp_path / "other").exists()
+    assert (tmp_path / "mine" / "claude-swap.log").read_text().rstrip().endswith(
+        "Switched codex from account 1 to 2")
