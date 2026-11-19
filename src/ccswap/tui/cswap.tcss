@@ -203,3 +203,36 @@ ConfirmModal, AddTokenModal, OutputModal, ThresholdAdjustModal {
 AddTokenModal Input {
     margin-bottom: 1;
 }
+
+/* -- command palette (ctrl+p) ----------------------------------------------------- */
+
+CommandPalette > Vertical, CommandPalette > Vertical:dark {
+    background: $surface;
+    border: round $panel;
+}
+
+CommandPalette #--input {
+    border: none;
+}
+
+CommandPalette #--input.--list-visible {
+    border-bottom: solid $panel;
+}
+
+CommandPalette > .command-palette--help-text {
+    color: $secondary;
+}
+
+CommandPalette > .command-palette--highlight {
+    color: $primary;
+}
+
+CommandList {
+    background: $surface;
+}
+
+CommandList > .option-list--option-highlighted {
+    color: $foreground;
+    background: $panel;
+    text-style: none;
+}

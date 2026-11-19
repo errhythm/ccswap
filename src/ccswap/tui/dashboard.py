@@ -549,6 +549,11 @@ class WatchScreen(AccountListScreen):
         self.query_one("#list-title", Static).update(self._title_text())
         super().on_mount()
 
+    @property
+    def locked(self) -> bool:
+        """Read-only until ``s`` arms selection; the palette honours this."""
+        return not self._selecting
+
     def _title_text(self) -> str:
         if self._selecting:
             return self.app.gettext(self._SELECT_TITLE)

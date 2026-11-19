@@ -1927,10 +1927,19 @@ class TestDashboard:
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "No managed accounts yet" in panel
 
-    async def test_palette_is_disabled(self, tmp_path):
+    async def test_palette_offers_only_ccswap_commands(self, tmp_path):
         from ccswap.tui.app import CswapApp
+        from ccswap.tui.commands import AccountCommands
+        from textual.system_commands import SystemCommandsProvider
 
-        assert CswapApp.ENABLE_COMMAND_PALETTE is False
+        assert CswapApp.ENABLE_COMMAND_PALETTE is True
+        assert CswapApp.COMMANDS == {SystemCommandsProvider, AccountCommands}
+        app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            titles = {c.title for c in app.get_system_commands(app.screen)}
+            assert not titles & {"Screenshot", "Theme", "Maximize"}
+            assert {"Keys", "Quit"} <= titles
 
 
 @pytest.mark.asyncio

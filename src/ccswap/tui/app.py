@@ -12,9 +12,10 @@ import time
 from dataclasses import replace
 from functools import partial
 
-from textual.app import App
+from textual.app import App, SystemCommand
 from textual.binding import Binding
 from textual.reactive import reactive
+from textual.system_commands import SystemCommandsProvider
 from textual.worker import WorkerState
 
 from ccswap import printer
@@ -35,6 +36,7 @@ from ccswap import providers as registry
 from ccswap.snapshot_source import account_identity
 from ccswap.switcher import ClaudeAccountSwitcher
 from ccswap.tui.autoview import AutoScreen
+from ccswap.tui.commands import AccountCommands, static_commands
 from ccswap.tui.dashboard import AccountListScreen, DashboardScreen, WatchScreen
 from ccswap.tui.data import (
     PROVIDER_LABELS,
@@ -57,9 +59,10 @@ class CswapApp(App):
 
     TITLE = "ccswap"
     CSS_PATH = "cswap.tcss"
-    # No command palette: actions live in the dashboard's nested menu, in
-    # their own context — not in a global searchable list.
-    ENABLE_COMMAND_PALETTE = False
+    # ctrl+p: ccswap's own commands only, each calling an app method the menus
+    # already use. Static ones come from get_system_commands, per-account ones
+    # from AccountCommands.
+    COMMANDS = {SystemCommandsProvider, AccountCommands}
     BINDINGS = [
         Binding("ctrl+t", "toggle_theme", mark("Theme")),
         # Description is rewritten to "Mask on" / "Mask off" so the footer
@@ -161,6 +164,12 @@ class CswapApp(App):
         translation = translator()
         self.gettext = translation.gettext
         self.ngettext = translation.ngettext
+
+    def get_system_commands(self, screen):
+        # No stock commands (theme picker, screenshot, ...): they would bypass
+        # set_setting. "Keys" and "Quit" are in static_commands.
+        for c in static_commands(self):
+            yield SystemCommand(c.label, c.help, c.run, discover=c.lead)
 
     def switcher_for(self, provider: str):
         """Return a switcher only when its provider is explicit."""
