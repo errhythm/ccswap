@@ -13,6 +13,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from ccswap import oauth
@@ -76,6 +77,7 @@ class CodexAutoSwitchEngine:
         self.state_path = state_path or (switcher.backup_dir / STATE_FILENAME)
         self.clock = clock
         self._stop = threading.Event()
+        self._wake = threading.Event()
 
     def _state_lock(self) -> FileLock:
         return FileLock(self.state_path.parent / ".codex_autoswitch_state.lock")
@@ -307,10 +309,26 @@ class CodexAutoSwitchEngine:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
+
+    def wake(self) -> None:
+        """Cut the inter-tick sleep short and tick now."""
+        self._wake.set()
+
+    # Each tick reads ``self.settings`` live, so a swap takes effect on the
+    # next tick (strategy included) with no restart.
+    def apply_threshold(self, threshold: float) -> None:
+        """Session override from the TUI."""
+        self.settings = replace(self.settings, threshold=threshold)
+
+    def apply_gates(self, settings: AutoSwitchSettings) -> None:
+        """TUI gate or strategy edit."""
+        self.settings = settings
 
     def run_loop(self) -> int:
         self._stop.clear()
         while not self._stop.is_set():
             self.tick()
-            self._stop.wait(self.settings.interval_seconds)
+            self._wake.wait(self.settings.interval_seconds)
+            self._wake.clear()
         return 0
