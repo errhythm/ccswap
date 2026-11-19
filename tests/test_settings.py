@@ -925,3 +925,10 @@ class TestWeeklyThreshold:
     def test_cli_value_is_clamped(self):
         merged = merged_with_cli(AutoSwitchSettings(), _args(weekly_threshold=970.0))
         assert merged.weekly_threshold == 99.9
+
+
+def test_legacy_ui_language_key_is_ignored(tmp_path: Path, caplog):
+    (tmp_path / "settings.json").write_text(json.dumps({"ui": {"language": "de", "theme": "light"}}))
+    with caplog.at_level(logging.WARNING):
+        assert load_ui_settings(tmp_path) == UiSettings(theme="light")
+    assert not caplog.records

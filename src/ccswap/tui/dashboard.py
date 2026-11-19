@@ -26,7 +26,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, ListView, Static
 
-from ccswap.i18n import LANGUAGES, localize_bindings, mark
+from ccswap.i18n import localize_bindings, mark
 from ccswap.models import AccountSnapshot, AccountsSnapshot
 from ccswap.settings import parse_model_thresholds
 from ccswap.tui.data import (
@@ -311,12 +311,6 @@ class DashboardScreen(Screen):
                 ),
                 "claude:claude.mod",
             ),
-            (
-                self.app.gettext("Language (restart): {language}").format(
-                    language=LANGUAGES[self.app._language_name]
-                ),
-                "setting:language",
-            ),
             _BACK,
         ]
 
@@ -477,11 +471,7 @@ class DashboardScreen(Screen):
             await self._refresh_settings_menu()
         elif action_id.startswith("setting:"):
             key = action_id.split(":", 1)[1]
-            if key == "language":
-                order = tuple(LANGUAGES)
-                value = order[(order.index(app._language_name) + 1) % len(order)]
-                app.apply_language(value)
-            elif key == "theme":
+            if key == "theme":
                 order = ("dark", "light", "auto")
                 value = order[(order.index(app._theme_name) + 1) % len(order)]
                 app.apply_theme(value)

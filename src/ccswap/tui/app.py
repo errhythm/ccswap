@@ -20,7 +20,7 @@ from textual.worker import WorkerState
 from ccswap import printer
 from ccswap.codex import CodexAccountSwitcher
 from ccswap.agy import AgyAccountSwitcher
-from ccswap.i18n import LANGUAGES, localize_bindings, mark, translator
+from ccswap.i18n import localize_bindings, mark, translator
 from ccswap.models import AccountSnapshot, AccountsSnapshot, org_tag_shown
 from ccswap.settings import (
     load_settings,
@@ -147,32 +147,19 @@ class CswapApp(App):
             self._model_thresholds = None
         try:
             ui_settings = load_ui_settings(switcher.backup_dir)
-            self._language_name = ui_settings.language
             self._theme_name = ui_settings.theme
             self._view = ui_settings.view
             self.mask_accounts = ui_settings.mask
             self.org_tag = ui_settings.org_tag
         except Exception:
-            self._language_name = "en"
             self._theme_name = "auto"
             self._view = "combined"
             self.mask_accounts = False
             self.org_tag = "auto"
 
-        translation = translator(self._language_name)
+        translation = translator()
         self.gettext = translation.gettext
         self.ngettext = translation.ngettext
-
-    def apply_language(self, language: str) -> None:
-        if language not in LANGUAGES:
-            return
-        try:
-            set_setting(self.switcher_for("claude").backup_dir, "ui.language", language)
-        except Exception:
-            self.notify(self.gettext("Could not save language."), severity="warning")
-            return
-        self._language_name = language
-        self.notify(self.gettext("Language saved. Restart the dashboard to apply it."))
 
     def switcher_for(self, provider: str):
         """Return a switcher only when its provider is explicit."""

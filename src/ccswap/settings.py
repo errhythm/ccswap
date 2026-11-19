@@ -29,7 +29,6 @@ from pathlib import Path
 
 from ccswap.exceptions import ConfigError
 from ccswap.fsutil import atomic_write_text, publish_target
-from ccswap.i18n import LANGUAGES
 
 SETTINGS_SCHEMA_VERSION = 1
 SETTINGS_FILENAME = "settings.json"
@@ -107,7 +106,6 @@ class UiSettings:
     view: str = "combined"
     mask: bool = False
     star_prompt: bool = True
-    language: str = "en"
     org_tag: str = "auto"
 
 
@@ -337,10 +335,6 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "autoswitch", "homeAccount", "home_account", "string",
             help="Account to return to once it recovers (email; 'config set' accepts a number or email)",
-        ),
-        SettingSpec(
-            "ui", "language", "language", "choice", choices=tuple(LANGUAGES),
-            help="TUI language; restart the dashboard after changing it",
         ),
         SettingSpec(
             "ui", "theme", "theme", "choice", choices=("dark", "light", "auto"),
@@ -885,10 +879,6 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
     default = UiSettings()
     if not isinstance(section, dict):
         return default
-    language = section.get("language", default.language)
-    if language not in SETTING_SPECS["ui.language"].choices:
-        _logger.warning("settings.json: unsupported ui.language %r; using %r", language, default.language)
-        language = default.language
     theme = section.get("theme", default.theme)
     if theme not in SETTING_SPECS["ui.theme"].choices:
         _logger.warning(
@@ -926,7 +916,7 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
         org_tag = default.org_tag
     return UiSettings(
         theme=theme, view=view, mask=mask, star_prompt=star_prompt,
-        language=language, org_tag=org_tag,
+        org_tag=org_tag,
     )
 
 
