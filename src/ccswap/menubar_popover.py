@@ -8,6 +8,7 @@ Shell module API (same for menubar_classic): ``notify``, ``alert``, ``run``.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -328,6 +329,7 @@ def _ring_image(used_pct: float | None):
     return img
 
 
+@functools.cache  # one ObjC class per process: a second definition raises objc.error
 def _make_shell_class():
     import objc
     from AppKit import (
