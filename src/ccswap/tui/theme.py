@@ -26,6 +26,7 @@ PANEL = "#262422"
 LINE = "#3a3734"  # panel borders, header rule, gauge track
 CODEX = "#d6d3ce"
 ANTIGRAVITY = "#8ab4f8"
+MARK = "#9BE0B6"  # the brand mark's mint (src/ccswap/brand/mark.svg)
 
 # Usage severity ramp.
 SEV_OK = "#8cbf88"  # < 70%
@@ -60,6 +61,8 @@ class Palette:
     line: str = LINE
     codex: str = CODEX
     antigravity: str = ANTIGRAVITY
+    mark: str = MARK
+    hover: str = SURFACE  # block-hover-background
 
     DARK: ClassVar["Palette"]
 
@@ -86,6 +89,8 @@ class Palette:
             line=theme.variables.get("line", LINE),
             codex=theme.variables.get("codex", CODEX),
             antigravity=theme.variables.get("antigravity", ANTIGRAVITY),
+            mark=theme.variables.get("mark", MARK),
+            hover=theme.variables.get("block-hover-background", SURFACE),
         )
 
     def provider(self, provider: str) -> str:
@@ -123,6 +128,7 @@ CSWAP_DARK = Theme(
         "line": LINE,
         "codex": CODEX,
         "antigravity": ANTIGRAVITY,
+        "mark": MARK,
         "footer-background": BACKGROUND,
         "footer-description-foreground": MUTED,
     },
@@ -143,6 +149,7 @@ DIM_LIGHT = "#8a8378"
 LINE_LIGHT = TRACK_LIGHT
 CODEX_LIGHT = "#3f3a34"
 ANTIGRAVITY_LIGHT = "#2a5db0"
+MARK_LIGHT = "#256b49"  # darker mint: AA (4.5:1) on background, surface and panel
 
 CSWAP_LIGHT = Theme(
     name="cswap-light",
@@ -172,6 +179,7 @@ CSWAP_LIGHT = Theme(
         "line": LINE_LIGHT,
         "codex": CODEX_LIGHT,
         "antigravity": ANTIGRAVITY_LIGHT,
+        "mark": MARK_LIGHT,
         "footer-background": BACKGROUND_LIGHT,
         "footer-description-foreground": MUTED_LIGHT,
     },

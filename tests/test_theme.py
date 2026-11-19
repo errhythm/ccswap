@@ -65,3 +65,14 @@ def test_light_text_meets_AA_on_all_backgrounds():
     for color in text_colors:
         for bg in backgrounds:
             assert _contrast(color, bg) >= 4.5, f"{color} on {bg}"
+
+
+def test_brand_mark_token_is_mint_and_readable_in_both_themes():
+    assert CSWAP_DARK.variables["mark"] == "#9BE0B6"
+    assert Palette.from_theme(CSWAP_LIGHT).mark == theme.MARK_LIGHT
+    for color, backgrounds in (
+        (theme.MARK, (theme.BACKGROUND, theme.SURFACE, theme.PANEL)),
+        (theme.MARK_LIGHT, (theme.BACKGROUND_LIGHT, theme.SURFACE_LIGHT, theme.PANEL_LIGHT)),
+    ):
+        for bg in backgrounds:
+            assert _contrast(color, bg) >= 4.5, f"{color} on {bg}"

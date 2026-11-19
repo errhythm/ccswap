@@ -678,7 +678,8 @@ class HeaderBar(Static):
         for short in (False, True):
             text = Text()
             spans: list[tuple[int, int, str]] = []
-            text.append("◔ ", style=palette.accent)
+            text.append("∞", style=f"bold {palette.mark}")
+            text.append(" ")
             text.append("ccswap", style=f"bold {palette.foreground}")
             for tab in tabs():
                 text.append("  " if short else "   ")
