@@ -71,9 +71,34 @@ def _is_newer(latest: str, current: str) -> bool:
     return latest_version > current_version
 
 
+# The menu bar re-execs into its wrapper app (app_bundle), whose sys.prefix is
+# the .app's Contents; app_bundle passes the real install's prefix on in this.
+INSTALL_PREFIX_ENV = "CCSWAP_INSTALL_PREFIX"
+
+
+def install_prefix() -> Path:
+    """sys.prefix of the uv/pipx install running this ccswap, even from the wrapper app."""
+    saved = os.environ.get(INSTALL_PREFIX_ENV)
+    if saved:
+        from ccswap.app_bundle import in_bundle
+
+        if in_bundle():  # a child process inherits the variable; only the bundle may use it
+            return Path(saved)
+    return Path(sys.prefix)
+
+
+def install_python() -> str:
+    """The install's own interpreter (the wrapper app runs a copy of it)."""
+    prefix = install_prefix()
+    if prefix == Path(sys.prefix):
+        return sys.executable
+    python = prefix / "bin" / "python"
+    return str(python) if python.exists() else sys.executable
+
+
 def _detect_install_method() -> str | None:
     """Return 'uv', 'pipx', or None if we can't tell."""
-    prefix = Path(sys.prefix)
+    prefix = install_prefix()
     parts = tuple(p.lower() for p in prefix.parts)
     pairs = list(zip(parts, parts[1:]))
 
@@ -105,7 +130,7 @@ class _Cooldown(NamedTuple):
 def _read_receipt() -> dict[str, Any]:
     """The ``[tool]`` table of this install's uv tool receipt, or ``{}``."""
     try:
-        with (Path(sys.prefix) / "uv-receipt.toml").open("rb") as fh:
+        with (install_prefix() / "uv-receipt.toml").open("rb") as fh:
             tool = tomllib.load(fh).get("tool", {})
     except (OSError, tomllib.TOMLDecodeError):
         return {}
@@ -153,7 +178,7 @@ def _uv_latest_version(current_version: str, cooldown: _Cooldown | None) -> str 
     whatever project the shell happens to be in. ``uv tool upgrade`` does
     not, so a project's own cutoff must not hide releases from this check.
     """
-    cmd = ["uv", "pip", "list", "--outdated", "--format", "json", "--python", sys.executable]
+    cmd = ["uv", "pip", "list", "--outdated", "--format", "json", "--python", install_python()]
     if cooldown is not None:
         cmd += ["--exclude-newer", cooldown.value]
     env = {k: v for k, v in os.environ.items() if k != "UV_EXCLUDE_NEWER"}
@@ -165,7 +190,7 @@ def _uv_latest_version(current_version: str, cooldown: _Cooldown | None) -> str 
             timeout=10,
             env=env,
             check=True,
-            cwd=sys.prefix,
+            cwd=str(install_prefix()),
         )
         rows = json.loads(result.stdout)
     except FileNotFoundError:
@@ -391,7 +416,7 @@ def _installed_version_on_disk() -> str | None:
     )
     try:
         result = subprocess.run(
-            [sys.executable, "-c", code],
+            [install_python(), "-c", code],
             capture_output=True,
             text=True,
             timeout=10,

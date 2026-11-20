@@ -643,8 +643,13 @@ class MenuBarController:
         return True
 
     def _restart_after_update(self, version: str) -> None:  # main thread
+        from ccswap.update_check import install_python
+
         if self.quiesce():  # nothing mid-way through a credential write
-            os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
+            # The install's interpreter, not the wrapper app's copy: the new
+            # start rebuilds the app from the upgraded install and re-execs.
+            python = install_python()
+            os.execv(python, [python, "-m", "ccswap", "menubar"])
         self.alert(APP, f"Updated to {version}. Quit and reopen the menu bar to use it.")
 
     # ---- actions (main thread, or the popover's action thread) ----------------

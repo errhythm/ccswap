@@ -303,6 +303,9 @@ def maybe_reexec(backup_dir: Path, argv: list[str] | None = None) -> str | None:
     if error:
         return _stay_put(f"the bundled interpreter cannot start: {error}")
     args = sys.argv[1:] if argv is None else argv
+    from ccswap.update_check import INSTALL_PREFIX_ENV
+
+    os.environ[INSTALL_PREFIX_ENV] = sys.prefix  # the menu bar's Update finds the real install
     try:
         os.execv(str(python), [str(python), "-m", "ccswap", *args])
     except OSError as exc:

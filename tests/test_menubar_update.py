@@ -84,3 +84,34 @@ def test_cli_never_asks_without_a_terminal(monkeypatch):
     monkeypatch.setattr(update_check, "available_update", lambda current: "9.0.0")
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked"))
     assert not update_check.ask_to_upgrade("1.0.0")
+
+
+def test_wrapper_app_still_finds_the_uv_install(tmp_path, monkeypatch):
+    """The menu bar runs from /Applications/ccswap Menubar.app, whose sys.prefix
+    is the bundle; the Update button must still see the uv install it came from."""
+    from ccswap import app_bundle
+
+    install = tmp_path / ".local" / "share" / "uv" / "tools" / "ccswap"
+    (install / "bin").mkdir(parents=True)
+    (install / "bin" / "python").write_text("")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "ccswap Menubar.app" / "Contents"))
+    monkeypatch.setenv(update_check.INSTALL_PREFIX_ENV, str(install))
+    monkeypatch.setattr(app_bundle, "in_bundle", lambda executable=None: True)
+    assert update_check._detect_install_method() == "uv"
+    assert update_check.install_python() == str(install / "bin" / "python")
+
+    monkeypatch.setattr(app_bundle, "in_bundle", lambda executable=None: False)
+    assert update_check._detect_install_method() is None  # a child that inherited the variable
+
+
+def test_reexec_into_the_bundle_passes_the_install_on(tmp_path, monkeypatch):
+    from ccswap import app_bundle
+
+    execs = []
+    monkeypatch.setenv(update_check.INSTALL_PREFIX_ENV, "")  # restored after: the code under test sets it
+    monkeypatch.setattr(app_bundle, "reexec_reason", lambda: None)
+    monkeypatch.setattr(app_bundle, "build", lambda root: tmp_path / "python")
+    monkeypatch.setattr(app_bundle, "interpreter_error", lambda python: None)
+    monkeypatch.setattr(app_bundle.os, "execv", lambda *a: execs.append(a))
+    app_bundle.maybe_reexec(tmp_path, ["menubar"])
+    assert execs and update_check.os.environ[update_check.INSTALL_PREFIX_ENV] == sys.prefix
