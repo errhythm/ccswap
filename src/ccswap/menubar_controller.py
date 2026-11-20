@@ -22,7 +22,8 @@ Payload (``build_payload``), pushed to the popover page as JSON::
         json_output.provider_entry(spec, section, error) + {
             "autoSwitch": {"enabled": bool, "running": bool, "failure": str | None} | None,
             "refreshing": bool,
-            "addToken": bool}]}
+            "addToken": bool}],
+     "update": {"version": str, "busy": bool} | None}  # a newer ccswap to install
 
 ``section.accounts[]`` rows: number, email, alias, active, disabled,
 **json_output.usage_row_fields(...) (so ``windows`` and ``windowsSource``),
@@ -34,7 +35,9 @@ from ``list_payload()`` (which fetches).
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -74,6 +77,7 @@ Notify = Callable[[str, str, str], None]  # title, subtitle, message
 Alert = Callable[[str, str], None]  # title, message
 
 APP = "ccswap"
+UPDATE_CHECK_S = 6 * 3600  # update_check caches PyPI for a day; this only rereads it
 STYLE_LATER = ("A refresh or switch is still running, so the menu bar didn't restart. "
                "The new style applies the next time it starts.")
 STYLE_CHOICES = ("popover", "classic")
@@ -214,6 +218,10 @@ class MenuBarController:
         self._spawn = _spawn  # tests swap in a synchronous runner
         self._workers: list[threading.Thread] = []  # refresh and integration threads
         self._engine_threads: dict[str, threading.Thread | None] = {}
+        self.update: str | None = None  # a newer ccswap this install can take
+        self.updating = False
+        self._update_checked: float | None = None  # monotonic
+        self._update_dirty = False
         for pid, spec in providers.items():
             self.states[pid] = self._build_state(pid, spec, claude_switcher)
 
@@ -354,6 +362,12 @@ class MenuBarController:
             changed = True
         if self._claude_dirty:  # a Claude integration check finished
             self._claude_dirty = False
+            changed = True
+        if self._update_checked is None or time.monotonic() - self._update_checked > UPDATE_CHECK_S:
+            self._update_checked = time.monotonic()
+            self._track(self._spawn(self._check_update))
+        if self._update_dirty:
+            self._update_dirty = False
             changed = True
         for pid in list(self._watch):
             self._detect_active_change(pid)
@@ -586,6 +600,52 @@ class MenuBarController:
         finally:
             self._claude_busy = False
             self._claude_dirty = True
+
+    # ---- updates --------------------------------------------------------------
+    def _check_update(self) -> None:  # worker thread
+        from ccswap import __version__
+        from ccswap.settings import load_update_settings
+        from ccswap.update_check import available_update
+
+        try:
+            on = load_update_settings(self.backup_root).check
+        except Exception:
+            on = False
+        latest = available_update(__version__) if on else None
+        if latest != self.update:
+            self.update, self._update_dirty = latest, True
+
+    def upgrade(self) -> bool:
+        """Run the package manager's upgrade (any thread; seconds of network).
+        On success the menu bar restarts into the new version from tick()."""
+        from ccswap import __version__
+        from ccswap.update_check import upgrade_quietly
+
+        self.updating, self._update_dirty = True, True
+        try:
+            version, message = upgrade_quietly(__version__)
+        finally:
+            self.updating, self._update_dirty = False, True
+        if version is None:
+            self.alert(APP, message)
+            return False
+        self.update = None
+        self.notify(APP, "Updated", message)
+        self._on_main(self._restart_after_update, version)
+        return True
+
+    def start_upgrade(self) -> bool:
+        """The classic menu's entry: upgrade() on a thread so the menu stays live."""
+        if self.updating:
+            return False
+        self.updating, self._update_dirty = True, True
+        threading.Thread(target=self.upgrade, name="ccswap-upgrade", daemon=True).start()
+        return True
+
+    def _restart_after_update(self, version: str) -> None:  # main thread
+        if self.quiesce():  # nothing mid-way through a credential write
+            os.execv(sys.executable, [sys.executable, "-m", "ccswap", "menubar"])
+        self.alert(APP, f"Updated to {version}. Quit and reopen the menu bar to use it.")
 
     # ---- actions (main thread, or the popover's action thread) ----------------
     def _guard(self, fn) -> bool:
@@ -923,4 +983,5 @@ def build_payload(controller: MenuBarController) -> dict:
         },
         "history": controller.history(),
         "providers": providers,
+        "update": {"version": controller.update, "busy": controller.updating} if controller.update else None,
     }

@@ -22,7 +22,7 @@ BRIDGE_ACTIONS = frozenset({
     "ready", "refresh", "switch", "rotate", "toggleAuto", "restartEngine",
     "toggleDisabled", "remove", "addLogin", "addToken", "setTitleProvider",
     "setTitlePct", "setInterval", "setThreshold", "toggleName", "toggleScoped",
-    "setStyle", "toggleIntegration", "refreshCreds", "openLog", "quit",
+    "setStyle", "toggleIntegration", "refreshCreds", "openLog", "upgrade", "quit",
 })
 
 WEB_DIR = Path(__file__).with_name("menubar_web")
@@ -175,6 +175,8 @@ def dispatch(controller, body, confirm=None) -> dict | None:
             reply["ok"] = bool(controller.refresh_creds())
         elif action == "openLog":
             controller.open_log()
+        elif action == "upgrade":
+            reply["ok"] = bool(controller.upgrade())
     except Exception as exc:  # never echo the message: it may hold a token
         return bad(type(exc).__name__)
     return reply
@@ -188,7 +190,7 @@ _PROVIDER_ACTIONS = frozenset({
 
 # Credential writes, Keychain reads and network calls: seconds on the main
 # thread would freeze the page's spinner, so they run on an action thread.
-BACKGROUND_ACTIONS = frozenset({"switch", "rotate", "remove", "addLogin", "addToken", "refreshCreds"})
+BACKGROUND_ACTIONS = frozenset({"switch", "rotate", "remove", "addLogin", "addToken", "refreshCreds", "upgrade"})
 # Allowed while one runs: a page reload, and a refresh that only starts its own worker.
 WHILE_BUSY = frozenset({"ready", "refresh"})
 

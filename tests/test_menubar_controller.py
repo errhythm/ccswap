@@ -409,7 +409,7 @@ def test_watcher_ignores_unchanged_identity(env):
 def test_payload_keys_and_provider_entries(env):
     ctl = refreshed(env)
     p = ctl.payload()
-    assert set(p) == {"schemaVersion", "lastCheckedAt", "health", "title", "settings", "history", "providers"}
+    assert set(p) == {"schemaVersion", "lastCheckedAt", "health", "title", "settings", "history", "providers", "update"}
     assert p["schemaVersion"] == 1 and isinstance(p["lastCheckedAt"], float)
     assert set(p["health"]) == {"label", "attention"}
     assert set(p["title"]) == {"setting", "resolved", "text"}

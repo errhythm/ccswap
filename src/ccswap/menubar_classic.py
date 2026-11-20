@@ -157,6 +157,10 @@ def menu_spec(controller) -> list[MenuRow]:
         rows = [MenuRow(label, action="restart_engine", args=(failed[0],), tooltip=str(failed[1]))]
     else:
         rows = [MenuRow(label)]
+    update = payload.get("update")
+    if update:
+        rows.append(MenuRow("Updating ccswap…") if update.get("busy") else
+                    MenuRow(f"Update to ccswap {update['version']}", action="start_upgrade"))
     rows.append(_SEP)
     for pid, spec in PROVIDERS.items():
         caps = spec.capabilities

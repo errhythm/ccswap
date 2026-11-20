@@ -266,8 +266,8 @@ def held_back_release_notice(current_version: str) -> str | None:
     return "\n".join(lines)
 
 
-def check_for_update(current_version: str) -> str | None:
-    """Return a notification string if a newer version exists, else None."""
+def available_update(current_version: str) -> str | None:
+    """The newer release this install can take, or None. Cached; never raises."""
     try:
         method = _detect_install_method()
         cached_data = read_cache(CACHE_PATH, CACHE_TTL)
@@ -284,28 +284,94 @@ def check_for_update(current_version: str) -> str | None:
             # _latest_version.
             if lookup.cache:
                 write_cache(CACHE_PATH, latest_version)
-
         if latest_version and _is_newer(latest_version, current_version):
-            direct = {
-                "uv": "uv tool upgrade ccswap",
-                "pipx": "pipx upgrade ccswap",
-            }.get(method or "")
-            if direct and sys.platform != "win32":
-                # ccswap upgrade actually performs the upgrade here.
-                hint = "Run `ccswap upgrade` to update."
-            elif direct:
-                # Windows: ccswap upgrade only prints, so point at the real command.
-                hint = f"Run `{direct}` to update."
-            else:
-                # Unknown install method: ccswap upgrade shows manual instructions.
-                hint = "Run `ccswap upgrade` for upgrade instructions."
-            return (
-                f"A newer version of ccswap is available ({latest_version}). "
-                f"You are using {current_version}. {hint}"
-            )
+            return latest_version
         return None
     except Exception:
         return None
+
+
+def can_self_upgrade() -> bool:
+    """Whether ``ccswap upgrade`` performs the upgrade (uv or pipx, not Windows)."""
+    return _detect_install_method() in ("uv", "pipx") and sys.platform != "win32"
+
+
+def check_for_update(current_version: str) -> str | None:
+    """Return a notification string if a newer version exists, else None."""
+    latest_version = available_update(current_version)
+    if latest_version is None:
+        return None
+    method = _detect_install_method()
+    direct = {
+        "uv": "uv tool upgrade ccswap",
+        "pipx": "pipx upgrade ccswap",
+    }.get(method or "")
+    if direct and sys.platform != "win32":
+        # ccswap upgrade actually performs the upgrade here.
+        hint = "Run `ccswap upgrade` to update."
+    elif direct:
+        # Windows: ccswap upgrade only prints, so point at the real command.
+        hint = f"Run `{direct}` to update."
+    else:
+        # Unknown install method: ccswap upgrade shows manual instructions.
+        hint = "Run `ccswap upgrade` for upgrade instructions."
+    return (
+        f"A newer version of ccswap is available ({latest_version}). "
+        f"You are using {current_version}. {hint}"
+    )
+
+
+PROMPT_PATH = CACHE_DIR / "update_prompt.json"
+
+
+def ask_to_upgrade(current_version: str) -> bool:
+    """In an interactive terminal, offer the upgrade once per new version.
+
+    Returns True when it asked (the caller then skips the passive notice).
+    Declining keeps the one-line notice on later runs; the next release asks again.
+    """
+    try:
+        if not all(s.isatty() for s in (sys.stdin, sys.stdout, sys.stderr)) or not can_self_upgrade():
+            return False
+        latest = available_update(current_version)
+        if latest is None or read_cache(PROMPT_PATH, 10 * 365 * 86400) == latest:
+            return False
+        write_cache(PROMPT_PATH, latest)
+        print(f"\nccswap {latest} is available (you have {current_version}).", file=sys.stderr)
+        try:
+            answer = input("Update now? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)
+            return True
+        if answer in ("y", "yes"):
+            run_self_upgrade(current_version)
+        return True
+    except Exception:
+        return False
+
+
+def upgrade_quietly(current_version: str) -> tuple[str | None, str]:
+    """Run the upgrade without a terminal (the menu bar). Returns the version now
+    on disk when it changed, else None, and a one-line message for the user."""
+    cmd = {"uv": ["uv", "tool", "upgrade", "ccswap"], "pipx": ["pipx", "upgrade", "ccswap"]}.get(
+        _detect_install_method() or ""
+    )
+    if cmd is None or sys.platform == "win32":
+        return None, "Update ccswap from a terminal: run `ccswap upgrade`."
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"Couldn't run {cmd[0]}: {exc}"
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        return None, f"{' '.join(cmd)} failed: {detail[-1] if detail else f'exit {result.returncode}'}"
+    after = _installed_version_on_disk()
+    if after and after != current_version:
+        return after, f"Updated ccswap to {after}."
+    return None, (
+        f"ccswap is still at {current_version}. Run `ccswap upgrade` in a terminal "
+        "to see why (a version pin or a release cooldown can hold it back)."
+    )
 
 
 def _installed_version_on_disk() -> str | None:

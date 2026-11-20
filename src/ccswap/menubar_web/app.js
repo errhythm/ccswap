@@ -31,7 +31,7 @@
   let busyTimer = 0;
   const keyOf = (m) => [m.action, m.provider, m.number, m.strategy].filter((x) => x != null).join(":");
   const BUSY_TEXT = { switch: "Switching…", rotate: "Switching…", addLogin: "Adding…", addToken: "Adding…",
-    remove: "Removing…", toggleDisabled: "Saving…", refreshCreds: "Refreshing…", restartEngine: "Restarting…", toggleAuto: "Saving…" };
+    remove: "Removing…", toggleDisabled: "Saving…", refreshCreds: "Refreshing…", restartEngine: "Restarting…", toggleAuto: "Saving…", upgrade: "Updating…" };
   const checking = () => !!(data && data.providers.some((p) => p.refreshing));
   function act(msg) {
     if (busy) return;
@@ -546,6 +546,8 @@
     drawTabs();
     view.replaceChildren();
     if (note && note.until > Date.now()) view.append(h("div", { class: "card " + (note.bad ? "err" : "note"), text: note.text }));
+    if (data.update) view.append(h("div", { class: "card note" }, h("div", { class: "actions" },
+      h("span", { text: `ccswap ${data.update.version} is available` }), actBtn("Update", { action: "upgrade" }))));
     if (tab === "overview" && data.health && data.health.attention && data.health.label) {
       view.append(h("div", { class: "card err", text: data.health.label }));
     }

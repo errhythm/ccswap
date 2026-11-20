@@ -508,6 +508,15 @@ def _isolate_real_home(request, tmp_path_factory, monkeypatch):
         "ccswap.update_check.CACHE_PATH",
         tmp_path_factory.mktemp("isolated_update_check") / "update_check.json",
     )
+    monkeypatch.setattr(
+        "ccswap.update_check.PROMPT_PATH",
+        tmp_path_factory.mktemp("isolated_update_prompt") / "update_prompt.json",
+    )
+    # A controller tick would otherwise look up PyPI or uv; test_menubar_update
+    # keeps the real method.
+    monkeypatch.setattr(
+        "ccswap.menubar_controller.MenuBarController._check_update", lambda self: None
+    )
     if "temp_home" in request.fixturenames:
         return  # temp_home provides its own isolated home
     if "tmp_keychain" in request.fixturenames:

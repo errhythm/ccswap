@@ -2317,9 +2317,9 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         and not args.json
         and load_update_settings(paths.get_backup_root()).check
     ):
-        from ccswap.update_check import check_for_update
+        from ccswap.update_check import ask_to_upgrade, check_for_update
 
-        msg = check_for_update(__version__)
+        msg = None if ask_to_upgrade(__version__) else check_for_update(__version__)
         if msg:
             print(f"\n{muted(msg)}", file=sys.stderr)
 
