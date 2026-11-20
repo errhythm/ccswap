@@ -1698,6 +1698,7 @@ def main() -> None:
     from ccswap import providers as registry
     from ccswap import telemetry
 
+    telemetry.ask_in_terminal(paths.get_backup_root(), argv)
     telemetry.track_command(paths.get_backup_root(), argv)
 
     # `ccswap claude <verb>` is the explicit spelling of the bare Claude

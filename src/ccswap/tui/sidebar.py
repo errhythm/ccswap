@@ -20,6 +20,7 @@ from rich.text import Text
 from textual.containers import Vertical
 from textual.widgets import Static
 
+from ccswap.logging_config import RecentSwitch, recent_switches
 from ccswap.models import AccountsSnapshot
 from ccswap.tui import overview
 from ccswap.tui.data import PROVIDERS, capabilities
@@ -138,40 +139,6 @@ def up_next(
         gate=gate,
         eta=_eta(window.raw, active.usage.fetched_at) if window.weekly else None,
     )
-
-
-@dataclass(frozen=True)
-class RecentSwitch:
-    at: float  # local epoch seconds
-    provider: str
-    source: str
-    target: str
-
-
-# Claude's switcher logs "Switched from account X to Y"; Codex and
-# Antigravity log "Switched codex|agy from account X to Y" (X is "?" when the
-# previous login wasn't a saved account).
-_SWITCH_RE = re.compile(r"Switched (?:(codex|agy) )?from account (\S+) to (\d+)")
-
-
-def recent_switches(log_path: Path, limit: int | None = RECENT_LIMIT) -> list[RecentSwitch]:
-    """The newest switches in the switch log for every provider, newest first.
-    The log records no reason."""
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    out = []
-    for line in text.splitlines():
-        m = _SWITCH_RE.search(line)
-        if not m:
-            continue
-        try:
-            at = datetime.strptime(line.split(" - ", 1)[0].strip()[:16], "%Y-%m-%d %H:%M").timestamp()
-        except ValueError:
-            continue
-        out.append(RecentSwitch(at, m.group(1) or "claude", m.group(2), m.group(3)))
-    return out[::-1][:limit]
 
 
 def when(at: float, now: float) -> str:

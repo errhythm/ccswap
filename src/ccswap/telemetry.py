@@ -1,8 +1,10 @@
 """Opt-in anonymous usage stats, sent to PostHog. Off unless ``telemetry.enabled`` is on.
 
-Each event carries a random install ID, the ccswap version, the OS, the Python
-version and a command name from ``COMMANDS``. It never carries emails, account
-or org names, tokens, paths or arguments. ``DO_NOT_TRACK=1``, ``CCSWAP_TELEMETRY=0``
+Two events, both keyed by a random install ID and carrying the ccswap version,
+the OS and the Python version. ``command`` names a command from ``COMMANDS``.
+``daily`` counts switches per provider since the last one and the number of
+saved accounts per provider, grouped. Neither carries emails, account or org
+names, tokens, paths or arguments. ``DO_NOT_TRACK=1``, ``CCSWAP_TELEMETRY=0``
 or ``CI`` turn it off whatever the setting. docs/privacy.md lists every field.
 Nothing here raises or blocks a command.
 """
@@ -22,11 +24,12 @@ from pathlib import Path
 from ccswap.fsutil import atomic_write_text
 
 # PostHog project API key. It is write-only and public by design; empty sends nothing.
-POSTHOG_KEY = ""
+POSTHOG_KEY = "phc_pvViPC3zjzQPYfZpXLcr3ZN9D77nhn73CdfJRsPPwZCP"
 CAPTURE_URL = "https://eu.i.posthog.com/i/v0/e/"
 STATE_NAME = "telemetry.json"
 THROTTLE_S = 3600  # one event per command per hour: cron and Raycast poll often
 TIMEOUT_S = 2.0
+DAY_S = 86400
 
 # The only command names ever sent. Anything else is "other"; `run` replaces the
 # process before a send could finish, `statusline` runs on every Claude prompt,
@@ -38,6 +41,13 @@ COMMANDS = frozenset({
 })
 _SILENT = frozenset({"run", "statusline", "hub"})
 PROVIDERS = ("claude", "codex", "agy")
+ROSTERS = {"claude": "sequence.json", "codex": "codex/sequence.json", "agy": "agy/accounts.json"}
+PROMPT = (
+    "Help improve ccswap by sending anonymous usage stats? They hold command names, "
+    "switch counts, how many accounts you have (grouped), the ccswap version and OS. "
+    "Never emails, account names, tokens or paths. Change it any time with "
+    "`ccswap config set telemetry.enabled on|off`."
+)
 
 
 def blocked() -> bool:
@@ -107,16 +117,15 @@ def _spawn(body: bytes) -> None:
     threading.Thread(target=_send, args=(body,), name="ccswap-telemetry").start()
 
 
-def event(install_id: str, command: str, provider: str | None) -> dict:
+def _payload(install_id: str, name: str, properties: dict) -> dict:
     from ccswap import __version__
 
     return {
         "api_key": POSTHOG_KEY,
-        "event": "command",
+        "event": name,
         "distinct_id": install_id,
         "properties": {
-            "command": command,
-            "provider": provider,
+            **properties,
             "version": __version__,
             "os": platform.system(),
             "python": platform.python_version(),
@@ -126,8 +135,53 @@ def event(install_id: str, command: str, provider: str | None) -> dict:
     }
 
 
+def event(install_id: str, command: str, provider: str | None) -> dict:
+    return _payload(install_id, "command", {"command": command, "provider": provider})
+
+
+def bucket(count: int) -> str:
+    return str(count) if count < 3 else "3-5" if count <= 5 else "6+"
+
+
+def daily_event(install_id: str, backup_root: Path, since: float) -> dict:
+    """Switches per provider logged after ``since``, and saved accounts per provider."""
+    from ccswap.logging_config import recent_switches
+
+    root = Path(backup_root)
+    props: dict = {f"switches_{p}": 0 for p in PROVIDERS}
+    # shortcut: reads only the current log, not rotated ones; a day of switches fits in 1 MB.
+    for switch in recent_switches(root / "claude-swap.log", limit=None):
+        if switch.at > since and f"switches_{switch.provider}" in props:
+            props[f"switches_{switch.provider}"] += 1
+    for provider, name in ROSTERS.items():
+        accounts = _read_state(root / name).get("accounts")
+        props[f"accounts_{provider}"] = bucket(len(accounts) if isinstance(accounts, dict) else 0)
+    return _payload(install_id, "daily", props)
+
+
+def ask_in_terminal(backup_root: Path, argv: list[str]) -> None:
+    """Ask once on an interactive CLI run; the TUI asks in its own dialog. Never raises."""
+    try:
+        if not all(stream.isatty() for stream in (sys.stdin, sys.stdout, sys.stderr)):
+            return
+        if command_of(argv)[0] in (None, "tui") or not should_ask(backup_root):
+            return
+        from ccswap.settings import set_setting
+
+        print(PROMPT, file=sys.stderr)
+        try:
+            answer = input("Share anonymous usage stats? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)
+            return  # no answer: ask again next time
+        set_setting(backup_root, "telemetry.enabled", "on" if answer in ("y", "yes") else "off")
+    except Exception as exc:
+        if os.environ.get("CCSWAP_DEBUG"):
+            print(f"telemetry: {exc}", file=sys.stderr)
+
+
 def track_command(backup_root: Path, argv: list[str]) -> None:
-    """Send one ``command`` event when the user opted in. Never raises."""
+    """Send the ``command`` and ``daily`` events that are due, if the user opted in. Never raises."""
     try:
         from ccswap.settings import load_telemetry_settings
 
@@ -139,14 +193,22 @@ def track_command(backup_root: Path, argv: list[str]) -> None:
         path = Path(backup_root) / "cache" / STATE_NAME
         state = _read_state(path)
         sent = state.get("sent") if isinstance(state.get("sent"), dict) else {}
-        now = time.time()
-        if now - float(sent.get(command) or 0) < THROTTLE_S:
-            return
         install_id = state.get("id") if isinstance(state.get("id"), str) else uuid.uuid4().hex
+        last_daily = float(state.get("daily") or 0)
+        now = time.time()
+        bodies = []
+        if now - float(sent.get(command) or 0) >= THROTTLE_S:
+            sent = {**sent, command: now}
+            bodies.append(event(install_id, command, provider))
+        if now - last_daily >= DAY_S:
+            bodies.append(daily_event(install_id, backup_root, last_daily or now - DAY_S))
+            last_daily = now
+        if not bodies:
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, json.dumps({"id": install_id, "sent": {**sent, command: now}}))
-        body = json.dumps(event(install_id, command, provider)).encode("utf-8")
-        _spawn(body)
+        atomic_write_text(path, json.dumps({"id": install_id, "sent": sent, "daily": last_daily}))
+        for body in bodies:
+            _spawn(json.dumps(body).encode("utf-8"))
     except Exception as exc:
         if os.environ.get("CCSWAP_DEBUG"):
             print(f"telemetry: {exc}", file=sys.stderr)

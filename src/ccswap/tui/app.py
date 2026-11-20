@@ -227,7 +227,7 @@ class CswapApp(App):
 
     def _maybe_ask_telemetry(self) -> None:
         """Ask once whether to send anonymous usage stats; any answer is saved."""
-        from ccswap.telemetry import should_ask
+        from ccswap.telemetry import PROMPT, should_ask
 
         root = self.switcher_for("claude").backup_dir
         try:
@@ -247,12 +247,7 @@ class CswapApp(App):
 
         self.push_screen(
             ConfirmModal(
-                self.gettext(
-                    "Help improve ccswap by sending anonymous usage stats? Each one holds "
-                    "the command name, ccswap version and OS. Never emails, account names, "
-                    "tokens or paths. Change it any time with "
-                    "`ccswap config set telemetry.enabled on|off`."
-                ),
+                self.gettext(PROMPT),
                 title=self.gettext("Anonymous usage stats"),
                 yes_label=self.gettext("Share"),
             ),

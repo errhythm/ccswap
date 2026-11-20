@@ -4,7 +4,7 @@ ccswap sends nothing about you or your accounts anywhere. The only network calls
 
 ## Anonymous usage stats (opt-in)
 
-Starting with 0.54.0b2, the dashboard asks once whether you want to share anonymous usage stats. They are **off until you say yes**, and the answer is saved either way. Change it any time:
+Starting with 0.54.0b2, ccswap asks once whether you want to share anonymous usage stats: in the dashboard, or on the first interactive command in a terminal (never under `--json`, in scripts or in CI). They are **off until you say yes**, and the answer is saved either way. Change it any time:
 
 ```bash
 ccswap config set telemetry.enabled on    # or off
@@ -12,7 +12,9 @@ ccswap config set telemetry.enabled on    # or off
 
 These always turn it off, whatever the setting says: `DO_NOT_TRACK=1`, `CCSWAP_TELEMETRY=0`, or a `CI` environment variable.
 
-### What one event contains
+### What the events contain
+
+Every event carries `distinct_id`, `version`, `os` and `python`. A `command` event adds `command` and `provider`. A `daily` event adds the switch and account counts.
 
 | Field | Example | Notes |
 |---|---|---|
@@ -22,12 +24,15 @@ These always turn it off, whatever the setting says: `DO_NOT_TRACK=1`, `CCSWAP_T
 | `version` | `0.54.0b2` | The ccswap version. |
 | `os` | `Darwin` | `platform.system()`. |
 | `python` | `3.13.1` | The Python version. |
+| `switches_claude`, `switches_codex`, `switches_agy` | `4` | `daily` only. Switches in the switch log since the previous `daily` event, manual and automatic. |
+| `accounts_claude`, `accounts_codex`, `accounts_agy` | `3-5` | `daily` only. Saved accounts per provider, grouped as `0`, `1`, `2`, `3-5` or `6+`. |
 
 **Never sent:** emails, account names, aliases, organization names, tokens, file paths, directory mappings, usage numbers, command arguments, or anything typed into Claude Code, Codex or Antigravity.
 
 ### When events are sent
 
-- At most one event per command per hour. Cron jobs and the Raycast extension call ccswap often.
+- At most one `command` event per command per hour. Cron jobs and the Raycast extension call ccswap often.
+- At most one `daily` event per day, sent on the first command after a day has passed.
 - Never for `--json` output, `ccswap run`, `ccswap statusline` or `ccswap hub`.
 - The send runs in the background with a 2-second timeout. A failed send is dropped, never retried, and never affects the command.
 

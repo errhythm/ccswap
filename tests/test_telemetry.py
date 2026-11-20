@@ -42,14 +42,74 @@ def test_off_until_opted_in_then_one_clean_event_per_hour(tmp_path, sends):
     set_setting(tmp_path, "telemetry.enabled", "on")
     telemetry.track_command(tmp_path, ["switch", "alex@example.com"])
     telemetry.track_command(tmp_path, ["switch", "3"])  # throttled
-    assert len(sends) == 1
-    body = json.dumps(sends[0])
+    commands = [s for s in sends if s["event"] == "command"]
+    assert len(commands) == 1
+    body = json.dumps(sends)
     assert "@" not in body and str(tmp_path) not in body and "/Users" not in body
-    props = sends[0]["properties"]
+    props = commands[0]["properties"]
     assert props["command"] == "switch" and props["$process_person_profile"] is False
-    assert sends[0]["distinct_id"] and sends[0]["api_key"] == "phc_test"
+    assert commands[0]["distinct_id"] and commands[0]["api_key"] == "phc_test"
     telemetry.track_command(tmp_path, ["list"])
-    assert len(sends) == 2 and sends[1]["distinct_id"] == sends[0]["distinct_id"]
+    commands = [s for s in sends if s["event"] == "command"]
+    assert len(commands) == 2 and commands[1]["distinct_id"] == commands[0]["distinct_id"]
+
+
+def test_daily_counts_switches_since_last_and_groups_accounts(tmp_path, sends, monkeypatch):
+    import time
+    from datetime import datetime
+
+    set_setting(tmp_path, "telemetry.enabled", "on")
+    (tmp_path / "sequence.json").write_text(json.dumps({"accounts": {"1": {}, "2": {}}}))
+    (tmp_path / "codex").mkdir()
+    (tmp_path / "codex" / "sequence.json").write_text(
+        json.dumps({"accounts": {str(n): {} for n in range(1, 5)}})
+    )
+    stamp = lambda at: datetime.fromtimestamp(at).strftime("%Y-%m-%d %H:%M:%S,000")
+    now = time.time()
+    (tmp_path / "claude-swap.log").write_text("".join(
+        f"{stamp(at)} - INFO - {msg}\n" for at, msg in [
+            (now - 3 * 86400, "Switched from account 1 to 2"),  # older than a day
+            (now - 3600, "Switched from account 2 to 1"),
+            (now - 600, "Switched codex from account ? to 3"),
+            (now - 300, "Usage fetch failed for account 1"),
+        ]
+    ))
+    telemetry.track_command(tmp_path, ["list"])
+    telemetry.track_command(tmp_path, ["status"])  # daily already sent today
+    daily = [s for s in sends if s["event"] == "daily"]
+    assert len(daily) == 1
+    props = daily[0]["properties"]
+    assert (props["switches_claude"], props["switches_codex"], props["switches_agy"]) == (1, 1, 0)
+    assert (props["accounts_claude"], props["accounts_codex"], props["accounts_agy"]) == ("2", "3-5", "0")
+    assert "@" not in json.dumps(daily)
+
+    monkeypatch.setattr(telemetry.time, "time", lambda: now + telemetry.DAY_S + 60)
+    telemetry.track_command(tmp_path, ["status"])
+    daily = [s for s in sends if s["event"] == "daily"]
+    assert len(daily) == 2 and daily[1]["properties"]["switches_claude"] == 0  # counted once
+
+
+@pytest.mark.parametrize("answer, enabled", [("y", True), ("", False), ("nope", False)])
+def test_cli_asks_once_on_a_terminal(tmp_path, sends, monkeypatch, answer, enabled):
+    from ccswap.settings import load_telemetry_settings
+
+    asked = []
+    for stream in ("stdin", "stdout", "stderr"):
+        monkeypatch.setattr(f"sys.{stream}.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or answer)
+    telemetry.ask_in_terminal(tmp_path, [])  # the TUI asks in its own dialog
+    telemetry.ask_in_terminal(tmp_path, ["list", "--json"])  # machine output: never
+    assert asked == []
+    telemetry.ask_in_terminal(tmp_path, ["list"])
+    telemetry.ask_in_terminal(tmp_path, ["list"])
+    assert len(asked) == 1
+    assert load_telemetry_settings(tmp_path).enabled is enabled
+
+
+def test_cli_never_asks_without_a_terminal(tmp_path, sends, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked"))
+    telemetry.ask_in_terminal(tmp_path, ["list"])  # pytest captures stdio: not a tty
+    assert telemetry.should_ask(tmp_path)
 
 
 @pytest.mark.parametrize("env", [("DO_NOT_TRACK", "1"), ("CCSWAP_TELEMETRY", "off"), ("CI", "true")])
