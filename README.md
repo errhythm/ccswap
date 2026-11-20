@@ -8,6 +8,11 @@
 [![Raycast Store](https://img.shields.io/badge/Raycast-Store-FF6363?logo=raycast&logoColor=white)](https://www.raycast.com/errhythm/ccswap)
 [![GitHub stars](https://img.shields.io/github/stars/errhythm/ccswap?style=social)](https://github.com/errhythm/ccswap)
 
+> [!TIP]
+> **Beta: 0.54.0b1 is out for testing.** It has a redesigned dashboard, a new macOS menu bar popover, and Claude Code, Codex and Antigravity side by side. Plain installs stay on 0.53.0. To try it:
+> `uv tool install --force --prerelease allow "ccswap[menubar]==0.54.0b1"`
+> [Install guide, screenshots and feedback](https://github.com/errhythm/ccswap/discussions/52)
+
 Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. Save multiple logins, check their quota windows, and manage them from one dashboard. Claude Code and Codex also support automatic switching.
 
 <img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-watch.png" width="760" alt="ccswap watch: live usage bars for every Claude Code and Codex account, with reset times and the active account marked">
