@@ -12,12 +12,12 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.exceptions import TransferError
-from claude_swap.models import Platform
-from claude_swap.oauth import credential_fingerprint
-from claude_swap.switcher import ClaudeAccountSwitcher
-from claude_swap.transfer import export_accounts, import_accounts
-from claude_swap.usage_store import FetchRecord
+from ccswap.exceptions import TransferError
+from ccswap.models import Platform
+from ccswap.oauth import credential_fingerprint
+from ccswap.switcher import ClaudeAccountSwitcher
+from ccswap.transfer import export_accounts, import_accounts
+from ccswap.usage_store import FetchRecord
 
 
 # ---------------------------------------------------------------------------
@@ -1415,7 +1415,7 @@ class TestExportSkipsBrokenSlots:
         _seed_account(s, 2, "bob@example.com")
         self._break_credentials(s, 1, "alice@example.com")
 
-        from claude_swap.exceptions import CredentialReadError
+        from ccswap.exceptions import CredentialReadError
 
         with pytest.raises(CredentialReadError, match="no backup credentials"):
             export_accounts(
@@ -1430,7 +1430,7 @@ class TestExportSkipsBrokenSlots:
         _seed_account(s, 2, "bob@example.com")
         self._break_config(s, 1, "alice@example.com")
 
-        from claude_swap.exceptions import ConfigError
+        from ccswap.exceptions import ConfigError
 
         with pytest.raises(ConfigError, match="no backup config"):
             export_accounts(
@@ -1509,7 +1509,7 @@ class TestImportSessionInvalidation:
     def test_force_overwrite_invalidates_session_credentials(
         self, temp_home: Path, capsys
     ):
-        from claude_swap.session import session_dir_for
+        from ccswap.session import session_dir_for
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 1, "alice@example.com", "org-a")
@@ -1532,7 +1532,7 @@ class TestImportSessionInvalidation:
     ):
         import os as _os
 
-        from claude_swap.session import session_dir_for
+        from ccswap.session import session_dir_for
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 1, "alice@example.com", "org-a")
@@ -1706,7 +1706,7 @@ class TestImportClearsDeadTokenQuarantine:
         a plain import then replaces a healthy slot's credential, which is the
         whole reason `--force` exists.
         """
-        from claude_swap import oauth
+        from ccswap import oauth
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 2, "bob@example.com")
@@ -1790,7 +1790,7 @@ class TestImportClearsDeadTokenQuarantine:
         reads it as healthy and refuses to replace it — and `cswap import` is
         exactly what the "re-login needed" message tells the user to run.
         """
-        from claude_swap import oauth
+        from ccswap import oauth
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 2, "bob@example.com")
@@ -1909,7 +1909,7 @@ class TestImportClearsDeadTokenQuarantine:
         keeps its own credential copy until restarted via `cswap run`."""
         import os as _os
 
-        from claude_swap.session import session_dir_for
+        from ccswap.session import session_dir_for
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 2, "bob@example.com")
@@ -2100,7 +2100,7 @@ def _usage_row(email: str, org_uuid: str = "", pct: float = 42.0, age_s: float =
     slot number."""
     import time
 
-    from claude_swap.json_output import account_row
+    from ccswap.json_output import account_row
 
     return account_row(
         9, email, "", org_uuid, False,
@@ -2118,7 +2118,7 @@ def _usage_document(*rows: dict) -> str:
 
 class TestImportUsage:
     def _import(self, switcher, home: Path, document: str, hold_s: float | None = None):
-        from claude_swap.transfer import import_usage
+        from ccswap.transfer import import_usage
 
         path = home / "usage.json"
         path.write_text(document, encoding="utf-8")
@@ -2176,7 +2176,7 @@ class TestImportUsage:
         ``list --json`` serves the adopted reading and sends no request for
         that account, while an account nobody handed over is fetched as
         usual."""
-        from claude_swap import oauth
+        from ccswap import oauth
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 1, "alice@example.com", creds=_live_creds("alice"))
@@ -2193,7 +2193,7 @@ class TestImportUsage:
             fetched.append(email)
             return oauth.UsageOutcome({"five_hour": {"pct": 1.0}})
 
-        with patch("claude_swap.oauth.try_fetch_usage_for_account", side_effect=fake_fetch):
+        with patch("ccswap.oauth.try_fetch_usage_for_account", side_effect=fake_fetch):
             payload = s.list_accounts(json_output=True)
 
         assert fetched == ["alice@example.com"], payload
@@ -2205,7 +2205,7 @@ class TestImportUsage:
     def test_a_zero_hold_hands_the_account_back(self, temp_home: Path, capsys):
         """``--hold 0`` lifts the hold an earlier hand-over set, so the next
         collector fetches the account itself instead of waiting it out."""
-        from claude_swap import oauth
+        from ccswap import oauth
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 1, "alice@example.com", creds=_live_creds("alice"))
@@ -2215,7 +2215,7 @@ class TestImportUsage:
         assert "holds lifted" in capsys.readouterr().err
 
         with patch(
-            "claude_swap.oauth.try_fetch_usage_for_account",
+            "ccswap.oauth.try_fetch_usage_for_account",
             return_value=oauth.UsageOutcome({"five_hour": {"pct": 1.0}}),
         ) as fetch:
             s.list_accounts(json_output=True)
@@ -2240,7 +2240,7 @@ class TestImportUsage:
             hold_s=600.0,
         )
 
-        with patch("claude_swap.oauth.try_fetch_usage_for_account") as fetch:
+        with patch("ccswap.oauth.try_fetch_usage_for_account") as fetch:
             payload = s.list_accounts(json_output=True)
 
         fetch.assert_not_called()
@@ -2250,7 +2250,7 @@ class TestImportUsage:
         assert row["usage"]["fiveHour"]["pct"] == 42.0
 
     def test_reads_stdin(self, temp_home: Path, monkeypatch):
-        from claude_swap.transfer import import_usage
+        from ccswap.transfer import import_usage
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 1, "alice@example.com")

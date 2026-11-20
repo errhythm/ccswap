@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import codex_session as session
-from claude_swap.exceptions import SessionError
+from ccswap import codex_session as session
+from ccswap.exceptions import SessionError
 
 
 STORES = ['-c', 'cli_auth_credentials_store="file"',
@@ -402,7 +402,7 @@ def test_command_word_inside_single_prompt_is_unchanged(tmp_path):
 
 
 def test_child_env_explicit_spawn_cwd(tmp_path):
-    from claude_swap.codex_session import child_env
+    from ccswap.codex_session import child_env
 
     home = tmp_path / "home"
     home.mkdir()
@@ -412,7 +412,7 @@ def test_child_env_explicit_spawn_cwd(tmp_path):
 
 
 def test_child_argv_explicit_spawn_cwd(tmp_path):
-    from claude_swap.codex_session import child_argv
+    from ccswap.codex_session import child_argv
 
     home = tmp_path / "home"
     home.mkdir()

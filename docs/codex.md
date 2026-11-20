@@ -19,6 +19,7 @@ ccswap codex switch --strategy next-available
 ccswap codex switch --strategy consume-first
 ccswap codex auto --once            # switch when active quota reaches the threshold
 ccswap codex remove 2
+ccswap codex disable 2              # skip account 2 when switching; `enable 2` undoes it
 ```
 
 Usage-aware strategies consider switchable, enabled ChatGPT accounts only; API-key accounts have no subscription quota and are skipped.

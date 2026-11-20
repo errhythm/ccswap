@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 
-from claude_swap import codex_usage
+from ccswap import codex_usage
 
 
 def _jwt(claims: dict) -> str:

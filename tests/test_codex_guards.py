@@ -7,10 +7,10 @@ from uuid import uuid4
 
 import pytest
 
-from claude_swap import codex_session as cs, process_detection as pd, windows_job as wj
-from claude_swap.codex import CodexAccountSwitcher
-from claude_swap.exceptions import SwitchError
-from claude_swap.locking import FileLock
+from ccswap import codex_session as cs, process_detection as pd, windows_job as wj
+from ccswap.codex import CodexAccountSwitcher
+from ccswap.exceptions import SwitchError
+from ccswap.locking import FileLock
 from tests.test_codex_session import auth, record
 
 
@@ -21,7 +21,7 @@ def write(path, data):
 
 @pytest.fixture
 def slots(tmp_path, monkeypatch):
-    from claude_swap import codex
+    from ccswap import codex
 
     root, source = tmp_path / "backup", tmp_path / "default"
     source.mkdir()
@@ -351,7 +351,7 @@ def test_default_unreadable_never_absent(slots, monkeypatch):
         return real(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", denied)
-    from claude_swap.exceptions import ConfigError
+    from ccswap.exceptions import ConfigError
 
     with pytest.raises(ConfigError, match="unreadable") as caught:
         switcher.switch_to("2", json_output=True)
@@ -497,7 +497,7 @@ def test_default_auth_symlink_still_works(slots, tmp_path):
 
 @pytest.mark.parametrize("content", ["{", "[]"])
 def test_default_malformed_refused(slots, content):
-    from claude_swap.exceptions import ConfigError
+    from ccswap.exceptions import ConfigError
 
     switcher, _ = slots
     switcher.auth_file.write_text(content)

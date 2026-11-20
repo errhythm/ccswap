@@ -12,9 +12,9 @@ import pytest
 
 from tests.conftest import _advancing_clock, _thread_scoped_sleep, _crossing_clock
 
-from claude_swap import locking
-from claude_swap.exceptions import LockError
-from claude_swap.locking import FileLock
+from ccswap import locking
+from ccswap.exceptions import LockError
+from ccswap.locking import FileLock
 
 
 @contextlib.contextmanager

@@ -1,4 +1,4 @@
-"""``claude_swap.spawn``: the no-fork spawn path on macOS (issue #517)."""
+"""``ccswap.spawn``: the no-fork spawn path on macOS (issue #517)."""
 
 import os
 import shutil
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import macos_keychain, process_detection, spawn
+from ccswap import macos_keychain, process_detection, spawn
 
 ARGV = ["ps", "-o", "pid=", "-p", "1234"]
 DARWIN = sys.platform == "darwin"
@@ -285,7 +285,7 @@ try:
 except (OSError, AttributeError):
     sys.exit(3)
 handler(ctypes.c_ulong(0x4))  # DISPATCH_MEMORYPRESSURE_CRITICAL
-from claude_swap import spawn
+from ccswap import spawn
 argv = ["ps", "-o", "pid=", "-p", str(os.getpid())]
 subprocess.run(argv, capture_output=True)
 print("CONTROL-DONE", file=sys.stderr, flush=True)

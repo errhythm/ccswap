@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import app_bundle
+from ccswap import app_bundle
 
 # The bundle is macOS-only (reexec_reason says "not macOS" first) and its
 # layout leans on POSIX symlink semantics: Windows refuses os.replace over
@@ -207,7 +207,7 @@ def test_maybe_reexec_execs_the_same_command_inside_the_bundle(tmp_path: Path):
         app_bundle.maybe_reexec(backup)
 
     python = str(apps / app_bundle.BUNDLE_DIRNAME / "Contents" / "MacOS" / "python")
-    assert calls == [(python, [python, "-m", "claude_swap", "menubar"])]
+    assert calls == [(python, [python, "-m", "ccswap", "menubar"])]
 
 
 def test_maybe_reexec_falls_back_when_the_bundle_cannot_be_built(tmp_path: Path, capsys):
@@ -269,7 +269,7 @@ def test_bundle_built_from_the_real_interpreter_starts_and_imports(tmp_path: Pat
     python = app_bundle.build(tmp_path / "data", applications=apps)
 
     proc = subprocess.run(
-        [str(python), "-c", "import claude_swap, sys; print(sys.prefix)"],
+        [str(python), "-c", "import ccswap, sys; print(sys.prefix)"],
         capture_output=True,
         text=True,
         timeout=60,
@@ -277,3 +277,25 @@ def test_bundle_built_from_the_real_interpreter_starts_and_imports(tmp_path: Pat
     assert proc.returncode == 0, proc.stderr
     assert Path(proc.stdout.strip()) == apps / app_bundle.BUNDLE_DIRNAME / "Contents"
     assert app_bundle.interpreter_error(python) is None
+
+
+def test_bundle_carries_the_brand_icon_and_refreshes_a_stale_one(tmp_path: Path, monkeypatch):
+    exe, prefix, apps = _fake_install(tmp_path)
+    icns = tmp_path / "ccswap.icns"
+    icns.write_bytes(b"icns v1")
+    monkeypatch.setattr(app_bundle, "ICON_SRC", icns)
+    backup = tmp_path / "data"
+    app_bundle.build(backup, executable=exe, prefix=prefix, applications=apps)
+
+    contents = apps / app_bundle.BUNDLE_DIRNAME / "Contents"
+    info = plistlib.loads((contents / "Info.plist").read_bytes())
+    assert info["CFBundleIconFile"] == "ccswap.icns"
+    assert (contents / "Resources" / "ccswap.icns").read_bytes() == b"icns v1"
+
+    icns.write_bytes(b"icns v2")
+    app_bundle.build(backup, executable=exe, prefix=prefix, applications=apps)
+    assert (contents / "Resources" / "ccswap.icns").read_bytes() == b"icns v2"
+
+
+def test_shipped_icon_exists():
+    assert app_bundle.ICON_SRC.read_bytes()[:4] == b"icns"

@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from claude_swap.autoswitch import NoSwitchEvent, SwitchEvent, TickOutcome
+from ccswap.autoswitch import NoSwitchEvent, SwitchEvent, TickOutcome
 from tests.test_autoswitch import (
     _R_LATER,
     _R_SOON,

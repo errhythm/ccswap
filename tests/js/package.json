@@ -1,0 +1,7 @@
+{
+  "name": "ccswap-menubar-page-tests",
+  "private": true,
+  "type": "commonjs",
+  "scripts": { "test": "node --test" },
+  "devDependencies": { "jsdom": "^26.1.0" }
+}

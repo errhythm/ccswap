@@ -4,9 +4,9 @@ import copy
 
 import pytest
 
-from claude_swap import codex, codex_session as cs
-from claude_swap.codex_usage import CodexUsageError
-from claude_swap.locking import FileLock
+from ccswap import codex, codex_session as cs
+from ccswap.codex_usage import CodexUsageError
+from ccswap.locking import FileLock
 from tests.test_codex_guards import home_for, slots, snapshot, write
 from tests.test_codex_session import auth
 

@@ -1,0 +1,424 @@
+/* claude-swap TUI — flat, low-chrome dark layout.
+   Colors come from the registered "cswap-dark" theme (theme.py); this file
+   only handles layout, spacing, and the few component states. */
+
+Screen {
+    background: $background;
+}
+
+/* -- header: one filled row, brand + the ui.view filter as tabs ------------- */
+
+#header {
+    height: 1;
+    width: 1fr;
+    padding: 0 1;
+    background: $surface;
+}
+
+/* -- accounts panel: one rounded panel per provider ------------------------- */
+
+.accounts-panel {
+    height: auto;
+    width: 1fr;
+    padding: 0 2;
+    background: $background;
+}
+
+/* The menu takes the rows its items need (up to half the screen) and the
+   panels the rest; past that they scroll. Tab focuses them (the accent
+   scrollbar shows it), ↑↓ scroll, Tab returns to the menu. */
+#accounts-panel {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
+#menu {
+    height: auto;
+    max-height: 50%;
+}
+
+#accounts-panel:focus {
+    scrollbar-color: $primary;
+    background-tint: $foreground 0%;
+}
+
+#auto-active-panel {
+    padding: 1 2 0 2;
+}
+
+.provider-panel {
+    width: 1fr;
+    height: auto;
+    border: round $line;
+    border-title-color: $primary;
+    border-title-style: bold;
+    border-subtitle-color: $secondary;
+    border-subtitle-align: right;
+    padding: 0 1;
+    background: $background;
+}
+
+#panel-codex { border-title-color: $codex; }
+#panel-agy { border-title-color: $antigravity; }
+
+.panel-empty {
+    height: auto;
+    padding: 0 1;
+}
+
+/* -- sidebar: Up next + Recent switches beside the panels at >= 120 cols ------- */
+
+#dashboard-top {
+    height: 1fr;
+}
+
+#sidebar {
+    display: none;
+    width: 44;
+    height: auto;
+    max-height: 100%;
+    padding: 0 2 0 0;
+    background: $background;
+}
+
+DashboardScreen.-wide #sidebar {
+    display: block;
+}
+
+.side-panel {
+    height: auto;
+    border: round $line;
+    border-title-color: $foreground;
+    border-title-style: bold;
+    padding: 0 1;
+    margin-bottom: 1;
+    background: $background;
+}
+
+/* -- dashboard menu ----------------------------------------------------------- */
+
+#menu-title {
+    height: 1;
+    margin-top: 1;
+    padding: 0 3;
+    color: $secondary;
+}
+
+#menu, #accounts {
+    background: $background;
+    padding: 1 2 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#menu:focus, #accounts:focus, #event-log:focus {
+    background-tint: $foreground 0%;
+}
+
+/* Highlight colours come from the theme's block-cursor-* variables. */
+#menu ListItem {
+    padding: 0 1;
+}
+
+/* Each provider's rows form one rounded panel: the divider is the top
+   edge, the rows the sides, the last row the bottom with the count. */
+#accounts AccountItem {
+    border-left: round $line;
+    border-right: round $line;
+    padding: 0 1 1 1;
+}
+
+#accounts AccountItem.-last {
+    border-bottom: round $line;
+    border-subtitle-color: $secondary;
+    border-subtitle-align: right;
+    padding: 0 1;
+}
+
+#accounts ProviderDivider {
+    height: 1;
+    margin-top: 1;
+    padding: 0;
+    border: round $line;
+    border-bottom: none;
+    border-title-color: $primary;
+    border-title-style: bold;
+}
+
+#accounts ProviderDivider:first-child { margin-top: 0; }
+#accounts ProviderDivider.-provider-codex { border-title-color: $codex; }
+#accounts ProviderDivider.-provider-agy { border-title-color: $antigravity; }
+
+#accounts ListItem.flash {
+    background: $panel;
+}
+
+MenuItem Static { color: $foreground; }
+MenuItem Static.menu-item-muted { color: $secondary; }
+
+/* -- settings: section list | rows + help (Figma 103:2, 103:11) ---------------- */
+
+#settings-body {
+    height: 1fr;
+    padding: 1 2 0 2;
+}
+
+#settings-nav {
+    width: 27;
+    height: 1fr;
+    border-right: solid $line;
+}
+
+SettingsScreen #menu-title {
+    margin: 0 0 1 0;
+    padding: 0 1;
+}
+
+#settings-sections {
+    height: auto;
+    padding: 0 1;
+}
+
+#settings-main {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 0 0 2;
+}
+
+#section-title {
+    height: 1;
+    margin-bottom: 1;
+    padding: 0 1;
+}
+
+SettingsScreen #menu {
+    height: auto;
+    max-height: 1fr;
+    padding: 0;
+}
+
+/* Rows, the switcher and the sidebar lines are one line each: cut, never wrapped. */
+SettingRow Static, #settings-sections, .side-panel {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#setting-help {
+    height: auto;
+    margin: 1 1 0 1;
+    border-top: solid $line;
+    padding-top: 1;
+}
+
+/* Under 100 cols the section list is a one-line switcher above the rows. */
+SettingsScreen.-narrow #settings-body {
+    layout: vertical;
+}
+
+SettingsScreen.-narrow #settings-nav {
+    width: 1fr;
+    height: auto;
+    border-right: none;
+    margin-bottom: 1;
+}
+
+SettingsScreen.-narrow #menu-title {
+    margin: 0;
+}
+
+SettingsScreen.-narrow #section-title {
+    display: none;
+}
+
+SettingsScreen.-narrow #settings-main {
+    padding: 0;
+}
+
+/* -- footer: one rule above the keys ------------------------------------------ */
+
+Footer {
+    height: 2;
+    border-top: solid $line;
+    padding: 0 1;
+}
+
+/* -- switch / watch screens --------------------------------------------------- */
+
+#list-title {
+    height: 1;
+    margin-top: 1;
+    padding: 0 3;
+    color: $secondary;
+}
+
+/* -- auto screen ---------------------------------------------------------- */
+
+#auto-top {
+    height: auto;
+    background: $background;
+    padding: 1 2;
+}
+
+#auto-title-row {
+    height: 1;
+    margin-bottom: 1;
+}
+
+#mode-badge {
+    width: auto;
+    text-style: bold;
+}
+
+#mode-badge.dry {
+    background: $panel;
+    color: $warning;
+}
+
+#mode-badge.live {
+    background: $primary;
+    color: $background;
+}
+
+#auto-summary {
+    width: 1fr;
+    color: $secondary;
+    padding-left: 2;
+}
+
+#candidates {
+    height: auto;
+}
+
+#event-log {
+    background: $background;
+    border-top: solid $line;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+/* -- modals ----------------------------------------------------------------- */
+
+ConfirmModal, AddTokenModal, OutputModal, ThresholdAdjustModal {
+    align: center middle;
+    background: $background 60%;
+}
+
+.modal-box {
+    width: 64;
+    max-width: 90%;
+    height: auto;
+    max-height: 100%;
+    overflow-y: auto;
+    background: $surface;
+    border: round $line;
+    padding: 1 2;
+}
+
+.modal-box-wide {
+    width: 90;
+}
+
+.modal-title {
+    text-style: bold;
+    color: $primary;
+    margin-bottom: 1;
+}
+
+.modal-body {
+    color: $foreground;
+    margin-bottom: 1;
+}
+
+.modal-buttons {
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
+}
+
+/* Flat chip buttons: quiet at rest, terracotta block when focused. ←/→ move
+   focus between them, Enter presses — the accent shows where Enter lands. */
+.modal-buttons Button {
+    border: none;
+    height: 1;
+    min-width: 12;
+    padding: 0 2;
+    margin-left: 2;
+    background: $panel;
+    color: $foreground;
+    text-style: none;
+}
+
+.modal-buttons Button:hover {
+    background: $panel-lighten-1;
+}
+
+.modal-buttons Button:focus {
+    background: $primary;
+    color: $background;
+    text-style: bold;
+}
+
+.modal-hint {
+    height: 1;
+    margin-top: 1;
+    color: $secondary;
+}
+
+.modal-output {
+    height: auto;
+    max-height: 20;
+    background: $background;
+    padding: 1;
+}
+
+.form-error {
+    height: 1;
+    color: $error;
+}
+
+AddTokenModal Input {
+    margin-bottom: 0;
+}
+
+/* -- command palette (ctrl+p) ----------------------------------------------------- */
+
+CommandPalette > Vertical, CommandPalette > Vertical:dark {
+    background: $surface;
+    border: round $line;
+}
+
+CommandPalette #--input {
+    border: none;
+}
+
+CommandPalette #--input.--list-visible {
+    border-bottom: solid $line;
+}
+
+CommandPalette > .command-palette--help-text {
+    color: $secondary;
+}
+
+CommandPalette > .command-palette--highlight {
+    color: $primary;
+}
+
+CommandList {
+    background: $surface;
+}
+
+CommandList > .option-list--option-highlighted {
+    color: $foreground;
+    background: $panel;
+    text-style: none;
+}
+
+/* -- scrollbars: quiet, in the line colour ------------------------------------ */
+
+#menu, #accounts, #accounts-panel, #event-log, CommandList, .modal-box {
+    scrollbar-color: $line;
+    scrollbar-color-hover: $secondary;
+    scrollbar-color-active: $primary;
+    scrollbar-background: $background;
+    scrollbar-background-hover: $background;
+    scrollbar-background-active: $background;
+}

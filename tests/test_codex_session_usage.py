@@ -3,9 +3,9 @@ import copy
 
 import pytest
 
-from claude_swap import codex as module, codex_session as cs
-from claude_swap.codex_usage import CodexUsageError
-from claude_swap.locking import FileLock
+from ccswap import codex as module, codex_session as cs
+from ccswap.codex_usage import CodexUsageError
+from ccswap.locking import FileLock
 from tests.test_codex_reconcile import custody, write
 
 
@@ -69,7 +69,7 @@ def test_bounded_strict_read(usage, monkeypatch, failures):
         if path == home / 'auth.json':
             calls.append(path)
             if len(calls) <= failures:
-                from claude_swap.exceptions import SessionError
+                from ccswap.exceptions import SessionError
                 raise SessionError('Malformed session record.')
         return original(path)
 
@@ -121,7 +121,8 @@ def test_display_read_only_schema(usage, monkeypatch):
     monkeypatch.setattr(cs, 'slot_custody', lambda *_: cs.Custody('quiescent', 'no_writers'))
     row = switcher.list_payload()['accounts'][0]
     assert list(row) == ['number', 'email', 'authMode', 'planType', 'label', 'active',
-                         'disabled', 'session', 'usageStatus', 'usage']
+                         'disabled', 'session', 'usageStatus', 'usage', 'windows',
+                         'windowsSource']
     assert row['session'] == {'state': 'idle', 'capturePending': True,
                               'runCount': 0, 'shared': False}
     assert switcher.status()['sessions'] == [{'number': 1, 'session': row['session']}]
@@ -226,7 +227,7 @@ def test_session_start_before_401_blocks_real_refresh(custody, monkeypatch):
 
     # Exercise the POSIX scanner race; Windows job custody has separate tests.
     monkeypatch.setattr(cs, "sys", SimpleNamespace(platform="linux"))
-    from claude_swap import process_detection
+    from ccswap import process_detection
 
     switcher, _, _ = custody
     switcher.lock_file = switcher.backup_dir / '.lock'
@@ -269,7 +270,7 @@ def test_broken_config_is_per_account_unavailable(usage, monkeypatch, entrypoint
 @pytest.mark.parametrize('process_state,expected', [('alive', 'live'), ('unknown', 'uncertain')])
 def test_windows_status_uses_job_process_state(usage, monkeypatch, process_state, expected):
     from types import SimpleNamespace
-    from claude_swap import process_detection, windows_job
+    from ccswap import process_detection, windows_job
     from tests.test_codex_session import record
 
     switcher, home, _ = usage
@@ -314,7 +315,7 @@ def test_display_partial_auth_retries_then_uncertain(usage, monkeypatch, failure
         if path == home / 'auth.json':
             calls.append(path)
             if len(calls) <= failures:
-                from claude_swap.exceptions import SessionError
+                from ccswap.exceptions import SessionError
                 raise SessionError('Malformed session record.')
         return original(path)
 
@@ -345,7 +346,7 @@ def test_interrupted_adoption_is_capture_pending(usage, monkeypatch):
 
 @pytest.mark.parametrize('entrypoint', ['status', 'list_payload', 'list_accounts'])
 def test_display_lock_busy_is_uncertain(usage, monkeypatch, entrypoint):
-    from claude_swap.exceptions import LockError
+    from ccswap.exceptions import LockError
 
     switcher, _, baseline = usage
     write(switcher.auth_file, baseline)
@@ -403,8 +404,8 @@ def test_display_real_read_failures_are_uncertain(usage, monkeypatch, failure):
 
 
 def test_snapshot_reports_busy_store_instead_of_failing(usage, monkeypatch):
-    from claude_swap import codex
-    from claude_swap.exceptions import LockError
+    from ccswap import codex
+    from ccswap.exceptions import LockError
 
     switcher, _, _ = usage
 
@@ -461,7 +462,7 @@ def test_session_absence_requires_valid_readable_parents(usage, monkeypatch, kin
 
 @pytest.mark.parametrize('unauthorized', [False, True])
 def test_unknown_default_idle_rotation_stays_read_only(usage, monkeypatch, unauthorized):
-    from claude_swap.exceptions import ConfigError
+    from ccswap.exceptions import ConfigError
 
     switcher, home, baseline = usage
     rotated = dict(baseline, rotation=1)
@@ -488,7 +489,7 @@ def test_unknown_default_idle_rotation_stays_read_only(usage, monkeypatch, unaut
 
 @pytest.mark.parametrize('state', ['live', 'uncertain', 'conflict'])
 def test_redeem_session_preflight_401_never_rotates_or_posts(usage, monkeypatch, state):
-    from claude_swap.exceptions import SwitchError
+    from ccswap.exceptions import SwitchError
 
     switcher, _, _ = usage
     monkeypatch.setattr(cs, 'slot_custody', lambda *_a, **_k: cs.Custody(state, 'synthetic'))
@@ -504,7 +505,7 @@ def test_redeem_session_preflight_401_never_rotates_or_posts(usage, monkeypatch,
 
 
 def test_refresh_unknown_default_checks_before_reconcile(usage, monkeypatch):
-    from claude_swap.exceptions import ConfigError
+    from ccswap.exceptions import ConfigError
 
     switcher, _, baseline = usage
     def unreadable():
@@ -518,7 +519,7 @@ def test_refresh_unknown_default_checks_before_reconcile(usage, monkeypatch):
 @pytest.mark.parametrize('state,accepted', [('live', True), ('quiescent', True),
                                           ('uncertain', False), ('conflict', False)])
 def test_reset_final_custody_gate(usage, monkeypatch, state, accepted):
-    from claude_swap.exceptions import SwitchError
+    from ccswap.exceptions import SwitchError
 
     switcher, _, _ = usage
     monkeypatch.setattr(cs, 'slot_custody', lambda *_a, **_k: cs.Custody(state, 'synthetic'))
@@ -535,7 +536,7 @@ def test_reset_final_custody_gate(usage, monkeypatch, state, accepted):
 
 
 def test_reset_final_gate_refuses_changed_backup_identity(usage, monkeypatch):
-    from claude_swap.exceptions import SwitchError
+    from ccswap.exceptions import SwitchError
 
     switcher, _, baseline = usage
     other = copy.deepcopy(baseline)
@@ -548,7 +549,7 @@ def test_reset_final_gate_refuses_changed_backup_identity(usage, monkeypatch):
 
 @pytest.mark.parametrize('failure', ['intent', 'divergence'])
 def test_reset_never_posts_with_pending_or_diverged_credentials(usage, monkeypatch, failure):
-    from claude_swap.exceptions import SwitchError
+    from ccswap.exceptions import SwitchError
 
     switcher, home, baseline = usage
     monkeypatch.setattr(cs, 'slot_custody', lambda *_a, **_k:

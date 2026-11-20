@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import agy, cli, macos_keychain
+from ccswap import agy, cli, macos_keychain, providers
 
 
 def auth(email="one@example.com", **extra):
@@ -74,7 +74,10 @@ def two_accounts(provider):
     provider.add_account()
 
 
-def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider):
+def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider, monkeypatch):
+    import logging
+
+    monkeypatch.setattr(logging.getLogger("ccswap"), "handlers", [])
     two_accounts(provider)
     outgoing = auth("unknown@example.com", future_field={"revision": 3})
     native(outgoing)
@@ -83,6 +86,10 @@ def test_capture_switch_preserves_full_wrappers_and_unknown_outgoing(provider):
     assert read_native() == auth()
     assert json.loads(provider._credential_path("3").read_text()) == outgoing
     assert provider.status()["activeAccountNumber"] == 1
+    for handler in logging.getLogger("ccswap").handlers:
+        handler.close()
+    log = (provider.backup_dir.parent / "claude-swap.log").read_text()
+    assert log.rstrip().endswith("Switched agy from account 3 to 1")  # the captured login
     if os.name != "nt":
         assert provider.backup_dir.stat().st_mode & 0o777 == 0o700
         for path in provider.backup_dir.iterdir():
@@ -398,11 +405,11 @@ def test_malformed_quota_fraction_is_rejected(bad):
         agy.parse_usage(document)
 
 
-def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, capsys):
+def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, capsys, provider_factory):
     two_accounts(provider)
     capsys.readouterr()
-    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
-    cli._agy_command(["list", "--json"])
+    provider_factory("agy", lambda debug=False: provider)
+    cli._provider_command(providers.get("agy"), ["list", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["schemaVersion"] == 1
     row = payload["accounts"][0]
@@ -411,7 +418,7 @@ def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, 
     assert row["usage"]["scoped"][1]["window"] == "5h"
     assert "resets_at" not in row["usage"]["scoped"][1]
     with pytest.raises(SystemExit) as raised:
-        cli._agy_command(["switch", "missing", "--json"])
+        cli._provider_command(providers.get("agy"), ["switch", "missing", "--json"])
     assert raised.value.code == 1
     output = capsys.readouterr()
     assert json.loads(output.out)["error"]["type"] == "AgyError"
@@ -426,7 +433,7 @@ def test_cli_json_includes_usage_and_safe_error_envelope(provider, monkeypatch, 
     "Antigravity returned invalid or unavailable quota data",
     "Antigravity usage unavailable",
 ])
-def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, capsys, diagnostic):
+def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, capsys, diagnostic, provider_factory):
     native(auth())
     provider.add_account()
     capsys.readouterr()
@@ -437,18 +444,18 @@ def test_known_usage_diagnostics_survive_cooldown_in_cli(provider, monkeypatch, 
         raise agy.AgyError(diagnostic)
 
     monkeypatch.setattr(provider, "_invoke_usage", fail_usage)
-    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
-    cli._agy_command(["usage"])
+    provider_factory("agy", lambda debug=False: provider)
+    cli._provider_command(providers.get("agy"), ["usage"])
     assert diagnostic in capsys.readouterr().out
     for _ in range(2):
-        cli._agy_command(["usage", "--json"])
+        cli._provider_command(providers.get("agy"), ["usage", "--json"])
         assert json.loads(capsys.readouterr().out)["accounts"][0]["error"] == diagnostic
-        cli._agy_command(["usage"])
+        cli._provider_command(providers.get("agy"), ["usage"])
         assert diagnostic in capsys.readouterr().out
     assert len(attempts) == 1
 
 
-def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypatch, capsys):
+def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypatch, capsys, provider_factory):
     native(auth())
     provider.add_account()
     capsys.readouterr()
@@ -460,14 +467,14 @@ def test_missing_cli_usage_keeps_install_hint_during_cooldown(provider, monkeypa
 
     monkeypatch.setattr(agy.shutil, "which", missing_cli)
     monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("missing CLI started"))
-    monkeypatch.setattr(cli, "AgyAccountSwitcher", lambda: provider)
+    provider_factory("agy", lambda debug=False: provider)
     for _ in range(2):
-        cli._agy_command(["usage", "--json"])
+        cli._provider_command(providers.get("agy"), ["usage", "--json"])
         diagnostic = json.loads(capsys.readouterr().out)["accounts"][0]["error"]
         assert "Antigravity CLI is not installed" in diagnostic
         assert "Install" in diagnostic
         assert "https://antigravity.google/docs/getting-started/" in diagnostic
-        cli._agy_command(["usage"])
+        cli._provider_command(providers.get("agy"), ["usage"])
         assert diagnostic in capsys.readouterr().out
     assert lookups == ["agy"]
 
@@ -495,7 +502,7 @@ def test_cli_subprocess_file_backend_round_trip(tmp_path):
            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
 
     def command(*args):
-        result = subprocess.run([sys.executable, "-m", "claude_swap", "agy", *args],
+        result = subprocess.run([sys.executable, "-m", "ccswap", "agy", *args],
                                 cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15)
         assert result.returncode == 0, result.stderr
         return result.stdout
@@ -536,19 +543,18 @@ def test_malformed_usage_cache_fails_closed(provider, cached):
 
 
 def test_five_hour_scoped_quota_has_no_weekly_pace_and_healthy_compact_rows(provider):
-    from claude_swap.models import AccountSnapshot
-    from claude_swap.tui.widgets import mini_account_text, usage_rows
-    from claude_swap.usage_store import UsageEntry
+    from ccswap.models import AccountSnapshot
+    from ccswap.usage_store import UsageEntry
+    from tests.test_tui import card, mini
 
     usage = agy.parse_usage(quota())
     usage["scoped"] = [dict(usage["scoped"][1], pct=80, resets_at="2030-01-01T00:00:00Z")]
-    rows = usage_rows(usage, 1_893_455_400, 1_893_455_400)
-    assert "ahead" not in rows[0][2]
     account = AccountSnapshot("1", "one@example.com", "Antigravity", "", False, "oauth", True,
-                              UsageEntry(last_good=usage))
-    compact = mini_account_text(account, 1_893_455_400).plain
-    assert "Gemini Models · 5h" in compact
-    assert "80%" in compact
+                              UsageEntry(last_good=usage, fetched_at=1_893_455_400))
+    assert "ahead" not in card(account, 100, now=1_893_455_400, provider="agy").plain
+    compact = mini(account, 1_893_455_400, provider="agy").plain
+    group_row = next(line for line in compact.splitlines() if "Gemini Models" in line)
+    assert "5h" in group_row and "80%" in group_row
     assert "usage unavailable" not in compact
 
 
@@ -556,19 +562,21 @@ def test_five_hour_scoped_quota_has_no_weekly_pace_and_healthy_compact_rows(prov
 @pytest.mark.parametrize("terminal_size", [(110, 48), (80, 32)])
 async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider, tmp_path, monkeypatch, terminal_size):
     from textual.widgets import ListView
-    from claude_swap.tui.app import CswapApp
-    from claude_swap.tui.widgets import AccountItem, AccountsPanel
+    from ccswap.tui.app import CswapApp
+    from ccswap.tui.widgets import AccountItem, AccountsPanel
     from tests.test_tui import FakeSwitcher, settle
 
     two_accounts(provider)
-    monkeypatch.setattr("claude_swap.claude_integration.mod_installed", lambda: False)
+    monkeypatch.setattr("ccswap.claude_integration.mod_installed", lambda: False)
     app = CswapApp(FakeSwitcher([], tmp_path), codex_switcher=FakeSwitcher([], tmp_path),
                    agy_switcher=provider)
     app.title = "ccswap · synthetic test data"
     async with app.run_test(size=terminal_size) as pilot:
         await settle(pilot)
-        panel = app.screen.query_one(AccountsPanel).render().plain
-        assert "Antigravity" in panel and "Gemini Models · 5h" in panel
+        panel = app.screen.query_one(AccountsPanel).render_text().plain
+        assert "Antigravity" in panel
+        # One row per model group, its 5h and weekly windows side by side.
+        assert any("Gemini Models" in line and "5h" in line for line in panel.splitlines())
         assert "usage unavailable" not in panel
         screen = app.screen
         assert all(action != "auto:agy" for _, action in screen._auto_entries())
@@ -591,6 +599,8 @@ async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider
         screenshot = app.save_screenshot("agy-switch.svg", path=str(tmp_path))
         assert Path(screenshot).is_file()
         await pilot.press("enter")
+        await settle(pilot)
+        await pilot.press("y")  # Antigravity restarts: Switch asks first
         await settle(pilot)
         assert read_native()["id_token_email"] == "one@example.com"
         app.do_switch_best("agy")
@@ -617,18 +627,19 @@ async def test_dashboard_agy_manual_switch_add_remove_and_scoped_quotas(provider
 
 
 def test_inactive_scoped_quota_keeps_each_group_when_one_is_exhausted(provider):
-    from claude_swap.tui.widgets import mini_account_text
+    from tests.test_tui import mini
 
     two_accounts(provider)
     account = provider.accounts_snapshot().accounts[0]
     windows = account.usage.last_good["scoped"]
     windows[0]["pct"] = 100
-    rendered = mini_account_text(account, 0).plain
-    for window in windows:
-        assert window["name"] in rendered
-    assert len(rendered.splitlines()) == len(windows) + 1
+    rendered = mini(account, 0, provider="agy").plain
+    groups = list(dict.fromkeys(window["group"] for window in windows))
+    # One row per model group (its 5h and weekly side by side), each once.
+    assert len(rendered.splitlines()) == len(groups) + 1
+    assert "100%" in rendered
     for line in rendered.splitlines()[1:]:
-        assert sum(window["name"] in line for window in windows) == 1
+        assert sum(group in line for group in groups) == 1
 
 
 def test_snapshot_bounds_total_subprocess_time_and_rotates_persisted_order(provider, monkeypatch):
@@ -898,7 +909,7 @@ def test_success_saves_then_clears_intent_before_temp_cleanup(provider, monkeypa
 def test_queued_manual_switch_succeeds_after_bounded_refresh(provider, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
-    from claude_swap.locking import FileLock
+    from ccswap.locking import FileLock
 
     two_accounts(provider)
     for email in ("three@example.com", "four@example.com"):
@@ -1028,11 +1039,11 @@ def test_malformed_recovery_metadata_fails_without_leaking(provider, metadata):
 
 
 def test_full_and_compact_cards_show_recovery_with_cached_quota(provider, monkeypatch):
-    from claude_swap.tui.widgets import account_card_text, mini_account_text
+    from tests.test_tui import card, mini
 
     account = induce_recovery(provider, monkeypatch)
     assert account.usage.last_good is not None
-    for text in (account_card_text(account, 100).plain, mini_account_text(account, 0).plain):
+    for text in (card(account, 100, provider="agy").plain, mini(account, 0, provider="agy").plain):
         assert "Recovery required" in text
         assert "ccswap agy add" in text
         assert account.usage.recovery.path in text
@@ -1042,20 +1053,20 @@ def test_full_and_compact_cards_show_recovery_with_cached_quota(provider, monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize("active", [False, True])
 async def test_dashboard_shows_pending_recovery_with_cached_quota(provider, monkeypatch, tmp_path, active):
-    from claude_swap.tui.app import CswapApp
-    from claude_swap.tui.widgets import AccountsPanel
+    from ccswap.tui.app import CswapApp
+    from ccswap.tui.widgets import AccountsPanel
     from tests.test_tui import FakeSwitcher, settle
 
     account = induce_recovery(provider, monkeypatch)
     if active:
         native(auth())
-    monkeypatch.setattr("claude_swap.claude_integration.mod_installed", lambda: False)
+    monkeypatch.setattr("ccswap.claude_integration.mod_installed", lambda: False)
     app = CswapApp(FakeSwitcher([], tmp_path), codex_switcher=FakeSwitcher([], tmp_path),
                    agy_switcher=provider)
     app.title = "ccswap · synthetic recovery test data"
     async with app.run_test(size=(120, 48)) as pilot:
         await settle(pilot)
-        panel = app.screen.query_one(AccountsPanel).render().plain
+        panel = app.screen.query_one(AccountsPanel).render_text().plain
         assert "Recovery required" in panel and "ccswap agy add" in panel
         assert account.usage.recovery.path in panel
         assert "Gemini Models" in panel

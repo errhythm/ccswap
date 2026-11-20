@@ -1,4 +1,4 @@
-"""Tests for one-time data migrations (claude_swap.migrations).
+"""Tests for one-time data migrations (ccswap.migrations).
 
 The remaining migration relocates macOS backup credentials from the service the
 third-party ``keyring`` library used (``claude-code``) into the ``security``-managed
@@ -15,12 +15,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from claude_swap import migrations
-from claude_swap.exceptions import MigrationIncomplete
-from claude_swap.macos_keychain import KeychainError, KeychainTimeout
-from claude_swap.migrations import run_migrations
-from claude_swap.models import Platform
-from claude_swap.switcher import KEYRING_SERVICE, ClaudeAccountSwitcher
+from ccswap import migrations
+from ccswap.exceptions import MigrationIncomplete
+from ccswap.macos_keychain import KeychainError, KeychainTimeout
+from ccswap.migrations import run_migrations
+from ccswap.models import Platform
+from ccswap.switcher import KEYRING_SERVICE, ClaudeAccountSwitcher
 
 EMAIL = "a@example.com"
 LEGACY_USER = f"account-1-{EMAIL}"

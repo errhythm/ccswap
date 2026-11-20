@@ -1,4 +1,2 @@
-# gettext writes a final message separator; keep source catalogs in UTF-8/LF.
-*.po text eol=lf whitespace=-blank-at-eof
-*.pot text eol=lf whitespace=-blank-at-eof
-*.mo binary
+# Logo files are pinned by hash (tests/test_brand.py): no line-ending conversion.
+*.svg -text

@@ -29,7 +29,7 @@ from io import StringIO
 
 import pytest
 
-from claude_swap import printer
+from ccswap import printer
 
 
 def test_a_test_may_latch_the_colour_cache():
@@ -119,7 +119,7 @@ def test_the_suite_does_not_query_the_developers_terminal(monkeypatch):
     import io
     import pty
 
-    from claude_swap import appearance
+    from ccswap import appearance
 
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.delenv("STY", raising=False)

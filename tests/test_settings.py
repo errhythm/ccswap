@@ -13,9 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.exceptions import ConfigError
-from claude_swap.settings import (
+from ccswap.exceptions import ConfigError
+from ccswap.settings import (
     ClaudeIntegrationSettings,
+    MenuBarConfig,
     CredentialSettings,
     SETTING_SPECS,
     atomic_write_json,
@@ -23,6 +24,7 @@ from claude_swap.settings import (
     RunSettings,
     UiSettings,
     UnrecognizedKey,
+    TelemetrySettings,
     UpdateSettings,
     UsageSettings,
     effective_settings,
@@ -366,7 +368,7 @@ class TestUsageSettings:
         settings_path(tmp_path).write_text(
             json.dumps({"usage": {"headerProbe": True, "fableProbe": "yes"}})
         )
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             loaded = load_usage_settings(tmp_path)
         assert loaded == UsageSettings(header_probe=True, fable_probe=False)
         assert "usage.fableProbe must be true or false" in caplog.text
@@ -402,6 +404,8 @@ class TestSettingSpecs:
             "run": RunSettings(),
             "updates": UpdateSettings(),
             "usage": UsageSettings(),
+            "menubar": MenuBarConfig(),
+            "telemetry": TelemetrySettings(),
         }
         for spec in SETTING_SPECS.values():
             assert spec.default == getattr(sources[spec.section], spec.field)
@@ -495,7 +499,7 @@ class TestEffectiveSettings:
     @pytest.fixture(autouse=True)
     def _no_claude_cli(self):
         # The mod row's live state comes from `claude plugin list`.
-        with patch("claude_swap.claude_integration.mod_installed", return_value=False):
+        with patch("ccswap.claude_integration.mod_installed", return_value=False):
             yield
 
     def test_missing_file_reports_all_defaults(self, tmp_path: Path):
@@ -633,7 +637,7 @@ class TestUnrecognizedKeys:
         settings_path(tmp_path).write_text(json.dumps({
             "autoswitch": {"hysteresisPCT": 5, "futureKnob": True},
         }))
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             log_unrecognized_keys(tmp_path)
         assert _settings_warnings(caplog) == [
             "settings.json: 'autoswitch.hysteresisPCT' is not a key this version "
@@ -647,7 +651,7 @@ class TestUnrecognizedKeys:
         settings_path(tmp_path).write_text(
             json.dumps({"autoswitch": {"hysteresisPCT": 5}, "ui": {"them": "dark"}})
         )
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="ccswap"):
             load_settings(tmp_path)
             load_ui_settings(tmp_path)
             load_run_settings(tmp_path)
@@ -923,3 +927,29 @@ class TestWeeklyThreshold:
     def test_cli_value_is_clamped(self):
         merged = merged_with_cli(AutoSwitchSettings(), _args(weekly_threshold=970.0))
         assert merged.weekly_threshold == 99.9
+
+
+def test_legacy_ui_language_key_is_ignored(tmp_path: Path, caplog):
+    (tmp_path / "settings.json").write_text(json.dumps({"ui": {"language": "de", "theme": "light"}}))
+    with caplog.at_level(logging.WARNING):
+        assert load_ui_settings(tmp_path) == UiSettings(theme="light")
+    assert not caplog.records
+
+
+def test_set_setting_waits_for_the_lock_and_keeps_the_other_writers_change(tmp_path):
+    import threading
+
+    from ccswap.settings import set_setting, settings_lock, settings_path
+
+    lock = settings_lock(tmp_path)
+    assert lock.acquire()
+    writer = threading.Thread(target=set_setting, args=(tmp_path, "ui.theme", "light"))
+    writer.start()
+    writer.join(0.3)
+    assert writer.is_alive()  # blocked behind the held lock
+    # The lock holder's own write, which a stale read-modify-write would drop.
+    settings_path(tmp_path).write_text(json.dumps({"autoswitch": {"threshold": 80}}))
+    lock.release()
+    writer.join(5)
+    raw = json.loads(settings_path(tmp_path).read_text())
+    assert raw["autoswitch"]["threshold"] == 80 and raw["ui"]["theme"] == "light"

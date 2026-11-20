@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap import cli, codex_session
-from claude_swap.appearance import cli_should_probe
+from ccswap import cli, codex_session
+from ccswap.appearance import cli_should_probe
 from tests.test_codex_reconcile import custody
 
 
@@ -140,7 +140,8 @@ def test_existing_remove_delimiter_unchanged(launch):
     launch[1].assert_not_called()
 
 
-def test_list_dispatch_preserves_session_fields(launch):
+def test_list_dispatch_preserves_session_fields(launch, provider_factory):
+    provider_factory("codex", launch[0])  # list goes through the registry, not cli's name
     session = dict(state="uncertain", capturePending=True, runCount=0, shared=False)
     payload = {"provider": "codex", "accounts": [{"number": 1, "session": session}]}
     launch[0].return_value.list_payload.return_value = payload

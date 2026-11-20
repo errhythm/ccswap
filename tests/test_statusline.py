@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import statusline
+from ccswap import statusline
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 NOW = time.time()
@@ -117,9 +117,9 @@ def test_never_touches_network_or_keychain(backup, capsys, monkeypatch):
     boom = AssertionError("statusline must be local-only")
     with (
         patch("urllib.request.urlopen", side_effect=boom),
-        patch("claude_swap.oauth.request_usage_data", side_effect=boom),
+        patch("ccswap.oauth.request_usage_data", side_effect=boom),
         patch("socket.socket.connect", side_effect=boom),
-        patch("claude_swap.paths.get_backup_root", return_value=backup),
+        patch("ccswap.paths.get_backup_root", return_value=backup),
     ):
         assert statusline.main() == 0
     assert "Opus" in plain(capsys.readouterr().out)
@@ -155,7 +155,7 @@ def test_bad_spend_numbers_only_touch_that_line(backup):
 
 
 def test_spend_without_amounts_shows_percentage():
-    from claude_swap.statusline import DARK, _spend_line
+    from ccswap.statusline import DARK, _spend_line
 
     line = _spend_line({"used_percentage": 40, "resets_at": None}, None, DARK)
     assert line is not None and "40%" in line

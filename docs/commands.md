@@ -89,8 +89,8 @@ ccswap hub install               # Serve quota to T3 Code as a CLIProxyAPI hub (
 ccswap hub key                   # Print the hub's management key
 ccswap codex switch 2            # Switch the file-backed Codex login
 ccswap config                    # Show or edit settings (see [configuration.md](configuration.md))
-ccswap list                      # Claude + Codex accounts with quota and reset times
-ccswap list --provider codex     # Restrict to one provider (claude|codex|all)
+ccswap list                      # Every provider's accounts with quota and reset times
+ccswap list --provider codex     # Restrict to one provider (claude|codex|agy|all, any registered provider)
 ccswap list --token-status       # Add source-labelled OAuth token diagnostics
 ccswap status                    # Show current account
 ccswap add --slot 3              # Add account to a specific slot (prompts before overwrite)
@@ -112,3 +112,22 @@ ccswap purge                     # Remove all ccswap data
 
 `ccswap codex redeem-reset NUM|EMAIL [--yes] [--json]` explicitly redeems one
 banked reset for a saved ChatGPT account (see [Codex](codex.md)).
+
+### Provider commands
+
+`ccswap <provider> <verb>` addresses one provider by its registry id (`claude`,
+`codex`, `agy`, and any provider added later). Bare commands such as
+`ccswap switch` or `ccswap list --provider claude` still mean Claude Code, and
+`ccswap claude <verb>` is the explicit spelling (`ccswap claude list` lists only
+Claude Code).
+
+The verbs follow the provider's capabilities:
+
+- `add`, `list`, `status`, `usage` and `remove NUM|EMAIL [--yes]` for every provider.
+- `switch NUM|EMAIL [--json]` where the provider can switch accounts.
+- `switch [--strategy best|next-available|consume-first]` with no target only where
+  the provider has rotation strategies; otherwise a target is required.
+- `disable NUM|EMAIL` and `enable NUM|EMAIL` only where the provider can hold an
+  account out of rotation.
+
+Codex keeps its own parser (`run`, `redeem-reset`, and so on).

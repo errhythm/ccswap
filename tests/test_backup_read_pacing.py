@@ -25,16 +25,16 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import macos_keychain, oauth
-from claude_swap.credentials import CLAUDE_CODE_KEYCHAIN_SERVICE, SECURITY_SERVICE
-from claude_swap.json_output import (
+from ccswap import macos_keychain, oauth
+from ccswap.credentials import CLAUDE_CODE_KEYCHAIN_SERVICE, SECURITY_SERVICE
+from ccswap.json_output import (
     USAGE_KEYCHAIN_UNAVAILABLE,
     USAGE_RELOGIN_REQUIRED,
 )
-from claude_swap.macos_keychain import KeychainError
-from claude_swap.models import Platform
-from claude_swap.switcher import ClaudeAccountSwitcher
-from claude_swap.usage_store import FetchRecord
+from ccswap.macos_keychain import KeychainError
+from ccswap.models import Platform
+from ccswap.switcher import ClaudeAccountSwitcher
+from ccswap.usage_store import FetchRecord
 
 
 def _cred(tag: str) -> str:
@@ -174,7 +174,7 @@ class TestBackupReadCooldown:
         line per cooldown, and the verdict stays unreadable."""
         s = _switcher(temp_home, block_real_keychain, 5)
         keychain.fail = lambda *_: True
-        with caplog.at_level(logging.INFO, logger="claude-swap"):
+        with caplog.at_level(logging.INFO, logger="ccswap"):
             for _ in range(2):
                 snap = s.accounts_snapshot(fetch=set())
             idle = [a for a in snap.accounts if not a.is_active]
@@ -215,7 +215,7 @@ class TestBackupReadCache:
             ) == _cred("backup2")
         assert keychain.backup_calls(2) == 1
 
-        monkeypatch.setattr("claude_swap.credentials.BACKUP_READ_CACHE_TTL_S", 0.0)
+        monkeypatch.setattr("ccswap.credentials.BACKUP_READ_CACHE_TTL_S", 0.0)
         assert store._read_account_credentials("2", _email(2), cached=True) == (
             _cred("backup2")
         )

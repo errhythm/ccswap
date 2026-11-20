@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from claude_swap import windows_job as w
+from ccswap import windows_job as w
 
 RUN = str(uuid4())
 
@@ -334,7 +334,7 @@ def test_native_redirected_stdout(tmp_path):
     supervisor = dedent(f"""
         import os
         import sys
-        from claude_swap.windows_job import launch
+        from ccswap.windows_job import launch
 
         with launch(sys.executable, ["-c", "print('redirected child')"], dict(os.environ),
                     {str(tmp_path)!r}, {run_id!r}, lambda *_: None) as job:
@@ -376,7 +376,7 @@ def test_native_kill_completion(tmp_path, parent_death):
         import subprocess
         import sys
         import time
-        from claude_swap.windows_job import process_identity
+        from ccswap.windows_job import process_identity
 
         grandchild = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
         identities = [(pid, process_identity(pid)[1]) for pid in (grandchild.pid, os.getpid())]
@@ -388,7 +388,7 @@ def test_native_kill_completion(tmp_path, parent_death):
     supervisor = dedent(f"""
         import os
         import time
-        from claude_swap.windows_job import launch
+        from ccswap.windows_job import launch
 
         job = launch({sys.executable!r}, [{str(child_script)!r}], dict(os.environ),
                      {str(tmp_path)!r}, {run_id!r}, lambda *_: None)
@@ -576,7 +576,7 @@ def test_native_extra_inheritable_handle_is_excluded(tmp_path):
             import os
             import sys
             os.get_handle_inheritable({handle})
-            from claude_swap.windows_job import launch
+            from ccswap.windows_job import launch
             with launch(sys.executable, [{str(child)!r}, {str(handle)!r}], dict(os.environ),
                         {str(tmp_path)!r}, {str(uuid4())!r}, lambda *_: None) as job:
                 sys.exit(job.wait())

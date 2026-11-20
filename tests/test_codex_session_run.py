@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import codex_binary, codex_session as cs
-from claude_swap.codex_session import slot_custody as observe_custody
+from ccswap import codex_binary, codex_session as cs
+from ccswap.codex_session import slot_custody as observe_custody
 from tests.test_codex_reconcile import custody
 from tests.test_codex_session import auth
 
@@ -240,7 +240,7 @@ def test_record_write_failure(run, monkeypatch, phase):
 
 
 def test_binary_gate_before_record(run, monkeypatch):
-    from claude_swap.exceptions import SessionError
+    from ccswap.exceptions import SessionError
     def probe(binary):
         raise SessionError("unsupported binary")
     monkeypatch.setattr(codex_binary, "probe_codex", probe)
@@ -307,7 +307,7 @@ def test_child_cwd_drives_discovery(run):
 
 
 def test_unknown_supervisor_identity_before_record(run, monkeypatch):
-    from claude_swap.exceptions import SessionError
+    from ccswap.exceptions import SessionError
     monkeypatch.setattr(cs, "_run_identity",
         lambda pid: (_ for _ in ()).throw(SessionError("unknown")))
     assert run.invoke() == 1
@@ -315,7 +315,7 @@ def test_unknown_supervisor_identity_before_record(run, monkeypatch):
 
 
 def test_inherited_preconstruction_example():
-    from claude_swap.exceptions import SessionError
+    from ccswap.exceptions import SessionError
     constructed = []
     def caller(environment):
         cs.refuse_inherited_home(environment)
@@ -331,7 +331,7 @@ def test_mismatching_identity_token_collision_refused(run):
 
 
 def test_subreaper_failure_before_record(run, monkeypatch):
-    from claude_swap.exceptions import SessionError
+    from ccswap.exceptions import SessionError
     def fail():
         raise SessionError("subreaper unavailable")
     monkeypatch.setattr(cs, "_run_subreaper", fail)
@@ -340,7 +340,7 @@ def test_subreaper_failure_before_record(run, monkeypatch):
 
 
 def test_windows_job_callback_and_wait(run, monkeypatch):
-    from claude_swap import windows_job
+    from ccswap import windows_job
     events = []
     monkeypatch.setattr(cs, "sys",
         SimpleNamespace(platform="win32", stderr=__import__("sys").stderr))
@@ -365,7 +365,7 @@ def test_windows_job_callback_and_wait(run, monkeypatch):
 @pytest.mark.parametrize("child_state,expected", [("gone", "quiescent"), ("unknown", "uncertain")])
 def test_windows_completed_reservation_still_checks_child(run, monkeypatch, child_state, expected):
     from uuid import uuid4
-    from claude_swap import windows_job
+    from ccswap import windows_job
     run_id = str(uuid4())
     supervisor = {"pid": 123, "start": {"kind": "windows", "creationTime100ns": "1"}}
     child = {"pid": 456, "start": {"kind": "windows", "creationTime100ns": "2"}}
@@ -405,7 +405,7 @@ def test_shared_email_drift_refused(run):
 
 @pytest.mark.parametrize("identifier", [None, "1", "user@example.org"])
 def test_real_default_identity_resolution(run, monkeypatch, identifier):
-    from claude_swap.codex import CodexAccountSwitcher
+    from ccswap.codex import CodexAccountSwitcher
     run.default, run.aliases = auth(), ["1"]
     monkeypatch.setattr(run.switcher, "_default_session_slots",
                         CodexAccountSwitcher._default_session_slots.__get__(run.switcher))
@@ -436,7 +436,7 @@ def test_last_orphan_exit_allows_capture(run, monkeypatch, capsys):
 
 @pytest.mark.parametrize("result", [0, -1])
 def test_linux_subreaper_prctl(monkeypatch, result):
-    from claude_swap.exceptions import SessionError
+    from ccswap.exceptions import SessionError
     calls = []
     # Retrieve the implementation, rather than the run fixture's injected seam.
     monkeypatch.setattr(cs, "sys",
@@ -564,7 +564,7 @@ def test_interrupt_guard_covers_finish_and_restores(run, monkeypatch, previous, 
             raise cs.SessionError("synthetic finish failure")
         return 0
     monkeypatch.setattr(cs, "_run_finish", finish)
-    from claude_swap import windows_job
+    from ccswap import windows_job
     def launch(binary, args, env, cwd, run_id, callback):
         callback(54321, {"kind": "windows", "creationTime100ns": "2"})
         run.spawned.append(True)

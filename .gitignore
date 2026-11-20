@@ -17,3 +17,7 @@ docs/superpowers/
 
 # cswap export files: they hold account logins in plain text
 *.cswap
+
+# menu bar page tests
+tests/js/node_modules/
+snapshot_report.html

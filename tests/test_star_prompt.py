@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import star_prompt
-from claude_swap.usage_store import FetchRecord, UsageStore
+from ccswap import star_prompt
+from ccswap.usage_store import FetchRecord, UsageStore
 
 
 class FakeSwitcher:

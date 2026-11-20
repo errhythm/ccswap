@@ -11,31 +11,39 @@ import {
   Toast,
 } from "@raycast/api";
 import { showFailureToast, useCachedPromise } from "@raycast/utils";
-import { Account, label, listAccounts, Provider, resolveBinary, run, switchArgs, UsageWindow } from "./ccswap";
+import {
+  Account,
+  AccountWindow,
+  canBest,
+  label,
+  listAccounts,
+  ProviderData,
+  resolveBinary,
+  run,
+  switchArgs,
+  rowWindows,
+  windowsOf,
+} from "./ccswap";
 
-const TITLES: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
-
-// Mirrors the CLI's post-switch hints, which --json output leaves out.
-const AFTER_SWITCH: Record<Provider, string> = {
-  claude: "Open sessions pick it up within about 30 seconds",
-  codex: "Restart any open Codex session to use it",
-};
-
-function windowTag(name: string, window: UsageWindow | undefined): List.Item.Accessory[] {
-  if (!window) return [];
+function windowTag(window: AccountWindow): List.Item.Accessory {
+  const name = window.label;
   // null: the API reported the window without a utilization figure.
-  if (window.pct === null) return [{ tag: `${name} ?`, tooltip: window.countdown && `Resets in ${window.countdown}` }];
+  if (window.pct === null) return { tag: `${name} ?`, tooltip: window.countdown && `Resets in ${window.countdown}` };
   const pct = Math.round(window.pct);
   const color = pct >= 90 ? Color.Red : pct >= 70 ? Color.Orange : undefined;
-  return [{ tag: { value: `${name} ${pct}%`, color }, tooltip: window.countdown && `Resets in ${window.countdown}` }];
+  return { tag: { value: `${name} ${pct}%`, color }, tooltip: window.countdown && `Resets in ${window.countdown}` };
+}
+
+function windowAccessories(windows: AccountWindow[]): List.Item.Accessory[] {
+  const { shown, rest } = rowWindows(windows);
+  const more = rest.map((w) => `${w.label} ${w.pct === null ? "?" : `${Math.round(w.pct)}%`}`).join("\n");
+  return [...shown.map(windowTag), ...(rest.length ? [{ tag: `+${rest.length}`, tooltip: more }] : [])];
 }
 
 function accessories(account: Account): List.Item.Accessory[] {
-  const usage = account.usage;
   return [
     ...(account.disabled ? [{ tag: "Disabled" }] : []),
-    ...windowTag("5h", usage?.fiveHour),
-    ...windowTag("7d", usage?.sevenDay ?? usage?.weekly),
+    ...windowAccessories(windowsOf(account)),
     ...(account.active ? [{ icon: { source: Icon.CheckCircle, tintColor: Color.Green }, tooltip: "Active" }] : []),
   ];
 }
@@ -44,20 +52,24 @@ export default function Command() {
   const bin = resolveBinary(getPreferenceValues<Preferences>().ccswapPath || undefined);
   const { data, error, isLoading, revalidate } = useCachedPromise(listAccounts, [bin ?? ""], { execute: !!bin });
 
-  async function switchTo(provider: Provider, number?: number) {
+  async function switchTo(provider: ProviderData, number?: number) {
     const toast = await showToast({ style: Toast.Style.Animated, title: "Switching…" });
     try {
-      await run(bin!, switchArgs(provider, number));
+      await run(bin!, switchArgs(provider.id, number));
     } catch (error) {
       await showFailureToast(error, { title: "Switch failed" });
       return;
     }
     // The switch already happened, so a failed lookup only loses the account name.
-    const active = (await listAccounts(bin!).catch(() => undefined))?.[provider].find((a) => a.active);
+    const active = (await listAccounts(bin!).catch(() => undefined))
+      ?.find((p) => p.id === provider.id)
+      ?.accounts.find((a) => a.active);
     revalidate();
     toast.style = Toast.Style.Success;
-    toast.title = `${TITLES[provider]}: ${active ? label(active) : "switched"}`;
-    toast.message = AFTER_SWITCH[provider];
+    toast.title = `${provider.label}: ${active ? label(active) : "switched"}`;
+    toast.message = provider.restartAfterSwitch
+      ? `Restart any open ${provider.label} session to use it`
+      : "Open sessions pick it up within about 30 seconds";
   }
 
   if (!bin) {
@@ -94,17 +106,17 @@ export default function Command() {
     );
   }
 
-  const bestAction = (provider: Provider, shortcut?: Keyboard.Shortcut) => (
+  const bestAction = (provider: ProviderData, shortcut?: Keyboard.Shortcut) => (
     <Action title="Switch to Best Account" icon={Icon.Stars} shortcut={shortcut} onAction={() => switchTo(provider)} />
   );
 
   return (
     <List isLoading={isLoading} searchBarPlaceholder="Search accounts…">
-      {data && !data.claude.length && !data.codex.length && (
+      {data && !data.some((p) => p.accounts.length) && (
         <List.EmptyView
           icon={Icon.PersonCircle}
           title="No Accounts Yet"
-          description="Log in to Claude Code, then run `ccswap add` in a terminal to save the account."
+          description="Log in to a provider, then run `ccswap add` in a terminal to save the account."
           actions={
             <ActionPanel>
               <Action.CopyToClipboard title="Copy Command" content="ccswap add" />
@@ -113,11 +125,24 @@ export default function Command() {
           }
         />
       )}
-      {(["claude", "codex"] as const).map((provider) => (
-        <List.Section key={provider} title={TITLES[provider]}>
-          {(data?.[provider] ?? []).map((account) => (
+      {(data ?? []).map((provider) => (
+        <List.Section key={provider.id} title={provider.label}>
+          {provider.error && (
             <List.Item
-              key={`${provider}-${account.number}`}
+              icon={{ source: Icon.Warning, tintColor: Color.Red }}
+              title="Couldn't load accounts"
+              subtitle={provider.error}
+              actions={
+                <ActionPanel>
+                  <Action.CopyToClipboard title="Copy Error" content={provider.error} />
+                  <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={revalidate} />
+                </ActionPanel>
+              }
+            />
+          )}
+          {provider.accounts.map((account) => (
+            <List.Item
+              key={`${provider.id}-${account.number}`}
               icon={account.active ? Icon.PersonCircle : Icon.Person}
               title={label(account)}
               subtitle={account.alias ? account.email : account.organizationName}
@@ -126,9 +151,9 @@ export default function Command() {
               actions={
                 <ActionPanel>
                   {/* Raycast hides shortcuts on the first two actions, so ⌘B sits third. */}
-                  {account.active ? (
+                  {account.active && canBest(provider) ? (
                     bestAction(provider)
-                  ) : (
+                  ) : account.active ? null : (
                     <Action
                       title="Switch to Account"
                       icon={Icon.Switch}
@@ -136,7 +161,7 @@ export default function Command() {
                     />
                   )}
                   <Action.CopyToClipboard title="Copy Email" content={account.email} />
-                  {!account.active && bestAction(provider, { modifiers: ["cmd"], key: "b" })}
+                  {!account.active && canBest(provider) && bestAction(provider, { modifiers: ["cmd"], key: "b" })}
                   <Action
                     title="Refresh"
                     icon={Icon.ArrowClockwise}

@@ -64,6 +64,33 @@ File-only quota consumers can read [`<backup>/codex/usage-N.json`](codex.md#usag
 - **Codex** windows are `fiveHour` and `weekly`, plus `credits`, `creditAllowance` and `resetCredits` when the account has them. `list` never fetches or touches credentials for Codex: it reads the snapshots that `ccswap codex usage`, `ccswap codex auto` and the dashboard save after each fetch. With none of those running, Codex rows go to `lastGoodUsage` and then `unavailable`. `usageError` carries only the error class (e.g. `CodexUsageError`). API-key logins read `api_key`.
 - **Antigravity** reports every quota bucket under `usage.scoped`, each with `name`, `pct`, `resetsAt` and `window` (`5h` or `weekly`). Weekly buckets carry the pace fields; 5h buckets don't. `list` refreshes Antigravity usage at most once a minute. The older `error` field stays on its rows. The `usage` object changed shape: it used to be the internal form (`resets_at`, `bucket_id`, `group`), and `ccswap agy usage --json` still prints that form.
 
+## Windows on every row
+
+Every account row, on every provider, also carries `windows`: one uniform list of its quota windows, built from the same measurement as `usage` (or, when `usage` is absent, from `lastGoodUsage`). `windowsSource` says which: `"usage"`, `"lastGood"`, or `null` with `windows: []` when there is no reading.
+
+```json
+{"id": "5h", "label": "5h", "pct": 19.0, "resetsAt": "2026-11-18T12:00:00Z",
+ "durationS": 18000, "scope": null}
+```
+
+- `scope` is `null` (account-wide), `{"model": "Fable"}` (Claude per-model weekly) or `{"group": "...", "bucket": "..."}` (an Antigravity bucket). `pct` can be `null`.
+- Ids: `5h`, `7d` (Claude), `weekly` (Codex), `model:<name>`, and `<group>/<bucketId>/5h` or `<group>/<bucketId>/weekly` for Antigravity (groups can share a bucket).
+- Weekly windows add the pace fields (`expectedPct`, `aheadOfPace`, ...) when computable; `countdown`/`clock` follow `resetsAt`.
+- `spend`, `credits` and `creditAllowance` have no fixed period and stay only in `usage`.
+
+## The `providers[]` section
+
+The merged `ccswap list --json` adds `providers`, one entry per provider in display order, next to the unchanged `claude`/`codex`/`agy` sections:
+
+```json
+{"id": "claude", "label": "Claude Code", "schemaVersion": 1,
+ "capabilities": {"switch": true, "strategies": ["best", "next-available", "consume-first"],
+   "disable": true, "autoSwitch": true, "restartAfterSwitch": false, "sessionMode": true},
+ "activeAccountNumber": 1, "accounts": [], "error": null}
+```
+
+`accounts` holds the same rows as that provider's section. **Per-provider errors:** if one provider fails, its top-level key is `null` and its `providers[]` entry has `accounts: []`, `activeAccountNumber: null` and `error` set to the message; the others still list, and the command exits 1 so a script that checks the exit code still sees the failure. If every provider fails, stdout is the error envelope instead, as before. `--provider X --json` is unchanged: the bare section, with no `providers` key.
+
 ## Codex session fields
 
 Codex list account rows carry an additive `session` object. This is preserved both in the bare `ccswap codex list --json` / `ccswap list --provider codex --json` payload and under `codex.accounts` in the merged list. `ccswap codex status --json` adds a `sessions` array of `{ "number": N, "session": ... }` for every saved slot, including slots without a session home. Existing active-account fields keep describing the default login.

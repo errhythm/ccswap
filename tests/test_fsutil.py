@@ -1,4 +1,4 @@
-"""Tests for claude_swap.fsutil filesystem primitives."""
+"""Tests for ccswap.fsutil filesystem primitives."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import fsutil
-from claude_swap.fsutil import (
+from ccswap import fsutil
+from ccswap.fsutil import (
     atomic_write_bytes,
     atomic_write_text,
     can_junction,
@@ -44,7 +44,7 @@ class TestReplaceWithRetry:
 
     @pytest.mark.parametrize("winerror", [5, 32, 33])
     def test_retries_transient_windows_errors(self, tmp_path, monkeypatch, winerror):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
         calls = []
         real_replace = os.replace
 
@@ -54,7 +54,7 @@ class TestReplaceWithRetry:
                 raise self._win_oserror(winerror)
             return real_replace(src, dst)
 
-        monkeypatch.setattr("claude_swap.fsutil.os.replace", flaky)
+        monkeypatch.setattr("ccswap.fsutil.os.replace", flaky)
         src = tmp_path / "tmp.tmp"
         src.write_text("payload")
         dst = tmp_path / "target.json"
@@ -65,38 +65,38 @@ class TestReplaceWithRetry:
         assert dst.read_text() == "payload"
 
     def test_gives_up_and_raises_after_attempts(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
 
         def always_fail(src, dst):
             raise self._win_oserror(5)
 
-        monkeypatch.setattr("claude_swap.fsutil.os.replace", always_fail)
+        monkeypatch.setattr("ccswap.fsutil.os.replace", always_fail)
         with pytest.raises(OSError):
             replace_with_retry(tmp_path / "a", tmp_path / "b", attempts=3)
 
     def test_does_not_retry_real_errors(self, tmp_path, monkeypatch):
         """A genuine failure (e.g. missing source) must surface immediately."""
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
         calls = []
 
         def missing(src, dst):
             calls.append(1)
             raise self._win_oserror(2)  # ERROR_FILE_NOT_FOUND
 
-        monkeypatch.setattr("claude_swap.fsutil.os.replace", missing)
+        monkeypatch.setattr("ccswap.fsutil.os.replace", missing)
         with pytest.raises(OSError):
             replace_with_retry(tmp_path / "a", tmp_path / "b")
         assert len(calls) == 1
 
     def test_posix_never_retries(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "linux")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "linux")
         calls = []
 
         def fail(src, dst):
             calls.append(1)
             raise self._win_oserror(5)
 
-        monkeypatch.setattr("claude_swap.fsutil.os.replace", fail)
+        monkeypatch.setattr("ccswap.fsutil.os.replace", fail)
         with pytest.raises(OSError):
             replace_with_retry(tmp_path / "a", tmp_path / "b")
         assert len(calls) == 1
@@ -123,7 +123,7 @@ class TestReadTextWithRetry:
 
     @pytest.mark.parametrize("winerror", [5, 32, 33])
     def test_retries_transient_windows_errors(self, tmp_path, monkeypatch, winerror):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
         target = tmp_path / "sequence.json"
         target.write_text("payload")
         calls = []
@@ -142,7 +142,7 @@ class TestReadTextWithRetry:
         assert len(calls) == 4
 
     def test_gives_up_and_raises_after_attempts(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
         err = self._win_oserror(32)
 
         def always_fail(self, *a, **kw):
@@ -155,7 +155,7 @@ class TestReadTextWithRetry:
     def test_posix_eacces_surfaces_immediately(self, tmp_path, monkeypatch):
         """A POSIX EACCES is a real, persistent permission problem: raise at
         once rather than stalling ~0.75s on a condition that will not clear."""
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "linux")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "linux")
         calls = []
         err = self._win_oserror(5)
 
@@ -169,7 +169,7 @@ class TestReadTextWithRetry:
         assert len(calls) == 1
 
     def test_does_not_retry_a_non_contention_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
         calls = []
         err = self._win_oserror(2)  # ERROR_FILE_NOT_FOUND
 
@@ -260,7 +260,7 @@ class TestStrictRosterReadBranches:
     def _switcher(self, tmp_path):
         import logging
 
-        from claude_swap.switcher import ClaudeAccountSwitcher
+        from ccswap.switcher import ClaudeAccountSwitcher
 
         s = ClaudeAccountSwitcher.__new__(ClaudeAccountSwitcher)
         s._logger = logging.getLogger("test")
@@ -270,7 +270,7 @@ class TestStrictRosterReadBranches:
         """Without the guard the caller gets AttributeError: 'list' object has
         no attribute 'get' — uncaught by cli.py's `except ClaudeSwitchError`,
         so `--json` emits no envelope at all."""
-        from claude_swap.exceptions import ConfigError
+        from ccswap.exceptions import ConfigError
 
         p = tmp_path / "sequence.json"
         p.write_text("[1, 2, 3]")
@@ -285,7 +285,7 @@ class TestStrictRosterReadBranches:
         """The distinction the strict reader exists for: `None` here would be
         spliced back as "no accounts" and destroy the roster on the next
         write."""
-        from claude_swap.exceptions import ConfigError
+        from ccswap.exceptions import ConfigError
 
         p = tmp_path / "sequence.json"
         p.write_text('{"sequence": [1], "accounts": {"1": {}}}')
@@ -331,7 +331,7 @@ class TestAtomicWrite:
         def refuse(src, dst, **kwargs):
             raise OSError(errno.ENOSPC, "No space left on device")
 
-        monkeypatch.setattr("claude_swap.fsutil.replace_with_retry", refuse)
+        monkeypatch.setattr("ccswap.fsutil.replace_with_retry", refuse)
         with pytest.raises(OSError):
             atomic_write_text(target, "new")
         assert target.read_text(encoding="utf-8") == "old"
@@ -346,7 +346,7 @@ class TestAtomicWrite:
         def interrupt(fd):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr("claude_swap.fsutil.os.fsync", interrupt)
+        monkeypatch.setattr("ccswap.fsutil.os.fsync", interrupt)
         with pytest.raises(KeyboardInterrupt):
             atomic_write_text(target, "new")
         assert target.read_text(encoding="utf-8") == "old"
@@ -356,7 +356,7 @@ class TestAtomicWrite:
     def test_temp_is_private_from_creation(self, tmp_path, monkeypatch):
         """With the mode call neutralised the published mode is the one the
         temp was created with: a write-then-chmod writer shows up as 0644."""
-        monkeypatch.setattr("claude_swap.fsutil.os.fchmod", lambda *a, **k: None)
+        monkeypatch.setattr("ccswap.fsutil.os.fchmod", lambda *a, **k: None)
         old_umask = os.umask(0o022)
         try:
             atomic_write_text(tmp_path / "secret.json", "{}")
@@ -374,7 +374,7 @@ class TestAtomicWrite:
         def refuse(fd, mode):
             raise PermissionError("fchmod denied (injected)")
 
-        monkeypatch.setattr("claude_swap.fsutil.os.fchmod", refuse)
+        monkeypatch.setattr("ccswap.fsutil.os.fchmod", refuse)
         with pytest.raises(PermissionError):
             atomic_write_text(target, "new")
         assert target.read_text(encoding="utf-8") == "old"
@@ -389,14 +389,14 @@ class TestAtomicWrite:
         def unsupported(fd):
             raise OSError(errno.EINVAL, "fsync not supported here")
 
-        monkeypatch.setattr("claude_swap.fsutil.os.fsync", unsupported)
+        monkeypatch.setattr("ccswap.fsutil.os.fsync", unsupported)
         atomic_write_text(target, "new")
         assert target.read_text(encoding="utf-8") == "new"
 
         def broken(fd):
             raise OSError(errno.EIO, "Input/output error")
 
-        monkeypatch.setattr("claude_swap.fsutil.os.fsync", broken)
+        monkeypatch.setattr("ccswap.fsutil.os.fsync", broken)
         with pytest.raises(OSError):
             atomic_write_text(target, "newer")
         assert target.read_text(encoding="utf-8") == "new"
@@ -535,7 +535,7 @@ class TestAtomicWriteSymlinks:
         """On a 3.12 release without ``ALLOW_MISSING`` the resolver runs
         fully strict: a dangling link is refused rather than guessed, while
         an existing target is still written through."""
-        monkeypatch.setattr("claude_swap.fsutil._RESOLVE_STRICT", True)
+        monkeypatch.setattr("ccswap.fsutil._RESOLVE_STRICT", True)
         (tmp_path / "gone").mkdir()
         dangling = tmp_path / "dangling.json"
         dangling.symlink_to(tmp_path / "gone" / "config.json")
@@ -704,7 +704,7 @@ class TestLinkProbes:
         monkeypatch.setattr(fsutil, "_LINK_PROBES", {})
 
     def test_off_windows_both_are_true_without_probing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "linux")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "linux")
         calls = []
         monkeypatch.setattr(fsutil.os, "symlink", lambda *a, **k: calls.append(a))
         assert can_symlink(tmp_path) is True
@@ -714,7 +714,7 @@ class TestLinkProbes:
     def test_a_refused_symlink_reads_as_unavailable_and_leaves_nothing(
         self, tmp_path, monkeypatch
     ):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
 
         def refuse(*_a, **_k):
             e = OSError(22, "A required privilege is not held by the client")
@@ -728,7 +728,7 @@ class TestLinkProbes:
     def test_symlink_probe_runs_once_per_directory(self, tmp_path, monkeypatch):
         if not _host_can_symlink(tmp_path):
             pytest.skip("this host cannot create symlinks")
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
         calls = []
         real = os.symlink
 
@@ -765,7 +765,7 @@ class TestLinkProbes:
         assert list(tmp_path.iterdir()) == []
 
     def test_answers_are_kept_per_kind(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.fsutil.sys.platform", "win32")
+        monkeypatch.setattr("ccswap.fsutil.sys.platform", "win32")
         here = os.path.normcase(str(tmp_path))
         monkeypatch.setattr(
             fsutil, "_LINK_PROBES", {(here, f"junction:{here}"): False}

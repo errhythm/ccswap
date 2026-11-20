@@ -1,10 +1,10 @@
-"""Tests for the directory → account mapping store (claude_swap.mappings)."""
+"""Tests for the directory → account mapping store (ccswap.mappings)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from claude_swap.mappings import MappingStore, normalize_path
+from ccswap.mappings import MappingStore, normalize_path
 
 
 def test_set_then_get_exact(tmp_path: Path):
@@ -167,7 +167,7 @@ def test_persisted_schema(tmp_path: Path):
 
 def test_normalize_path_applies_normcase(monkeypatch, tmp_path: Path):
     """normalize_path runs paths through os.path.normcase (Windows case-fold)."""
-    import claude_swap.mappings as m
+    import ccswap.mappings as m
 
     calls = []
 
@@ -196,7 +196,7 @@ def test_write_interrupted_mid_write_leaves_no_temp(tmp_path: Path, monkeypatch)
     def interrupt(fd):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("claude_swap.fsutil.os.fsync", interrupt)
+    monkeypatch.setattr("ccswap.fsutil.os.fsync", interrupt)
     with pytest.raises(KeyboardInterrupt):
         store._write({})
     assert not list(store.path.parent.glob("*.tmp"))

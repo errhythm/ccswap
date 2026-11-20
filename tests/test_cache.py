@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from claude_swap.cache import MISSING, read_cache, write_cache
+from ccswap.cache import MISSING, read_cache, write_cache
 
 
 class TestReadCache:

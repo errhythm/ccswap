@@ -1,6 +1,6 @@
 # ccswap CLI reference
 
-ccswap (package `claude_swap`) tracks subscription quota across Claude Code and Codex CLI accounts and switches between them. This file has the full command surface, JSON schema, error envelope, and gotchas that SKILL.md's tables leave out.
+ccswap (package `ccswap`) tracks subscription quota across Claude Code and Codex CLI accounts and switches between them. This file has the full command surface, JSON schema, error envelope, and gotchas that SKILL.md's tables leave out.
 
 Nothing here assumes a fixed account count or any local config, an installation can have any number of Claude and Codex accounts configured.
 
@@ -22,7 +22,7 @@ Mutating:
 - `run`
 - `config set`, `config unset`
 - `auto` (polling loop, no `--once`)
-- `codex switch [NUM|EMAIL]`, `codex auto [--once] [--dry-run]`, `codex add`, `codex remove`
+- `codex switch [NUM|EMAIL]`, `codex auto [--once] [--dry-run]`, `codex add`, `codex remove`, `codex disable|enable NUM|EMAIL`
 
 `run`, `auto`, `config`, and `codex` must be the first argv token. `ccswap --debug run 2` is not supported, put flags after the subcommand.
 

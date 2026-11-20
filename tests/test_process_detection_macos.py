@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import process_detection as detection
+from ccswap import process_detection as detection
 
 BOOT = "12345678-1234-1234-1234-123456789abc"
 
