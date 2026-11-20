@@ -10,7 +10,7 @@
 
 > [!TIP]
 > **Beta: 0.54.0b1 is out for testing.** It has a redesigned dashboard, a new macOS menu bar popover, and Claude Code, Codex and Antigravity side by side. Plain installs stay on 0.53.0. To try it:
-> `uv tool install --force --prerelease allow "ccswap[menubar]==0.54.0b1"`
+> `uv tool install --force --prerelease allow "ccswap[menubar]>=0.54.0b1"`
 > [Install guide, screenshots and feedback](https://github.com/errhythm/ccswap/discussions/52)
 
 Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. Save multiple logins, check their quota windows, and manage them from one dashboard. Claude Code and Codex also support automatic switching.
