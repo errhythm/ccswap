@@ -1462,3 +1462,24 @@ async def test_up_next_reads_the_saved_strategy_live(tmp_path, monkeypatch):
         app.screen.query_one(sidebar.Sidebar).update_panels()
         await settle(pilot)
         assert seen[-1] == "consume-first"
+
+
+@pytest.mark.asyncio
+async def test_clicking_the_header_star_stars_ccswap(tmp_path, monkeypatch):
+    from ccswap import star_prompt
+    from ccswap.tui.overview import HeaderBar
+
+    starred = []
+    monkeypatch.setattr(star_prompt, "star", lambda root: starred.append(root) or "starred")
+    app = make_app(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    app._star_setting = True
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot)
+        app._sync_star()
+        await settle(pilot)
+        header = app.screen.query_one(HeaderBar)
+        assert header._star_span is not None
+        await pilot.click(HeaderBar, offset=(1 + header._star_span[0], 0))
+        await settle(pilot)
+        await pilot.pause(0.2)
+        assert starred and app.star_hint == "thanks"

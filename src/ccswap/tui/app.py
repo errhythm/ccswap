@@ -1032,6 +1032,10 @@ class CswapApp(App):
             how = "opened"
         if how == "opened":
             self.call_from_thread(self.notify, self.gettext("Opened GitHub in your browser"), timeout=3)
+        else:  # gh starred it; without this the header's "thanks!" is the only sign
+            self.call_from_thread(
+                self.notify, self.gettext("Starred errhythm/ccswap on GitHub with the gh CLI"), timeout=5
+            )
         self.call_from_thread(self.set_timer, 4.0, lambda: setattr(self, "star_hint", ""))
 
     def action_toggle_mask(self) -> None:

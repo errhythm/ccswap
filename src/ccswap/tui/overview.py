@@ -632,12 +632,14 @@ class HeaderBar(Static):
     allows, "masked", the snapshot-age / long-refresh note and the star hint.
 
     On screens with ``action_view_tab`` (dashboard, Switch, Watch) a click on
-    a tab switches the view for this session; hovering one tints it."""
+    a tab switches the view for this session; hovering one tints it. A click
+    on the star hint stars ccswap, same as ``*``."""
 
     def __init__(self, *, id: str | None = "header", tab: str | None = None) -> None:
         super().__init__(id=id)
         self.tab = tab  # a screen bound to one provider (the auto view) marks it
         self._spans: list[tuple[int, int, str]] = []  # (start, end, tab) last drawn
+        self._star_span: tuple[int, int] | None = None  # the star hint last drawn
         self._hover: str | None = None
 
     def on_mount(self) -> None:
@@ -651,7 +653,11 @@ class HeaderBar(Static):
 
     def _tab_at(self, event) -> str | None:
         offset = event.get_content_offset(self)
-        if offset is None or offset.y != 0 or not self._clickable():
+        if offset is None or offset.y != 0:
+            return None
+        if self._star_span and self._star_span[0] <= offset.x < self._star_span[1]:
+            return "star"
+        if not self._clickable():
             return None
         return next((tab for start, end, tab in self._spans if start <= offset.x < end), None)
 
@@ -668,7 +674,9 @@ class HeaderBar(Static):
 
     def on_click(self, event) -> None:
         tab = self._tab_at(event)
-        if tab is not None and tab != self.app._view:
+        if tab == "star":
+            self.app.action_star()
+        elif tab is not None and tab != self.app._view:
             order = tabs()
             self.app.step_view(order.index(tab) - order.index(self.app._view))
 
@@ -700,24 +708,29 @@ class HeaderBar(Static):
                 break
         self._spans = spans
         room = width - text.cell_len - 2
-        for right in self._right_variants(palette):
+        self._star_span = None
+        for right, star_len in self._right_variants(palette):
             if right.cell_len <= room:
                 if right:
                     text.append(" " * (width - text.cell_len - right.cell_len))
                     text.append(right)
+                if star_len and app.star_hint == "prompt":
+                    self._star_span = (text.cell_len - star_len, text.cell_len)
                 break
         return _fit(text, width)
 
-    def _right_variants(self, palette: Palette) -> list[Text]:
+    def _right_variants(self, palette: Palette) -> list[tuple[Text, int]]:
         """The right side from fullest to emptiest; render takes the first that fits.
-        Order of dropping: the long star wording, "masked", the star, the status."""
+        Order of dropping: the long star wording, "masked", the star, the status.
+        Each comes with the star's width at its end (0 without one), for clicks."""
         app: "CswapApp" = self.app  # type: ignore[assignment]
         status = Text(app.refresh_status, style=palette.sev_warn) if app.refresh_status else None
         masked = Text("masked", style=palette.muted) if app.mask_accounts else None
         long_star = short_star = None
         if app.star_hint == "prompt":
-            long_star = Text.assemble(("★ ", palette.sev_warn), ("star on GitHub ", palette.muted), ("*", f"bold {palette.accent}"))
-            short_star = Text.assemble(("★ ", palette.sev_warn), ("*", f"bold {palette.accent}"))
+            hover = f" on {palette.cursor}" if self._hover == "star" else ""
+            long_star = Text.assemble(("★ ", palette.sev_warn + hover), ("star on GitHub ", palette.muted + hover), ("*", f"bold {palette.accent}{hover}"))
+            short_star = Text.assemble(("★ ", palette.sev_warn + hover), ("*", f"bold {palette.accent}{hover}"))
         elif app.star_hint == "thanks":
             long_star = short_star = Text.assemble(("★ ", palette.sev_warn), ("thanks!", palette.sev_ok))
         sep = Text(" · ", style=palette.dim)
@@ -728,7 +741,11 @@ class HeaderBar(Static):
             [status],
             [],
         ]
-        return [sep.join(p for p in parts if p) for parts in variants]
+        out = []
+        for parts in variants:
+            star = parts[-1] if parts and parts[-1] is not None and any(parts[-1] is s for s in (long_star, short_star)) else None
+            out.append((sep.join(p for p in parts if p), star.cell_len if star else 0))
+        return out
 
 
 class ProviderPanel(Static):
