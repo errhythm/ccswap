@@ -106,6 +106,20 @@ def test_cli_asks_once_on_a_terminal(tmp_path, sends, monkeypatch, answer, enabl
     assert load_telemetry_settings(tmp_path).enabled is enabled
 
 
+def test_no_question_while_a_legacy_migration_is_pending(tmp_path, sends, monkeypatch):
+    from ccswap import paths
+
+    legacy = tmp_path / "legacy"
+    root = tmp_path / "xdg"
+    monkeypatch.setattr(paths, "get_legacy_backup_root", lambda: legacy)
+    legacy.mkdir()
+    (legacy / "sequence.json").write_text("{}")
+    assert not telemetry.should_ask(root)  # answering would block the migration
+    assert not root.exists()
+    paths.migrate_legacy_backup_dir(root)
+    assert telemetry.should_ask(root)
+
+
 def test_cli_never_asks_without_a_terminal(tmp_path, sends, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked"))
     telemetry.ask_in_terminal(tmp_path, ["list"])  # pytest captures stdio: not a tty

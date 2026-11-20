@@ -63,9 +63,16 @@ def blocked() -> bool:
 
 def should_ask(backup_root: Path) -> bool:
     """Ask once: only while sending is possible and the user never chose."""
+    from ccswap.paths import get_legacy_backup_root
     from ccswap.settings import _read_raw, settings_path
 
     if blocked():
+        return False
+    legacy = get_legacy_backup_root()
+    if legacy.exists() and legacy.resolve() != Path(backup_root).resolve():
+        # Saving the answer would create settings.json in the new root, which
+        # makes migrate_legacy_backup_dir refuse to move the legacy one. Ask
+        # on a later run, after the switcher has migrated.
         return False
     section = _read_raw(settings_path(backup_root)).get("telemetry")
     return not (isinstance(section, dict) and "enabled" in section)
