@@ -223,6 +223,41 @@ class CswapApp(App):
         self.set_interval(self.POLL_INTERVAL_S, self._tick)
         self.set_interval(1.0, self._update_refresh_status)
         self._tick()
+        self._maybe_ask_telemetry()
+
+    def _maybe_ask_telemetry(self) -> None:
+        """Ask once whether to send anonymous usage stats; any answer is saved."""
+        from ccswap.telemetry import should_ask
+
+        root = self.switcher_for("claude").backup_dir
+        try:
+            if not should_ask(root):
+                return
+        except Exception:
+            return
+
+        def answered(yes: bool | None) -> None:
+            try:
+                set_setting(root, "telemetry.enabled", "on" if yes else "off")
+            except Exception as exc:
+                self.notify(
+                    self.gettext("Could not save the usage stats setting: {exc}").format(exc=exc),
+                    severity="warning",
+                )
+
+        self.push_screen(
+            ConfirmModal(
+                self.gettext(
+                    "Help improve ccswap by sending anonymous usage stats? Each one holds "
+                    "the command name, ccswap version and OS. Never emails, account names, "
+                    "tokens or paths. Change it any time with "
+                    "`ccswap config set telemetry.enabled on|off`."
+                ),
+                title=self.gettext("Anonymous usage stats"),
+                yes_label=self.gettext("Share"),
+            ),
+            answered,
+        )
 
     # -- snapshot poll loop ---------------------------------------------------
 

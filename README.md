@@ -91,6 +91,7 @@ Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-wi
 - [Configuration, backup and sharing](https://github.com/errhythm/ccswap/blob/main/docs/configuration.md)
 - [JSON output for scripting](https://github.com/errhythm/ccswap/blob/main/docs/json.md)
 - [How it works](https://github.com/errhythm/ccswap/blob/main/docs/how-it-works.md): restarts, credential handling, where data is stored
+- [Privacy and usage stats](docs/privacy.md): what the opt-in usage stats send, and how to turn them off
 
 ## Agent skill
 

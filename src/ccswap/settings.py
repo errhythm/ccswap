@@ -154,6 +154,14 @@ class UpdateSettings:
 
 
 @dataclass(frozen=True)
+class TelemetrySettings:
+    """Anonymous usage stats (``telemetry`` section). Off until the user opts in;
+    see ``ccswap.telemetry`` for what an event holds."""
+
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
 class UsageSettings:
     """Usage collection preferences (``usage`` section).
 
@@ -212,6 +220,7 @@ _SECTION_DEFAULT_SOURCES = {
     "updates": UpdateSettings,
     "usage": UsageSettings,
     "menubar": MenuBarConfig,
+    "telemetry": TelemetrySettings,
 }
 
 
@@ -385,6 +394,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "updates", "check", "check", "bool",
             help="Check PyPI once a day and print a hint when a newer release exists",
+        ),
+        SettingSpec(
+            "telemetry", "enabled", "enabled", "bool",
+            help="Send anonymous usage stats (command name, version, OS); never emails, tokens or paths",
         ),
         SettingSpec(
             "usage", "headerProbe", "header_probe", "bool",
@@ -1084,6 +1097,13 @@ def load_update_settings(backup_root: Path) -> UpdateSettings:
     return UpdateSettings(check=check)
 
 
+def load_telemetry_settings(backup_root: Path) -> TelemetrySettings:
+    """Load the telemetry section; anything but an explicit true is off."""
+    section = _read_raw(settings_path(backup_root)).get("telemetry")
+    enabled = section.get("enabled") if isinstance(section, dict) else None
+    return TelemetrySettings(enabled=enabled is True)
+
+
 def load_usage_settings(backup_root: Path) -> UsageSettings:
     """Load the usage section; missing/corrupt file → defaults, and a
     non-bool value → that key's default."""
@@ -1313,6 +1333,7 @@ def effective_settings(
         "updates": load_update_settings(backup_root),
         "usage": load_usage_settings(backup_root),
         "menubar": load_menubar_settings(backup_root),
+        "telemetry": load_telemetry_settings(backup_root),
     }
     rows = []
     for spec in SETTING_SPECS.values():

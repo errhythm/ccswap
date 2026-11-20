@@ -24,6 +24,7 @@ from ccswap.settings import (
     RunSettings,
     UiSettings,
     UnrecognizedKey,
+    TelemetrySettings,
     UpdateSettings,
     UsageSettings,
     effective_settings,
@@ -404,6 +405,7 @@ class TestSettingSpecs:
             "updates": UpdateSettings(),
             "usage": UsageSettings(),
             "menubar": MenuBarConfig(),
+            "telemetry": TelemetrySettings(),
         }
         for spec in SETTING_SPECS.values():
             assert spec.default == getattr(sources[spec.section], spec.field)

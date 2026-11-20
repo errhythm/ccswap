@@ -491,6 +491,7 @@ def _isolate_real_home(request, tmp_path_factory, monkeypatch):
     backup paths — and on macOS that leads back to the real Keychain. Tests that
     exercise those vars set them explicitly, overriding this.
     """
+    monkeypatch.setenv("CCSWAP_TELEMETRY", "0")  # no test may send usage stats
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
