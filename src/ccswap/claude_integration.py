@@ -34,6 +34,7 @@ from ccswap.settings import (
     SETTINGS_SCHEMA_VERSION,
     _read_raw_for_write,
     atomic_write_json,
+    settings_lock,
     settings_path,
 )
 
@@ -141,32 +142,32 @@ def _saved_previous(raw: dict, slot: str) -> dict | None:
     return entry if isinstance(entry, dict) and "value" in entry else None
 
 
-def _update_ccswap_section(
-    backup_root: Path, raw: dict, slot: str, entry: dict | None
-) -> None:
-    """Save ``entry`` for ``slot`` (``None`` clears it) and write ``raw``."""
-    section = raw.get(_SECTION)
-    if not isinstance(section, dict):
-        section = {}
-    saved = section.get(_PREVIOUS_KEY)
-    if not isinstance(saved, dict):
-        saved = {}
-    if entry is None:
-        if slot not in saved:
-            return
-        del saved[slot]
-    else:
-        saved[slot] = entry
-    if saved:
-        section[_PREVIOUS_KEY] = saved
-    else:
-        section.pop(_PREVIOUS_KEY, None)
-    if section:
-        raw[_SECTION] = section
-    else:
-        raw.pop(_SECTION, None)
-    raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
-    atomic_write_json(settings_path(backup_root), raw)
+def _update_ccswap_section(backup_root: Path, slot: str, entry: dict | None) -> None:
+    """Save ``entry`` for ``slot`` (``None`` clears it), re-reading settings.json under its lock."""
+    with settings_lock(backup_root):
+        raw = _read_raw_for_write(settings_path(backup_root))
+        section = raw.get(_SECTION)
+        if not isinstance(section, dict):
+            section = {}
+        saved = section.get(_PREVIOUS_KEY)
+        if not isinstance(saved, dict):
+            saved = {}
+        if entry is None:
+            if slot not in saved:
+                return
+            del saved[slot]
+        else:
+            saved[slot] = entry
+        if saved:
+            section[_PREVIOUS_KEY] = saved
+        else:
+            section.pop(_PREVIOUS_KEY, None)
+        if section:
+            raw[_SECTION] = section
+        else:
+            raw.pop(_SECTION, None)
+        raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
+        atomic_write_json(settings_path(backup_root), raw)
 
 
 def statusline_installed() -> bool:
@@ -183,12 +184,11 @@ def install_statusline(backup_root: Path) -> str:
     data, text = _read_claude_settings(path)
     if _is_ours(data.get("statusLine")):
         return "Claude statusline is already on"
-    raw = _read_raw_for_write(settings_path(backup_root))
     # Save first: if the Claude write then fails, a stale saved value is
     # harmless (the next install overwrites it); the reverse order could lose
     # the user's statusline.
     entry = {"value": data["statusLine"]} if "statusLine" in data else None
-    _update_ccswap_section(backup_root, raw, _slot(path), entry)
+    _update_ccswap_section(backup_root, _slot(path), entry)
     data["statusLine"] = {"type": "command", "command": STATUSLINE_COMMAND}
     _write_claude_settings(path, data, text)
     return f"Claude statusline on ({path})"
@@ -209,7 +209,7 @@ def uninstall_statusline(backup_root: Path) -> str:
     else:
         data["statusLine"] = previous["value"]
     _write_claude_settings(path, data, text)
-    _update_ccswap_section(backup_root, raw, slot, None)
+    _update_ccswap_section(backup_root, slot, None)
     if previous is None:
         return "Claude statusline off"
     return "Claude statusline off (previous statusline restored)"

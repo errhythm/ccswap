@@ -932,3 +932,22 @@ def test_legacy_ui_language_key_is_ignored(tmp_path: Path, caplog):
     with caplog.at_level(logging.WARNING):
         assert load_ui_settings(tmp_path) == UiSettings(theme="light")
     assert not caplog.records
+
+
+def test_set_setting_waits_for_the_lock_and_keeps_the_other_writers_change(tmp_path):
+    import threading
+
+    from ccswap.settings import set_setting, settings_lock, settings_path
+
+    lock = settings_lock(tmp_path)
+    assert lock.acquire()
+    writer = threading.Thread(target=set_setting, args=(tmp_path, "ui.theme", "light"))
+    writer.start()
+    writer.join(0.3)
+    assert writer.is_alive()  # blocked behind the held lock
+    # The lock holder's own write, which a stale read-modify-write would drop.
+    settings_path(tmp_path).write_text(json.dumps({"autoswitch": {"threshold": 80}}))
+    lock.release()
+    writer.join(5)
+    raw = json.loads(settings_path(tmp_path).read_text())
+    assert raw["autoswitch"]["threshold"] == 80 and raw["ui"]["theme"] == "light"

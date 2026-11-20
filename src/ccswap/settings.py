@@ -29,6 +29,7 @@ from pathlib import Path
 
 from ccswap.exceptions import ConfigError
 from ccswap.fsutil import atomic_write_text, publish_target
+from ccswap.locking import FileLock
 
 SETTINGS_SCHEMA_VERSION = 1
 SETTINGS_FILENAME = "settings.json"
@@ -501,6 +502,13 @@ class UnrecognizedKey:
             f"{self.dotted!r} is not a key this version reads, "
             f"so it has no effect{hint}"
         )
+
+
+def settings_lock(backup_root: Path) -> FileLock:
+    """Held around every read-modify-write of settings.json, so two writers
+    (the CLI, the TUI, the menu bar) can't drop each other's change. Not
+    reentrant: take it once per write."""
+    return FileLock(Path(backup_root) / ".settings.lock")
 
 
 def settings_path(backup_root: Path) -> Path:
@@ -1002,15 +1010,16 @@ def save_menubar_settings(backup_root: Path, config: MenuBarConfig) -> None:
     (the reason ``set_setting`` writes one key at a time).
     """
     path = settings_path(backup_root)
-    raw = _read_raw_for_write(path)
-    raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
     default = MenuBarConfig()
-    raw["menubar"] = {
-        spec.json_key: getattr(config, spec.field)
-        for spec in SETTING_SPECS.values()
-        if spec.section == "menubar" and getattr(config, spec.field) != getattr(default, spec.field)
-    }
-    atomic_write_json(path, raw)
+    with settings_lock(backup_root):
+        raw = _read_raw_for_write(path)
+        raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
+        raw["menubar"] = {
+            spec.json_key: getattr(config, spec.field)
+            for spec in SETTING_SPECS.values()
+            if spec.section == "menubar" and getattr(config, spec.field) != getattr(default, spec.field)
+        }
+        atomic_write_json(path, raw)
 
 
 def load_credential_settings(backup_root: Path) -> CredentialSettings:
@@ -1108,15 +1117,16 @@ def load_usage_settings(backup_root: Path) -> UsageSettings:
 def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
     """Write the autoswitch section, preserving unknown keys and sections."""
     path = settings_path(backup_root)
-    raw = _read_raw(path)
-    raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
-    section = raw.get("autoswitch")
-    if not isinstance(section, dict):
-        section = {}
-    for field, json_key in _AUTOSWITCH_KEYS.items():
-        section[json_key] = getattr(settings, field)
-    raw["autoswitch"] = section
-    atomic_write_json(path, raw)
+    with settings_lock(backup_root):
+        raw = _read_raw(path)
+        raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
+        section = raw.get("autoswitch")
+        if not isinstance(section, dict):
+            section = {}
+        for field, json_key in _AUTOSWITCH_KEYS.items():
+            section[json_key] = getattr(settings, field)
+        raw["autoswitch"] = section
+        atomic_write_json(path, raw)
 
 
 def setting_spec(dotted_key: str) -> SettingSpec:
@@ -1246,18 +1256,19 @@ def set_setting(backup_root: Path, dotted_key: str, raw_value: str):
         set_enabled(backup_root, dotted_key, value)
         return value
     path = settings_path(backup_root)
-    raw = _read_raw_for_write(path)
-    if spec.section == "menubar" and not isinstance(raw.get("menubar"), dict):
+    if spec.section == "menubar" and not isinstance(_read_raw_for_write(path).get("menubar"), dict):
         # Creating the section would skip the one-time import for good.
+        # Outside the lock: the import writes through save_menubar_settings.
         _import_legacy_menubar(backup_root)
+    with settings_lock(backup_root):
         raw = _read_raw_for_write(path)
-    raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
-    section = raw.get(spec.section)
-    if not isinstance(section, dict):
-        section = {}
-    section[spec.json_key] = value
-    raw[spec.section] = section
-    atomic_write_json(path, raw)
+        raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
+        section = raw.get(spec.section)
+        if not isinstance(section, dict):
+            section = {}
+        section[spec.json_key] = value
+        raw[spec.section] = section
+        atomic_write_json(path, raw)
     return value
 
 
@@ -1265,17 +1276,18 @@ def unset_setting(backup_root: Path, dotted_key: str) -> bool:
     """Remove one key from settings.json; False if it wasn't set (no write)."""
     spec = setting_spec(dotted_key)
     path = settings_path(backup_root)
-    raw = _read_raw_for_write(path)
-    section = raw.get(spec.section)
-    if not isinstance(section, dict) or spec.json_key not in section:
-        return False
-    raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
-    del section[spec.json_key]
-    # An empty menubar section stays: its absence means "import the old
-    # menubar_settings.json", which would bring back values just cleared.
-    if not section and spec.section != "menubar":
-        del raw[spec.section]
-    atomic_write_json(path, raw)
+    with settings_lock(backup_root):
+        raw = _read_raw_for_write(path)
+        section = raw.get(spec.section)
+        if not isinstance(section, dict) or spec.json_key not in section:
+            return False
+        raw["schemaVersion"] = raw.get("schemaVersion", SETTINGS_SCHEMA_VERSION)
+        del section[spec.json_key]
+        # An empty menubar section stays: its absence means "import the old
+        # menubar_settings.json", which would bring back values just cleared.
+        if not section and spec.section != "menubar":
+            del raw[spec.section]
+        atomic_write_json(path, raw)
     return True
 
 

@@ -93,10 +93,19 @@ export function errorMessage(stdout: string, stderr: string): string | undefined
   return stderr.trim() || undefined;
 }
 
-export function run(bin: string, args: string[]): Promise<string> {
+// `list --json` exits 1 when one provider fails but still prints the others.
+export function partialList(stdout: string): boolean {
+  try {
+    return Array.isArray((JSON.parse(stdout) as { providers?: unknown }).providers);
+  } catch {
+    return false;
+  }
+}
+
+export function run(bin: string, args: string[], usable?: (stdout: string) => boolean): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(bin, args, { timeout: 30_000 }, (error, stdout, stderr) => {
-      if (error) reject(new Error(errorMessage(stdout, stderr) ?? error.message));
+      if (error && !usable?.(stdout)) reject(new Error(errorMessage(stdout, stderr) ?? error.message));
       else resolve(stdout);
     });
     // A CLI prompt gets EOF and fails instead of hanging the command.
@@ -105,7 +114,7 @@ export function run(bin: string, args: string[]): Promise<string> {
 }
 
 export function listAccounts(bin: string): Promise<ProviderData[]> {
-  return run(bin, ["list", "--json"]).then(parseList);
+  return run(bin, ["list", "--json"], partialList).then(parseList);
 }
 
 export function canBest(provider: Pick<ProviderData, "strategies">): boolean {

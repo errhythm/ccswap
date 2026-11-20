@@ -4,6 +4,7 @@ import {
   canBest,
   errorMessage,
   parseList,
+  partialList,
   rowWindows,
   switchArgs,
   windowsOf,
@@ -186,4 +187,10 @@ test("rowWindows keeps 5h and weekly on the row and moves the rest to a tooltip"
     ["Pro · weekly", "Flash · weekly"],
   );
   assert.equal(agy.rest.length, 2);
+});
+
+test("partialList keeps a merged list whose CLI exit reports one failed provider", () => {
+  assert.equal(partialList(JSON.stringify({ claude: null, providers: [{ id: "claude", error: "boom" }] })), true);
+  assert.equal(partialList(JSON.stringify({ schemaVersion: 1, error: { message: "boom" } })), false);
+  assert.equal(partialList("not json"), false);
 });

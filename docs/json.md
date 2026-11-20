@@ -89,7 +89,7 @@ The merged `ccswap list --json` adds `providers`, one entry per provider in disp
  "activeAccountNumber": 1, "accounts": [], "error": null}
 ```
 
-`accounts` holds the same rows as that provider's section. **Per-provider errors:** if one provider fails, its top-level key is `null` and its `providers[]` entry has `accounts: []`, `activeAccountNumber: null` and `error` set to the message; the others still list and the command exits 0. If every provider fails the command fails as before. `--provider X --json` is unchanged: the bare section, with no `providers` key.
+`accounts` holds the same rows as that provider's section. **Per-provider errors:** if one provider fails, its top-level key is `null` and its `providers[]` entry has `accounts: []`, `activeAccountNumber: null` and `error` set to the message; the others still list, and the command exits 1 so a script that checks the exit code still sees the failure. If every provider fails, stdout is the error envelope instead, as before. `--provider X --json` is unchanged: the bare section, with no `providers` key.
 
 ## Codex session fields
 

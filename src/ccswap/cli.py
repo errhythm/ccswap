@@ -2289,6 +2289,9 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
 
     if args.json and payload is not None:
         print(json.dumps(payload, indent=2))
+        # A partial merged list still prints, but a failed provider fails the exit code.
+        if args.list and any(p.get("error") for p in payload.get("providers") or ()):
+            sys.exit(1)
 
     if (
         switched_from is not None

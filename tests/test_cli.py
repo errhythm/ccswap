@@ -1292,7 +1292,9 @@ class TestJsonOutputCli:
              patch("ccswap.update_check.check_for_update", return_value=None):
             claude_cls.return_value.list_accounts.return_value = claude_payload
             codex_cls.return_value.list_payload.side_effect = RuntimeError("codex broke")
-            cli.main()  # exit 0: claude and agy still listed
+            with pytest.raises(SystemExit) as raised:
+                cli.main()  # claude and agy still listed, but the exit code reports codex
+            assert raised.value.code == 1
 
         out = json.loads(capsys.readouterr().out)
         assert out["codex"] is None and out["claude"] == claude_payload
