@@ -1950,6 +1950,13 @@ class AutoSwitchEngine:
         per snapshot by `_left_account_recovered` and shared with the
         leaves-nothing retry in `_rank` so the two cannot disagree.
 
+        ONE EXCEPTION LIVES IN `_rank_candidates`, not here. In consume-first,
+        once every account is past the threshold, a weekly pair whose quota
+        resets sooner than the active's may be returned to on a proactive or
+        consume-first leg. Reset order does not move with burn, so the leg back
+        to the later reset never qualifies and there is no flap to bar. An
+        account we left that resets LATER stays barred.
+
         THE LEAVES-NOTHING RELEASE IS NOT HERE. It used to be, and it was
         rewritten twice for the same reason both times: this function cannot
         see the gates that decide. `lastSwitchFrom` is rewritten only by a
