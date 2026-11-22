@@ -2388,8 +2388,6 @@ class AutoSwitchEngine:
             any_known = True          # it EXISTS and is readable either way
             if h <= 0:
                 continue  # itself at its limit — never a target
-            if num == no_return:
-                continue  # the account we just left; see _no_return_account
             reset_ts = (
                 _seven_day_reset_ts(usage.get(num), now) if consume_first else None
             )
@@ -2401,6 +2399,32 @@ class AutoSwitchEngine:
                 if all_above
                 else 0.0
             )
+            # The weekly-pair axis (see the all-above block below). False
+            # unless `active_weekly`, so outside consume-first with every
+            # account past the threshold this is inert.
+            weekly_pair = (
+                active_weekly
+                and recovery_ts != float("inf")
+                and _reset_hour(recovery_ts) != _reset_hour(active_recovery_ts)
+                and _binding_is_weekly(
+                    usage.get(num), self._models, self._windows,
+                    self._active_gates(),
+                )
+            )
+            if num == no_return and not (
+                weekly_pair
+                and trigger in ("proactive", "consume-first")
+                and recovery_ts < active_recovery_ts
+            ):
+                # The account we just left; see _no_return_account. Except a
+                # weekly pair whose quota expires first: reset ORDER decides
+                # that pair in both directions and does not move with burn, so
+                # the leg back to the later reset can never qualify and the
+                # bar has no flap to stop. Barred, the engine left a sooner
+                # account at the threshold for a below-threshold peer, watched
+                # the peer cross the threshold too, and then burned the
+                # later-resetting peer while the sooner quota reset unused.
+                continue
             if trigger in ("proactive", "consume-first"):
                 # Landing must be healthy: an account at/over the threshold
                 # would re-trigger on the very next tick. At-limit and failover
@@ -2441,17 +2465,8 @@ class AutoSwitchEngine:
                     # the headroom ratio, which held a 33h account until it was
                     # spent while a 4.5h peer's quota reset unused, and pulled
                     # the engine back off the sooner account whenever the later
-                    # one had twice its headroom.
-                    weekly_pair = (
-                        active_weekly
-                        and recovery_ts != float("inf")
-                        and _reset_hour(recovery_ts)
-                        != _reset_hour(active_recovery_ts)
-                        and _binding_is_weekly(
-                            usage.get(num), self._models, self._windows,
-                            self._active_gates(),
-                        )
-                    )
+                    # one had twice its headroom. `weekly_pair` is computed
+                    # above the no-return bar, which reads it too.
                     if weekly_pair and recovery_ts > active_recovery_ts:
                         continue
                     if weekly_pair and h >= SPENT_HEADROOM_PCT:
