@@ -54,6 +54,20 @@ def test_off_until_opted_in_then_one_clean_event_per_hour(tmp_path, sends):
     assert len(commands) == 2 and commands[1]["distinct_id"] == commands[0]["distinct_id"]
 
 
+def test_a_command_running_alongside_another_sends_nothing(tmp_path, sends):
+    """The lock spans read, due check and write, so a second command started
+    together skips instead of sending the same events again."""
+    from ccswap.locking import FileLock
+
+    set_setting(tmp_path, "telemetry.enabled", "on")
+    state = tmp_path / "cache" / telemetry.STATE_NAME
+    with FileLock(state.with_name(".telemetry.lock")):
+        telemetry.track_command(tmp_path, ["switch", "2"])
+    assert sends == [] and not state.exists()
+    telemetry.track_command(tmp_path, ["switch", "2"])
+    assert [s["event"] for s in sends] == ["command", "daily"]
+
+
 def test_daily_counts_switches_since_last_and_groups_accounts(tmp_path, sends, monkeypatch):
     import time
     from datetime import datetime

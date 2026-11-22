@@ -469,7 +469,7 @@
         () => post({ action: "toggleAuto", provider: p.id, enabled: !p.autoSwitch.enabled })))),
       (() => {
         const out = h("span", { class: "muted", text: `${round(s.threshold)}%` });
-        const rng = h("input", { type: "range", min: 1, max: 100, value: round(s.threshold) });
+        const rng = h("input", { type: "range", min: 50, max: 99, value: round(s.threshold) });
         rng.addEventListener("input", () => { out.textContent = `${rng.value}%`; });
         rng.addEventListener("change", () => post({ action: "setThreshold", value: Number(rng.value) }));
         return setRow("Switch at", null, h("div", { class: "row" }, rng, out));

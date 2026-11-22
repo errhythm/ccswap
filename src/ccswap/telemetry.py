@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path
 
 from ccswap.fsutil import atomic_write_text
+from ccswap.locking import FileLock
 
 # PostHog project API key. It is write-only and public by design; empty sends nothing.
 POSTHOG_KEY = "phc_pvViPC3zjzQPYfZpXLcr3ZN9D77nhn73CdfJRsPPwZCP"
@@ -198,22 +199,24 @@ def track_command(backup_root: Path, argv: list[str]) -> None:
         if command is None:
             return
         path = Path(backup_root) / "cache" / STATE_NAME
-        state = _read_state(path)
-        sent = state.get("sent") if isinstance(state.get("sent"), dict) else {}
-        install_id = state.get("id") if isinstance(state.get("id"), str) else uuid.uuid4().hex
-        last_daily = float(state.get("daily") or 0)
-        now = time.time()
         bodies = []
-        if now - float(sent.get(command) or 0) >= THROTTLE_S:
-            sent = {**sent, command: now}
-            bodies.append(event(install_id, command, provider))
-        if now - last_daily >= DAY_S:
-            bodies.append(daily_event(install_id, backup_root, last_daily or now - DAY_S))
-            last_daily = now
-        if not bodies:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, json.dumps({"id": install_id, "sent": sent, "daily": last_daily}))
+        # Held across read, due check and write so two commands started together
+        # can't both send the same event. Busy for a second: skip, never block.
+        with FileLock(path.with_name(".telemetry.lock"), timeout=1.0):
+            state = _read_state(path)
+            sent = state.get("sent") if isinstance(state.get("sent"), dict) else {}
+            install_id = state.get("id") if isinstance(state.get("id"), str) else uuid.uuid4().hex
+            last_daily = float(state.get("daily") or 0)
+            now = time.time()
+            if now - float(sent.get(command) or 0) >= THROTTLE_S:
+                sent = {**sent, command: now}
+                bodies.append(event(install_id, command, provider))
+            if now - last_daily >= DAY_S:
+                bodies.append(daily_event(install_id, backup_root, last_daily or now - DAY_S))
+                last_daily = now
+            if not bodies:
+                return
+            atomic_write_text(path, json.dumps({"id": install_id, "sent": sent, "daily": last_daily}))
         for body in bodies:
             _spawn(json.dumps(body).encode("utf-8"))
     except Exception as exc:
