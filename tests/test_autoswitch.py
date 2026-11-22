@@ -8193,6 +8193,36 @@ class TestConsumeFirstWhenEveryWeeklyWindowIsPastTheThreshold:
         assert outcome is TickOutcome.SWITCHED
         assert h.active_number() == 2
 
+    def test_moves_to_the_sooner_reset_even_when_it_is_the_account_we_left(
+        self, temp_home
+    ):
+        """The live shape after a proactive leg: the engine left account 2 at
+        the threshold for a below-threshold account 1, then account 1 crossed
+        the threshold too. Account 2 is still the weekly quota that expires
+        first, but the no-return bar refused it because it is the account we
+        just left, and its headroom only fell since, so nothing released the
+        bar. Reset order is fixed, so moving back cannot flap: from 2, the
+        later-resetting account 1 is never a weekly-pair target."""
+        h = self._harness(temp_home, "consume-first")
+
+        def left_2_for_1(st: dict) -> None:
+            # As `_perform` records it: an int from `account_ref`, the
+            # departure headroom, and the departure's binding reset.
+            st["lastSwitchFrom"] = 2
+            st["lastSwitchTo"] = "1"
+            st["leftTrigger"] = "proactive"
+            st["leftHeadroom"] = 7.0
+            st["leftRecoveryAt"] = h.clock.now + 3.75 * 3600
+
+        h.engine._mutate_state(left_2_for_1)
+        # Weekly only, as a Max plan reports it: no five_hour row.
+        outcome = h.tick_with_usage({
+            "1": {"seven_day": {"pct": 91.0, "resets_at": self._at(h, 33)}},
+            "2": {"seven_day": {"pct": 93.0, "resets_at": self._at(h, 3.75)}},
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
     def test_a_per_model_weekly_window_counts_as_weekly(self, temp_home):
         """With ``autoswitch.model`` set, a Fable-bound pair is the same
         trade: the Fable weekly window that resets first is the one to spend."""
