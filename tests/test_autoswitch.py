@@ -8223,6 +8223,29 @@ class TestConsumeFirstWhenEveryWeeklyWindowIsPastTheThreshold:
         assert outcome is TickOutcome.SWITCHED
         assert h.active_number() == 2
 
+    def test_the_account_we_left_stays_barred_when_it_resets_later(
+        self, temp_home
+    ):
+        """The converse: account 2, which we just left, resets AFTER the active
+        account 1, so the sooner-reset exception does not apply and the
+        no-return bar keeps us on 1."""
+        h = self._harness(temp_home, "consume-first")
+
+        def left_2_for_1(st: dict) -> None:
+            st["lastSwitchFrom"] = 2
+            st["lastSwitchTo"] = "1"
+            st["leftTrigger"] = "proactive"
+            st["leftHeadroom"] = 7.0
+            st["leftRecoveryAt"] = h.clock.now + 33 * 3600
+
+        h.engine._mutate_state(left_2_for_1)
+        outcome = h.tick_with_usage({
+            "1": {"seven_day": {"pct": 93.0, "resets_at": self._at(h, 3.75)}},
+            "2": {"seven_day": {"pct": 91.0, "resets_at": self._at(h, 33)}},
+        })
+        assert outcome is not TickOutcome.SWITCHED
+        assert h.active_number() == 1
+
     def test_a_per_model_weekly_window_counts_as_weekly(self, temp_home):
         """With ``autoswitch.model`` set, a Fable-bound pair is the same
         trade: the Fable weekly window that resets first is the one to spend."""
