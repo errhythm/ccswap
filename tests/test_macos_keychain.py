@@ -1,4 +1,4 @@
-"""Unit tests for the macOS ``security``-CLI wrapper (claude_swap.macos_keychain).
+"""Unit tests for the macOS ``security``-CLI wrapper (ccswap.macos_keychain).
 
 These mock ``subprocess.run`` so they exercise the wrapper's argv/stdin shaping,
 hex encoding, and return-code handling without ever invoking the real
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from claude_swap import macos_keychain
+from ccswap import macos_keychain
 
 # Every test here drives the *real* wrapper bodies (mocking subprocess) or runs
 # against a temp keychain on CI, so opt the whole module out of the in-memory
@@ -34,7 +34,7 @@ def _completed(returncode: int, stdout: str = "", stderr: str = ""):
 
 
 def test_get_password_returns_value_on_rc0():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(0, stdout="the-secret\n")
         assert macos_keychain.get_password("svc", "acct") == "the-secret"
         args = run.call_args.args[0]
@@ -43,34 +43,34 @@ def test_get_password_returns_value_on_rc0():
 
 
 def test_get_password_returns_none_only_on_rc44():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(44)
         assert macos_keychain.get_password("svc", "acct") is None
 
 
 def test_get_password_raises_on_other_nonzero():
     # e.g. locked / denied / unavailable — must NOT be masked as "not found".
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(51, stderr="boom")
         with pytest.raises(macos_keychain.KeychainError):
             macos_keychain.get_password("svc", "acct")
 
 
 def test_get_password_bounds_the_read_with_the_default_timeout():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(0, stdout="the-secret\n")
         macos_keychain.get_password("svc", "acct")
         assert run.call_args.kwargs["timeout"] == macos_keychain._TIMEOUT
 
 
 def test_get_password_timeout_argument_replaces_the_default():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(0, stdout="the-secret\n")
         macos_keychain.get_password("svc", "acct", timeout=60.0)
         assert run.call_args.kwargs["timeout"] == 60.0
 
     expired = subprocess.TimeoutExpired(cmd="security", timeout=60)
-    with patch("claude_swap.macos_keychain.subprocess.run", side_effect=expired):
+    with patch("ccswap.macos_keychain.subprocess.run", side_effect=expired):
         with pytest.raises(macos_keychain.KeychainTimeout, match="after 60.0s"):
             macos_keychain.get_password("svc", "acct", timeout=60.0)
 
@@ -81,7 +81,7 @@ def test_get_password_timeout_argument_replaces_the_default():
 
 
 def test_item_exists_true_on_rc0_and_never_requests_secret():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(0)
         assert macos_keychain.item_exists("svc", "acct") is True
         args = run.call_args.args[0]
@@ -91,7 +91,7 @@ def test_item_exists_true_on_rc0_and_never_requests_secret():
 
 def test_item_exists_false_on_rc44_and_errors():
     for rc in (44, 51):
-        with patch("claude_swap.macos_keychain.subprocess.run") as run:
+        with patch("ccswap.macos_keychain.subprocess.run") as run:
             run.return_value = _completed(rc)
             assert macos_keychain.item_exists("svc", "acct") is False
 
@@ -102,7 +102,7 @@ def test_item_exists_false_on_rc44_and_errors():
 
 
 def test_set_password_small_payload_uses_security_i_stdin():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(0)
         macos_keychain.set_password("svc", "acct", "short-secret")
 
@@ -120,7 +120,7 @@ def test_set_password_small_payload_uses_security_i_stdin():
 
 def test_set_password_large_payload_falls_back_to_argv():
     big = "x" * macos_keychain.SECURITY_STDIN_LINE_LIMIT  # hex doubles the length
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(0)
         macos_keychain.set_password("svc", "acct", big)
 
@@ -133,7 +133,7 @@ def test_set_password_large_payload_falls_back_to_argv():
 
 
 def test_set_password_raises_on_nonzero():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(45, stderr="nope")
         with pytest.raises(macos_keychain.KeychainError):
             macos_keychain.set_password("svc", "acct", "secret")
@@ -149,7 +149,7 @@ def test_set_get_roundtrip_hex_is_decodable():
         captured["kwargs"] = kwargs
         return _completed(0)
 
-    with patch("claude_swap.macos_keychain.subprocess.run", side_effect=fake_run):
+    with patch("ccswap.macos_keychain.subprocess.run", side_effect=fake_run):
         macos_keychain.set_password("svc", "acct", secret)
     stdin = captured["kwargs"]["input"]
     hex_token = stdin.split("-X ", 1)[1].strip()
@@ -163,13 +163,13 @@ def test_set_get_roundtrip_hex_is_decodable():
 
 def test_delete_password_rc0_and_rc44_are_success():
     for rc in (0, 44):
-        with patch("claude_swap.macos_keychain.subprocess.run") as run:
+        with patch("ccswap.macos_keychain.subprocess.run") as run:
             run.return_value = _completed(rc)
             macos_keychain.delete_password("svc", "acct")  # no raise
 
 
 def test_delete_password_raises_on_other_nonzero():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(51, stderr="locked")
         with pytest.raises(macos_keychain.KeychainError):
             macos_keychain.delete_password("svc", "acct")
@@ -181,7 +181,7 @@ def test_delete_password_raises_on_other_nonzero():
 
 
 def test_calls_pass_timeout_to_subprocess():
-    with patch("claude_swap.macos_keychain.subprocess.run") as run:
+    with patch("ccswap.macos_keychain.subprocess.run") as run:
         run.return_value = _completed(0, stdout="x\n")
         macos_keychain.get_password("svc", "acct")
         assert run.call_args.kwargs.get("timeout") == macos_keychain._TIMEOUT
@@ -194,7 +194,7 @@ def test_calls_pass_timeout_to_subprocess():
 ])
 def test_timeout_becomes_keychain_error(fn, args):
     timeout = subprocess.TimeoutExpired(cmd="security", timeout=5)
-    with patch("claude_swap.macos_keychain.subprocess.run", side_effect=timeout):
+    with patch("ccswap.macos_keychain.subprocess.run", side_effect=timeout):
         # KeychainTimeout is a KeychainError, so the file-fallback handlers that
         # catch KEYCHAIN_ERRORS keep treating a timeout as "Keychain unusable".
         with pytest.raises(macos_keychain.KeychainTimeout) as raised:
@@ -205,9 +205,9 @@ def test_timeout_becomes_keychain_error(fn, args):
 def test_item_exists_stays_false_on_timeout_and_missing_binary():
     # item_exists must never raise (it feeds cleanup, not the capability cache).
     timeout = subprocess.TimeoutExpired(cmd="security", timeout=5)
-    with patch("claude_swap.macos_keychain.subprocess.run", side_effect=timeout):
+    with patch("ccswap.macos_keychain.subprocess.run", side_effect=timeout):
         assert macos_keychain.item_exists("svc", "acct") is False
-    with patch("claude_swap.macos_keychain.subprocess.run", side_effect=FileNotFoundError):
+    with patch("ccswap.macos_keychain.subprocess.run", side_effect=FileNotFoundError):
         assert macos_keychain.item_exists("svc", "acct") is False
 
 

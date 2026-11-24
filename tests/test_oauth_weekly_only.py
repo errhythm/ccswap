@@ -18,13 +18,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from claude_swap import oauth
-from claude_swap.autoswitch import TickOutcome
-from claude_swap.json_output import usage_to_json
-from claude_swap.menubar import usage_summary
-from claude_swap.switcher import _format_usage_lines
-from claude_swap.tui.widgets import usage_rows
-from claude_swap.usage_store import FetchRecord, UsageStore
+from ccswap import oauth
+from ccswap.autoswitch import TickOutcome
+from ccswap.json_output import usage_to_json
+from ccswap.menubar import usage_summary
+from ccswap.switcher import _format_usage_lines
+from ccswap.tui.overview import account_windows
+from ccswap.usage_store import FetchRecord, UsageStore
 from tests.test_autoswitch import EngineHarness, _usage
 
 _OMITTED = object()
@@ -113,7 +113,7 @@ def test_an_account_without_a_reading_has_no_usage(fetch_outcome, response_kind)
     assert outcome.usage is None
     assert oauth.account_headroom(outcome.usage) is None
     assert usage_summary(outcome.usage) == "usage unavailable"
-    assert usage_rows(outcome.usage, now=0) == []
+    assert account_windows(outcome.usage) == []
 
 
 def test_an_account_without_a_reading_never_becomes_a_switch_target(harness):
@@ -361,8 +361,8 @@ def test_a_window_without_a_utilization_figure_is_unknown_not_absent(
     line = next(l for l in _format_usage_lines(outcome.usage) if l.startswith(f"{label}:"))
     assert line.split()[1] == "?" and "%" not in line
     assert ("resets" in line) is bool(resets_at)
-    row = next(r for r in usage_rows(outcome.usage, now=0) if r[0] == label)
-    assert row[1] is None
+    row = next(w for w in account_windows(outcome.usage) if w.label == label)
+    assert row.pct is None
     exported = usage_to_json(outcome.usage)[_JSON_KEYS[window]]
     assert exported["pct"] is None and exported.get("resetsAt") == resets_at
 

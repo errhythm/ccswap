@@ -11,11 +11,11 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from claude_swap import hub
-from claude_swap.codex_usage import _convert_payload
-from claude_swap.models import AccountSnapshot, AccountsSnapshot
-from claude_swap.oauth import build_usage_result
-from claude_swap.usage_store import STALE_OK_S, UsageEntry
+from ccswap import hub
+from ccswap.codex_usage import _convert_payload
+from ccswap.models import AccountSnapshot, AccountsSnapshot
+from ccswap.oauth import build_usage_result
+from ccswap.usage_store import STALE_OK_S, UsageEntry
 
 CLAUDE_RAW = {
     "five_hour": {"utilization": 42.0, "resets_at": "2026-11-12T15:00:00+00:00"},
@@ -198,3 +198,38 @@ def test_untrustworthy_usage_is_unavailable_not_current(usage_kwargs, error):
         {"claude": AccountsSnapshot("1", (acc,), time.time()), "codex": None},
     )
     assert out["status_code"] == 503 and json.loads(out["body"])["error"] == error
+
+
+class _FakeSwitcher:
+    def __init__(self, snap=None, boom=False):
+        self.snap, self.boom = snap, boom
+
+    def accounts_snapshot(self, fetch=None):
+        if self.boom:
+            raise RuntimeError("down")
+        return self.snap
+
+
+def _fake_registry(monkeypatch, switchers):
+    from ccswap import providers
+
+    specs = {
+        pid: providers.ProviderSpec(pid, pid, providers.Capabilities(), lambda debug=False, s=sw: s)
+        for pid, sw in switchers.items()
+    }
+    monkeypatch.setattr(providers, "PROVIDERS", specs)
+
+
+def test_default_snapshots_covers_servable_providers_and_survives_a_failure(monkeypatch):
+    snap = AccountsSnapshot("1", (_acc("1", "a@x.io", build_usage_result(CLAUDE_RAW)),), time.time())
+    _fake_registry(monkeypatch, {
+        "claude": _FakeSwitcher(snap),
+        "codex": _FakeSwitcher(boom=True),
+        "extra": _FakeSwitcher(snap),
+    })
+    out = hub.default_snapshots()()
+    assert set(out) == {"claude", "codex"}
+    assert out["codex"] is None and out["claude"] is snap
+    # extra has no usage URL, so it is never snapshotted; the failing codex leaves claude served.
+    assert [p for p, _ in hub._hub_accounts(out)] == ["claude"]
+    assert [f["id"] for f in hub.auth_files(out)["files"]] == ["claude-1"]

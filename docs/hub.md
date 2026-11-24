@@ -51,7 +51,7 @@ The hub answers the two routes T3 Code calls under `/v0/management/`:
 
 Because of this, the management key can read usage percentages and reset times and nothing else. No OAuth token leaves ccswap.
 
-T3 Code's reset-credit button for Codex isn't supported. The hub reports no reset credits, and you can still redeem one with `ccswap codex redeem-reset`. Antigravity accounts aren't served yet.
+T3 Code's reset-credit button for Codex isn't supported. The hub reports no reset credits, and you can still redeem one with `ccswap codex redeem-reset`. The hub snapshots every registered provider, but only Claude and Codex are served, because Antigravity has no CLIProxyAPI usage URL.
 
 ## Security
 

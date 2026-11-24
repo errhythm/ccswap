@@ -1,21 +1,31 @@
-# ccswap (Claude Codex Swap)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/ccswap-logo.png" width="112" alt="ccswap logo: two Cs joined into one loop, 30% filled like a loading ring, on a deep green tile">
+</p>
 
-[![CI](https://github.com/errhythm/ccswap/actions/workflows/ci.yml/badge.svg)](https://github.com/errhythm/ccswap/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/ccswap.svg)](https://pypi.org/project/ccswap/)
-[![Python versions](https://img.shields.io/pypi/pyversions/ccswap.svg)](https://pypi.org/project/ccswap/)
-[![Downloads](https://img.shields.io/pypi/dm/ccswap.svg)](https://pypi.org/project/ccswap/)
-[![License](https://img.shields.io/pypi/l/ccswap.svg)](https://github.com/errhythm/ccswap/blob/main/LICENSE)
-[![Raycast Store](https://img.shields.io/badge/Raycast-Store-FF6363?logo=raycast&logoColor=white)](https://www.raycast.com/errhythm/ccswap)
-[![GitHub stars](https://img.shields.io/github/stars/errhythm/ccswap?style=social)](https://github.com/errhythm/ccswap)
+<h1 align="center">ccswap</h1>
 
-> [!TIP]
-> **Beta: 0.54.0b1 is out for testing.** It has a redesigned dashboard, a new macOS menu bar popover, and Claude Code, Codex and Antigravity side by side. Plain installs stay on 0.53.0. To try it:
-> `uv tool install --force --prerelease allow "ccswap[menubar]>=0.54.0b1"`
-> [Install guide, screenshots and feedback](https://github.com/errhythm/ccswap/discussions/52)
+<p align="center">Multi-account and usage manager for Claude Code, Codex and Antigravity.</p>
 
-Multi-account and usage manager for Claude Code, OpenAI Codex and Antigravity. Save multiple logins, check their quota windows, and manage them from one dashboard. Claude Code and Codex also support automatic switching.
+<p align="center">
+  <a href="https://pypi.org/project/ccswap/"><img src="https://img.shields.io/pypi/v/ccswap?label=PyPI&labelColor=173F33&color=4FA67B" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/ccswap/"><img src="https://img.shields.io/pypi/pyversions/ccswap?label=Python&labelColor=173F33&color=4FA67B" alt="Python versions"></a>
+  <a href="https://pypi.org/project/ccswap/"><img src="https://img.shields.io/pypi/dm/ccswap?label=Downloads&labelColor=173F33&color=4FA67B" alt="Monthly downloads"></a>
+  <a href="https://github.com/errhythm/ccswap/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/errhythm/ccswap/ci.yml?branch=main&label=CI&labelColor=173F33&color=4FA67B" alt="CI status"></a>
+  <a href="https://github.com/errhythm/ccswap/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/ccswap?label=License&labelColor=173F33&color=4FA67B" alt="License"></a>
+  <br>
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-4FA67B?label=Runs%20on&labelColor=173F33" alt="Runs on macOS, Linux and Windows">
+  <a href="https://www.raycast.com/errhythm/ccswap"><img src="https://img.shields.io/badge/Raycast-Store-4FA67B?labelColor=173F33&logo=raycast&logoColor=white" alt="Raycast Store"></a>
+</p>
 
-<img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-watch.png" width="760" alt="ccswap watch: live usage bars for every Claude Code and Codex account, with reset times and the active account marked">
+<p align="center">
+  <a href="https://github.com/errhythm/ccswap#quick-start">Install</a> ·
+  <a href="https://github.com/errhythm/ccswap/blob/main/docs/commands.md">Commands</a> ·
+  <a href="https://github.com/errhythm/ccswap/blob/main/docs/auto-switching.md">Auto-switching</a> ·
+  <a href="https://github.com/errhythm/ccswap#raycast-extension">Raycast</a> ·
+  <a href="https://github.com/errhythm/ccswap#documentation">Docs</a>
+</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/tui-dashboard.png" width="760" alt="ccswap dashboard: usage bars for every Claude Code, Codex and Antigravity account, with what auto-switch does next and the recent switches beside them"></p>
 
 ## What it does
 
@@ -81,6 +91,7 @@ Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-wi
 - [Configuration, backup and sharing](https://github.com/errhythm/ccswap/blob/main/docs/configuration.md)
 - [JSON output for scripting](https://github.com/errhythm/ccswap/blob/main/docs/json.md)
 - [How it works](https://github.com/errhythm/ccswap/blob/main/docs/how-it-works.md): restarts, credential handling, where data is stored
+- [Privacy and usage stats](docs/privacy.md): what the opt-in usage stats send, and how to turn them off
 
 ## Agent skill
 
@@ -116,12 +127,14 @@ ccswap purge          # remove all ccswap data, then:
 uv tool uninstall ccswap    # or: pipx uninstall ccswap
 ```
 
+To stay on the 0.x series (before the 1.0 redesign): `uv tool install --force "ccswap<1"` (or `pipx install --force "ccswap<1"`).
+
 From source: `git clone https://github.com/errhythm/ccswap.git && cd ccswap && uv sync && uv run ccswap help`.
 
 ## Requirements
 
 - Python 3.12+
-- Claude Code and/or Codex CLI
+- Claude Code, Codex CLI and/or Antigravity
 - A file-backed login for managed Codex accounts
 
 ## Support
@@ -130,6 +143,8 @@ If ccswap saved you from a rate limit, a ⭐ on [GitHub](https://github.com/errh
 
 ## License and credits
 
-`ccswap` began as a fork of [claude-swap (`cswap`)](https://github.com/realiti4/claude-swap) by Onur Cetinkol, and still carries the original MIT license and credit for that. Since then it's grown into its own project: no more tracking upstream, no `cswap` compatibility, its own package and release line, and adds Codex support. It's MIT-licensed too, so fork it, file issues, send PRs — whatever's useful to you.
+`ccswap` began as a fork of [claude-swap (`cswap`)](https://github.com/realiti4/claude-swap) by Onur Cetinkol, and still carries the original MIT license and credit for that. Since then it's grown into its own project: no more tracking upstream, no `cswap` compatibility, its own package and release line, and Codex and Antigravity support. It's MIT-licensed too, so fork it, file issues, send PRs, whatever's useful to you.
 
-MIT. This fork retains the original project's copyright and license notice; see [LICENSE](https://github.com/errhythm/ccswap/blob/main/LICENSE). Upstream: [realiti4/claude-swap](https://github.com/realiti4/claude-swap).
+[LICENSE](https://github.com/errhythm/ccswap/blob/main/LICENSE) keeps Onur Cetinkol's original copyright notice next to ccswap's.
+
+The Claude, Codex and Antigravity logos in the menu bar belong to Anthropic, OpenAI and Google. ccswap uses them only to show which provider an account belongs to and isn't affiliated with any of them. Sources are in [provider logos](https://github.com/errhythm/ccswap/blob/main/docs/provider-logos.md).

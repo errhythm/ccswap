@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from claude_swap import appearance
+from ccswap import appearance
 
 
 class TestParseOsc11:
@@ -292,6 +292,9 @@ class TestCliShouldProbe:
     def test_run_subcommand_never_probes(self):
         # `run` execs a child that takes over the terminal.
         assert appearance.cli_should_probe(["run", "2"], colors_enabled=True) is False
+        assert appearance.cli_should_probe(["claude", "run", "2"], colors_enabled=True) is False
+        assert appearance.cli_should_probe(["codex", "run", "2"], colors_enabled=True) is False
+        assert appearance.cli_should_probe(["claude", "list"], colors_enabled=True) is True
 
     def test_json_flag_never_probes(self):
         # --json must stay machine-readable; the OSC query can't precede it.

@@ -18,14 +18,14 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import macos_keychain
-from claude_swap.credentials import ActiveCredentials, CLAUDE_CODE_KEYCHAIN_SERVICE
-from claude_swap.exceptions import ConfigError
-from claude_swap.macos_keychain import KeychainError
-from claude_swap.models import Platform
-from claude_swap.paths import get_backup_root, get_credentials_path
-from claude_swap.settings import SETTING_SPECS, set_setting
-from claude_swap.switcher import ClaudeAccountSwitcher
+from ccswap import macos_keychain
+from ccswap.credentials import ActiveCredentials, CLAUDE_CODE_KEYCHAIN_SERVICE
+from ccswap.exceptions import ConfigError
+from ccswap.macos_keychain import KeychainError
+from ccswap.models import Platform
+from ccswap.paths import get_backup_root, get_credentials_path
+from ccswap.settings import SETTING_SPECS, set_setting
+from ccswap.switcher import ClaudeAccountSwitcher
 
 
 ACTIVE_CREDS = json.dumps({
@@ -57,7 +57,7 @@ def locked_keychain(monkeypatch, block_real_keychain):
     lk = _LockedKeychain()
     for name in ("get_password", "set_password", "delete_password"):
         monkeypatch.setattr(macos_keychain, name, lk._fail(name))
-    monkeypatch.setattr("claude_swap.credentials._ACTIVE_READ_RETRY_DELAY", 0)
+    monkeypatch.setattr("ccswap.credentials._ACTIVE_READ_RETRY_DELAY", 0)
     return lk
 
 
@@ -85,7 +85,7 @@ def _write_active_file(text: str = ACTIVE_CREDS) -> Path:
 
 
 def load_credential_settings(root: Path):
-    from claude_swap.settings import load_credential_settings as load
+    from ccswap.settings import load_credential_settings as load
 
     return load(root)
 
@@ -287,7 +287,7 @@ class TestDefaultsUnchanged:
         assert got.degraded is True
 
     def test_auto_backend_still_refuses_capture(self, temp_home: Path, locked_keychain):
-        from claude_swap.exceptions import CredentialReadError
+        from ccswap.exceptions import CredentialReadError
 
         s = _macos_switcher()
         _write_active_file()
@@ -311,7 +311,7 @@ class TestLegacyKeychainMigration:
         """The legacy keyring → security migration reads and writes Keychain
         backups directly, outside CredentialStore's routing. Explicit file mode
         must skip it without marking it done, so it still runs under ``auto``."""
-        from claude_swap.migrations import migrate_macos_keyring_to_security
+        from ccswap.migrations import migrate_macos_keyring_to_security
 
         _use_file_backend()
         s = _macos_switcher()
@@ -329,13 +329,13 @@ class TestLegacyKeychainMigration:
 import sys
 from unittest.mock import patch
 
-from claude_swap import cli
-from claude_swap.credentials import CLAUDE_CODE_MANAGED_KEYCHAIN_SERVICE
+from ccswap import cli
+from ccswap.credentials import CLAUDE_CODE_MANAGED_KEYCHAIN_SERVICE
 
 
 def _config(argv: list[str], capsys) -> tuple[int, str, str]:
     """Run `ccswap config <argv>` as the CLI does; returns (code, out, err)."""
-    with patch("claude_swap.claude_integration.mod_installed", return_value=False), \
+    with patch("ccswap.claude_integration.mod_installed", return_value=False), \
          patch("os.geteuid", return_value=1000, create=True), \
          patch.object(sys, "argv", ["claude-swap", "config", *argv]):
         code = 0
@@ -478,7 +478,7 @@ class TestSwitchGuardRound3:
     ):
         """auto mode with a Keychain-only backup → export → remove → set file →
         import must end with a usable .enc backup that file mode reads."""
-        from claude_swap.transfer import export_accounts, import_accounts
+        from ccswap.transfer import export_accounts, import_accounts
 
         email = "test@example.com"  # mock_claude_config's identity
         acct = macos_keychain.keychain_account_name()
@@ -705,7 +705,7 @@ class TestCaptureWithCustomProfile:
     def test_add_ignores_a_stale_keychain_item(
         self, temp_home: Path, on_macos, block_real_keychain, monkeypatch
     ):
-        from claude_swap.session import keychain_service_name
+        from ccswap.session import keychain_service_name
 
         work = self._work_profile(temp_home, monkeypatch)
         acct = macos_keychain.keychain_account_name()
@@ -733,7 +733,7 @@ class TestSessionModeRefused:
         _seed_accounts(["a@example.com"], with_enc={"a@example.com"})
         _use_file_backend()
         with patch("os.geteuid", return_value=1000, create=True), \
-             patch("claude_swap.session.SessionManager.run") as run:
+             patch("ccswap.session.SessionManager.run") as run:
             with pytest.raises(SystemExit) as exc:
                 cli._run_command(["2"])
         assert exc.value.code == 1
@@ -746,7 +746,7 @@ class TestResidualUsesProfileServiceName:
         self, temp_home: Path, mock_claude_config: Path, block_real_keychain,
         locked_keychain, monkeypatch, capsys,
     ):
-        from claude_swap.session import keychain_service_name
+        from ccswap.session import keychain_service_name
 
         config_dir = str(temp_home / "work-profile")
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", config_dir)

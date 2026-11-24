@@ -8,13 +8,13 @@ Tool preferences live in `settings.json` in the backup root; `ccswap config` rea
 ccswap config                              # list effective settings ("(default)" = not set)
 ccswap config get autoswitch.threshold
 ccswap config set autoswitch.threshold 80  # validated: rejects out-of-range values loudly
-ccswap config set ui.language de            # en/de/el; restart the dashboard
 ccswap config set ui.view codex             # combined (default), claude, or codex
 ccswap config set ui.mask on                # hide emails and org names in the TUI, mod and statusline
 ccswap config set ui.starPrompt off          # stop asking for a GitHub star after a switch
 ccswap config set ui.orgTag on              # [org] tag on every account; auto (default) only where emails repeat; off
 ccswap config set credentials.backend file  # macOS headless/SSH: never use the Keychain
 ccswap config set updates.check off         # stop the daily PyPI check for a newer release
+ccswap config set telemetry.enabled on      # opt in to anonymous usage stats (off by default; see privacy.md)
 ccswap config set run.shareHistory on       # make --share-history the default for ccswap run
 ccswap config set run.autoPick on           # bare ccswap run in an unmapped directory picks the least busy account
 ccswap config set autoswitch.model Fable   # per-model switching (see "auto"); Fable,Opus for several

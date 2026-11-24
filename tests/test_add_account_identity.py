@@ -21,8 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.switcher import ClaudeAccountSwitcher
-from claude_swap.exceptions import ClaudeSwitchError, ConfigError, ValidationError
+from ccswap.switcher import ClaudeAccountSwitcher
+from ccswap.exceptions import ClaudeSwitchError, ConfigError, ValidationError
 
 CREDS = json.dumps({"claudeAiOauth": {
     "accessToken": "sk-ant-oat01-THEIRS", "refreshToken": "rt-theirs",
@@ -55,7 +55,7 @@ def test_add_refuses_a_credential_whose_owner_is_a_different_account(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-other", "email": "other@example.com",
                              "organizationUuid": foreign_org}):
         with pytest.raises((ConfigError, ValidationError)) as e:
@@ -82,7 +82,7 @@ def test_CONTROL_add_accepts_when_the_token_is_the_claimed_account(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": ""}):
         s.add_account(slot=7, assume_yes=True)
@@ -100,7 +100,7 @@ def test_CONTROL_unresolvable_profile_still_registers(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile", return_value=None):
+         patch("ccswap.oauth.fetch_oauth_profile", return_value=None):
         s.add_account(slot=7, assume_yes=True)
 
     data = s._get_sequence_data()
@@ -119,7 +119,7 @@ def test_expired_token_with_no_refresh_token_skips_the_profile_fetch(
         "accessToken": "sk-ant-oat01-EXPIRED", "expiresAt": 1}})  # no refreshToken
 
     with patch.object(s, "_read_capture_credentials", return_value=EXPIRED_NO_REFRESH), \
-         patch("claude_swap.oauth.fetch_oauth_profile") as mock_fetch:
+         patch("ccswap.oauth.fetch_oauth_profile") as mock_fetch:
         s.add_account(slot=7, assume_yes=True)
 
     mock_fetch.assert_not_called()
@@ -138,8 +138,8 @@ def test_CONTROL_expired_credential_whose_refresh_fails_still_registers(
         "expiresAt": 1}})
 
     with patch.object(s, "_read_capture_credentials", return_value=EXPIRED), \
-         patch("claude_swap.oauth.refresh_oauth_credentials", return_value=None), \
-         patch("claude_swap.oauth.fetch_oauth_profile") as mock_fetch:
+         patch("ccswap.oauth.refresh_oauth_credentials", return_value=None), \
+         patch("ccswap.oauth.fetch_oauth_profile") as mock_fetch:
         s.add_account(slot=7, assume_yes=True)
 
     mock_fetch.assert_not_called()
@@ -165,7 +165,7 @@ def test_same_email_different_org_is_still_a_mismatch(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com", org="org-A")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": "org-B"}):
         with pytest.raises((ConfigError, ValidationError)):
@@ -203,13 +203,13 @@ def test_add_refuses_a_foreign_credential_on_refresh_in_place(
         "expiresAt": 99999999999000}})
 
     with patch.object(s, "_read_capture_credentials", return_value=OWN), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": ""}):
         s.add_account(slot=7, assume_yes=True)
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-other", "email": "other@example.com",
                              "organizationUuid": foreign_org}):
         with pytest.raises((ConfigError, ValidationError)):
@@ -234,7 +234,7 @@ def test_CONTROL_refresh_in_place_still_accepts_the_owning_token(
         "expiresAt": 99999999999000}})
 
     with patch.object(s, "_read_capture_credentials", return_value=OWN), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": ""}):
         s.add_account(slot=7, assume_yes=True)
@@ -244,7 +244,7 @@ def test_CONTROL_refresh_in_place_still_accepts_the_owning_token(
         "expiresAt": 99999999999000}})
 
     with patch.object(s, "_read_capture_credentials", return_value=OWN_ROTATED), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": ""}):
         s.add_account()  # slot=None -> refresh-in-place, same account
@@ -267,7 +267,7 @@ def test_org_slot_registers_when_the_resolved_profile_has_no_org(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com", org="org-A")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": None}):
         s.add_account(slot=7, assume_yes=True)
@@ -284,7 +284,7 @@ def test_CONTROL_org_slot_still_registers_when_the_org_matches(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com", org="org-A")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": "org-A"}):
         s.add_account(slot=7, assume_yes=True)
@@ -301,7 +301,7 @@ def test_CONTROL_org_slot_still_refuses_a_different_email(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com", org="org-A")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-o", "email": "other@example.com",
                              "organizationUuid": "org-A"}):
         with pytest.raises((ConfigError, ValidationError)):
@@ -321,7 +321,7 @@ def test_org_mismatch_message_names_both_organizations(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com", org="org-A")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax2", "email": "ax@example.com",
                              "organizationUuid": "org-B"}):
         with pytest.raises((ConfigError, ValidationError)) as e:
@@ -342,7 +342,7 @@ def test_email_mismatch_message_still_names_both_addresses(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-other", "email": "other@example.com",
                              "organizationUuid": ""}):
         with pytest.raises((ConfigError, ValidationError)) as e:
@@ -361,7 +361,7 @@ def test_CONTROL_personal_account_empty_org_still_registers(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com", org="")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": None}):
         s.add_account(slot=8, assume_yes=True)
@@ -393,8 +393,8 @@ def test_an_expired_credential_is_unresolvable_and_never_consumes_a_grant(
         "expiresAt": 1}})
 
     with patch.object(s, "_read_capture_credentials", return_value=EXPIRED), \
-         patch("claude_swap.oauth.refresh_oauth_credentials") as mock_refresh, \
-         patch("claude_swap.oauth.fetch_oauth_profile") as mock_fetch:
+         patch("ccswap.oauth.refresh_oauth_credentials") as mock_refresh, \
+         patch("ccswap.oauth.fetch_oauth_profile") as mock_fetch:
         s.add_account(slot=7, assume_yes=True)
 
     mock_refresh.assert_not_called()
@@ -420,7 +420,7 @@ def test_a_matching_uuid_accepts_even_when_the_email_changed(
         "accountUuid": "u-same"}}), encoding="utf-8")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-same", "email": "new@example.com",
                              "organizationUuid": ""}):
         s.add_account(slot=7, assume_yes=True)
@@ -444,7 +444,7 @@ def test_a_recycled_email_under_a_different_uuid_is_refused(
         "accountUuid": "u-registered"}}), encoding="utf-8")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-recreated", "email": "ax@example.com",
                              "organizationUuid": ""}):
         with pytest.raises((ConfigError, ValidationError)):
@@ -478,8 +478,8 @@ def test_an_expired_FOREIGN_credential_registers_and_that_is_deliberate(
         "expiresAt": 1}})
 
     with patch.object(s, "_read_capture_credentials", return_value=EXPIRED_FOREIGN), \
-         patch("claude_swap.oauth.refresh_oauth_credentials") as mock_refresh, \
-         patch("claude_swap.oauth.fetch_oauth_profile") as mock_fetch:
+         patch("ccswap.oauth.refresh_oauth_credentials") as mock_refresh, \
+         patch("ccswap.oauth.fetch_oauth_profile") as mock_fetch:
         s.add_account(slot=7, assume_yes=True)
 
     # The point is not just that it registers -- it is that no grant moved.
@@ -501,7 +501,7 @@ def test_an_unverifiable_ownership_check_says_so_out_loud(
     s = _switcher(temp_home, mock_claude_config, "ax@example.com")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile", return_value=None):
+         patch("ccswap.oauth.fetch_oauth_profile", return_value=None):
         s.add_account(slot=7, assume_yes=True)
 
     out = capsys.readouterr().out
@@ -536,7 +536,7 @@ def test_a_login_landing_during_the_guards_network_window_is_refused(
         return {"uuid": "u-ax", "email": "ax@example.com", "organizationUuid": ""}
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile", side_effect=login_lands):
+         patch("ccswap.oauth.fetch_oauth_profile", side_effect=login_lands):
         with pytest.raises((ConfigError, ValidationError)):
             s.add_account(slot=7, assume_yes=True)
 
@@ -574,7 +574,7 @@ def test_a_refresh_landing_in_the_guards_window_is_refused(
 
     with patch.object(s, "_read_capture_credentials",
                       side_effect=lambda *a, **k: live["v"]), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                side_effect=rotates_during_lookup):
         with pytest.raises((ConfigError, ValidationError)):
             s.add_account(slot=7, assume_yes=True)
@@ -600,7 +600,7 @@ def test_a_matching_uuid_does_not_excuse_a_different_org(
         "accountUuid": "u-ax"}}), encoding="utf-8")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": "org-X"}):
         with pytest.raises((ConfigError, ValidationError)):
@@ -625,7 +625,7 @@ def test_a_null_account_uuid_does_not_trip_the_commit_time_recheck(
         "accountUuid": None}}), encoding="utf-8")
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": ""}):
         s.add_account(slot=7, assume_yes=True)
@@ -652,7 +652,7 @@ def test_the_refresh_in_place_path_also_refuses_a_login_in_the_window(
     """
     s = _switcher(temp_home, mock_claude_config, "ax@example.com")
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": "u-ax", "email": "ax@example.com",
                              "organizationUuid": ""}):
         s.add_account(slot=7, assume_yes=True)
@@ -667,7 +667,7 @@ def test_the_refresh_in_place_path_also_refuses_a_login_in_the_window(
         return {"uuid": "u-ax", "email": "ax@example.com", "organizationUuid": ""}
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile", side_effect=login_lands):
+         patch("ccswap.oauth.fetch_oauth_profile", side_effect=login_lands):
         with pytest.raises((ConfigError, ValidationError)):
             s.add_account(assume_yes=True)          # slot=None -> refresh in place
 
@@ -704,7 +704,7 @@ def test_the_guard_receives_the_triple_THAT_WAS_READ_not_a_rebuild(
     )
     monkeypatch.setattr(type(s), "_get_current_identity_triple", lambda self: read)
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                return_value={"uuid": read[2], "email": read[0],
                              "organizationUuid": read[1]}):
         try:
@@ -729,7 +729,7 @@ def test_add_refuses_a_wiped_credential(temp_home: Path, mock_claude_config: Pat
     s = _switcher(temp_home, mock_claude_config, "ax@example.com")
 
     with patch.object(s, "_read_capture_credentials", return_value=WIPED), \
-         patch("claude_swap.oauth.fetch_oauth_profile") as fetch:
+         patch("ccswap.oauth.fetch_oauth_profile") as fetch:
         with pytest.raises(ConfigError, match="Nothing was changed"):
             s.add_account(slot=7, assume_yes=True)
 
@@ -752,7 +752,7 @@ def test_CONTROL_refresh_token_without_access_token_still_registers(
 
 
 def test_extract_oauth_data_is_none_for_json_that_is_not_an_object():
-    from claude_swap import oauth
+    from ccswap import oauth
     assert oauth.extract_oauth_data("[]") is None
     assert oauth.extract_oauth_data('"x"') is None
 def test_a_config_torn_mid_rewrite_in_that_window_is_refused_not_a_crash(
@@ -778,7 +778,7 @@ def test_a_config_torn_mid_rewrite_in_that_window_is_refused_not_a_crash(
                 "organizationUuid": ""}
 
     with patch.object(s, "_read_capture_credentials", return_value=CREDS), \
-         patch("claude_swap.oauth.fetch_oauth_profile",
+         patch("ccswap.oauth.fetch_oauth_profile",
                side_effect=tears_during_lookup):
         with pytest.raises(ClaudeSwitchError):
             s.add_account(slot=7, assume_yes=True)

@@ -2,7 +2,7 @@
 
 These tests never import or run rumps/AppKit. They exercise the pure helpers
 (settings store, title/label formatting, usage/snapshot adapters, log parsing)
-only — the auto-switch engine itself lives in ``claude_swap.autoswitch`` and is
+only — the auto-switch engine itself lives in ``ccswap.autoswitch`` and is
 tested there.
 """
 
@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import menubar, oauth
-from claude_swap.autoswitch import ErrorEvent
-from claude_swap.exceptions import ClaudeSwitchError
-from claude_swap.menubar import ENGINE_ERROR_REPEAT_S, should_surface_engine_error
-from claude_swap.switcher import USAGE_API_KEY, USAGE_RELOGIN_REQUIRED
+from ccswap import menubar, oauth
+from ccswap.autoswitch import ErrorEvent
+from ccswap.exceptions import ClaudeSwitchError
+from ccswap.menubar import ENGINE_ERROR_REPEAT_S, should_surface_engine_error
+from ccswap.switcher import USAGE_API_KEY, USAGE_RELOGIN_REQUIRED
 
 
 # --- notification identity -----------------------------------------------------
@@ -70,60 +70,141 @@ def test_notification_identity_is_noop_off_macos(tmp_path: Path):
 # --- settings ------------------------------------------------------------------
 
 def test_settings_defaults_when_file_missing(tmp_path: Path):
-    s = menubar.MenuBarSettings.load(tmp_path / "nope.json")
+    s = menubar.MenuBarSettings.load(tmp_path)
     assert s.show_account_name is True
     assert s.title_pct == "both"
     assert s.refresh_interval == 60
     assert s.auto_switch_enabled is False
     assert s.codex_auto_switch_enabled is False
+    assert s.style == "popover"
+    assert s.title_provider == "claude"
 
 
 def test_settings_round_trip(tmp_path: Path):
-    path = tmp_path / "menubar_settings.json"
     original = menubar.MenuBarSettings(
+        style="classic",
+        title_provider="auto",
         show_account_name=False,
         title_pct="5h",
         refresh_interval=300,
         auto_switch_enabled=True,
         codex_auto_switch_enabled=True,
     )
-    original.save(path)
-    loaded = menubar.MenuBarSettings.load(path)
-    assert loaded == original
+    original.save(tmp_path)
+    assert menubar.MenuBarSettings.load(tmp_path) == original
+
+
+def test_settings_save_keeps_only_non_defaults_in_settings_json(tmp_path: Path):
+    menubar.MenuBarSettings(title_provider="agy").save(tmp_path)
+    raw = json.loads((tmp_path / "settings.json").read_text())
+    assert raw["menubar"] == {"titleProvider": "agy"}
 
 
 def test_settings_save_is_atomic(tmp_path: Path, monkeypatch):
-    # The CLI and the running menu bar share this file, and load() reads a
-    # torn write as defaults (auto-switch off), so save() must not truncate
-    # in place.
+    # The CLI and the running menu bar share settings.json, and a torn write
+    # reads back as defaults (auto-switch off), so save() must not write in place.
+    from ccswap import settings
+
     calls = []
-    monkeypatch.setattr(
-        menubar, "atomic_write_text", lambda path, text, **kw: calls.append((path, kw))
-    )
-    path = tmp_path / "menubar_settings.json"
-    menubar.MenuBarSettings(auto_switch_enabled=True).save(path)
-    assert calls == [(path, {"mode": 0o600})]
+    monkeypatch.setattr(settings, "atomic_write_json", lambda path, data: calls.append(path))
+    menubar.MenuBarSettings(auto_switch_enabled=True).save(tmp_path)
+    assert calls == [tmp_path / "settings.json"]
 
 
 def test_settings_corrupt_file_falls_back_to_defaults(tmp_path: Path):
-    path = tmp_path / "menubar_settings.json"
-    path.write_text("{ this is not json", encoding="utf-8")
-    s = menubar.MenuBarSettings.load(path)
-    assert s == menubar.MenuBarSettings()
+    (tmp_path / "settings.json").write_text("{ this is not json", encoding="utf-8")
+    assert menubar.MenuBarSettings.load(tmp_path) == menubar.MenuBarSettings()
 
 
-def test_settings_ignores_unknown_and_bad_types(tmp_path: Path):
-    path = tmp_path / "menubar_settings.json"
-    path.write_text(
-        json.dumps(
-            {"refresh_interval": "fast", "bogus": 1, "show_account_name": False}
-        ),
+def test_settings_ignores_unknown_and_bad_values(tmp_path: Path):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"menubar": {
+            "refreshInterval": "fast", "bogus": 1, "showAccountName": False,
+            "titleProvider": "nope", "style": "classic",
+        }}),
         encoding="utf-8",
     )
-    s = menubar.MenuBarSettings.load(path)
-    # bad-typed refresh_interval falls back to default; valid bool is kept
-    assert s.refresh_interval == 60
-    assert s.show_account_name is False
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.refresh_interval == 60 and s.title_provider == "claude"
+    assert s.show_account_name is False and s.style == "classic"
+
+
+def test_legacy_menubar_settings_file_is_imported_once(tmp_path: Path):
+    legacy = tmp_path / "menubar_settings.json"
+    legacy.write_text(json.dumps({"title_pct": "5h", "auto_switch_enabled": True, "refresh_interval": "x"}))
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.title_pct == "5h" and s.auto_switch_enabled is True and s.refresh_interval == 60
+    raw = json.loads((tmp_path / "settings.json").read_text())
+    assert raw["menubar"] == {"titlePct": "5h", "autoSwitch": True}
+    assert legacy.exists()  # kept for older versions
+    legacy.write_text(json.dumps({"title_pct": "off"}))  # ignored from now on
+    assert menubar.MenuBarSettings.load(tmp_path).title_pct == "5h"
+
+
+def test_menubar_keys_are_ccswap_config_settings(tmp_path: Path):
+    from ccswap import settings
+
+    settings.set_setting(tmp_path, "menubar.titleProvider", "codex")
+    assert menubar.MenuBarSettings.load(tmp_path).title_provider == "codex"
+    with pytest.raises(Exception):
+        settings.set_setting(tmp_path, "menubar.style", "bogus")
+
+
+# --- title provider ------------------------------------------------------------
+
+_AGY_USAGE = {"scoped": [
+    {"name": "Gemini · 5h", "group": "Gemini", "window": "5h", "pct": 12.0},
+    {"name": "Gemini · weekly", "group": "Gemini", "window": "weekly", "pct": 40.0},
+    {"name": "Claude · 5h", "group": "Claude", "window": "5h", "pct": 30.0},
+]}
+
+
+def test_resolve_title_provider_explicit_setting_wins():
+    assert menubar.resolve_title_provider("codex", {"claude": {"five_hour": {"pct": 99}}}) == "codex"
+
+
+def test_resolve_title_provider_auto_picks_fullest_with_registry_order_ties():
+    actives = {"claude": {"five_hour": {"pct": 50}}, "codex": {"weekly": {"pct": 80}}, "agy": _AGY_USAGE}
+    assert menubar.resolve_title_provider("auto", actives) == "codex"
+    tie = {"claude": {"five_hour": {"pct": 80}}, "codex": {"weekly": {"pct": 80}}}
+    assert menubar.resolve_title_provider("auto", tie) == "claude"
+
+
+def test_resolve_title_provider_auto_counts_rejected_and_scoped_only():
+    assert menubar.resolve_title_provider(
+        "auto", {"claude": {"five_hour": {"pct": 99}}, "codex": {"rejected": {}}}
+    ) == "codex"
+    assert menubar.resolve_title_provider("auto", {"claude": None, "agy": _AGY_USAGE}) == "agy"
+
+
+def test_resolve_title_provider_auto_without_numbers():
+    assert menubar.resolve_title_provider("auto", {"codex": None, "agy": None}) == "codex"
+    assert menubar.resolve_title_provider("auto", {}) == "claude"
+
+
+def test_format_title_uses_scoped_maxima_for_antigravity():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="both")
+    assert menubar.format_title("a@x.io", _AGY_USAGE, s, now=0) == f"{menubar.ICON} 30% · 40%"
+
+
+def test_format_title_without_icon_has_no_provider_tag():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="5h")
+    title = menubar.format_title("a@x.io", {"five_hour": {"pct": 42.0}}, s, now=0, icon=False)
+    assert title == "42%"
+
+
+def test_five_hour_scoped_window_is_not_rolled_weekly():
+    past = {"window": "5h", "pct": 70.0, "resets_at": "2020-01-01T00:00:00+00:00"}
+    assert menubar._rolled_scoped_window(past, now=2_000_000_000) is past
+
+
+def test_single_instance_lock_refuses_a_second_menu_bar(tmp_path: Path):
+    first = menubar.acquire_single_instance(tmp_path)
+    try:
+        with pytest.raises(ClaudeSwitchError, match="already running"):
+            menubar.acquire_single_instance(tmp_path)
+    finally:
+        first.release()
 
 
 _USAGE = {
@@ -714,18 +795,29 @@ def test_format_title_reflects_passed_weekly_reset():
 
 # --- run() app glue ------------------------------------------------------------
 
-def test_run_without_rumps_raises_clean_error(monkeypatch):
+def test_run_without_the_extra_raises_clean_error(monkeypatch):
     """A missing menubar extra surfaces as ClaudeSwitchError, not a traceback.
 
-    The module is import-safe without rumps, so the CLI's ImportError guard
-    around ``from claude_swap.menubar import run`` can never fire — the import
-    failure happens inside ``run()``. Blocking the import (a ``None`` entry in
-    ``sys.modules`` makes ``import rumps`` raise) checks that ``run()`` turns
-    it into the error type the CLI renders with the install hint.
+    A ``None`` entry in ``sys.modules`` makes ``import AppKit`` raise.
     """
-    monkeypatch.setitem(sys.modules, "rumps", None)
+    monkeypatch.setitem(sys.modules, "AppKit", None)
     with pytest.raises(ClaudeSwitchError, match=r"ccswap\[menubar\]"):
         menubar.run(switcher=None)
+
+
+@pytest.mark.parametrize(
+    "style, classic, webkit, rumps, expected",
+    [
+        ("popover", False, True, True, "popover"),
+        ("popover", True, True, True, "classic"),  # --classic wins for one run
+        ("classic", False, True, True, "classic"),
+        ("popover", False, False, True, "classic"),  # no WebKit: fall back
+        ("popover", False, False, False, None),
+        ("classic", False, True, False, None),
+    ],
+)
+def test_pick_shell(style, classic, webkit, rumps, expected):
+    assert menubar.pick_shell(style, classic, webkit, rumps) == expected
 
 
 class TestFrameworkBuildWarning:
@@ -850,7 +942,7 @@ def test_engine_error_table_is_pruned():
 
 
 def test_menu_note_keeps_the_state_and_drops_the_remedy():
-    from claude_swap.switcher import USAGE_RELOGIN_REQUIRED
+    from ccswap.switcher import USAGE_RELOGIN_REQUIRED
 
     note = menubar.SENTINEL_NOTES[USAGE_RELOGIN_REQUIRED]
     assert "cswap add" in note, "premise: the note carries a remedy"
@@ -878,7 +970,7 @@ def test_menu_note_leaves_a_short_note_alone():
 
 
 def test_account_row_shows_the_sentinel_state_not_the_remedy():
-    from claude_swap.switcher import USAGE_RELOGIN_REQUIRED
+    from ccswap.switcher import USAGE_RELOGIN_REQUIRED
 
     label = menubar.format_account_label(
         2, "b@x.com", menubar.SENTINEL_NOTES[USAGE_RELOGIN_REQUIRED]
@@ -1007,3 +1099,54 @@ def test_format_title_attention_prefix():
     assert menubar.format_title(None, None, settings, attention=True) == "⚠ ⇄"
     assert menubar.format_title("loc@papaya.asia", _USAGE, settings, attention=True).startswith("⚠ ⇄ ")
     assert not menubar.format_title("loc@papaya.asia", _USAGE, settings).startswith("⚠")
+
+
+def test_clearing_every_menubar_key_does_not_reimport_the_old_file(tmp_path: Path):
+    from ccswap import settings
+
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True, "title_pct": "5h"}))
+    assert menubar.MenuBarSettings.load(tmp_path).auto_switch_enabled is True  # imported once
+    settings.set_setting(tmp_path, "menubar.autoSwitch", "false")
+    settings.unset_setting(tmp_path, "menubar.titlePct")
+    settings.unset_setting(tmp_path, "menubar.autoSwitch")
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.auto_switch_enabled is False and s.title_pct == "both"
+
+
+def test_corrupt_settings_json_does_not_fall_back_to_the_old_file(tmp_path: Path):
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True}))
+    (tmp_path / "settings.json").write_text("{ broken", encoding="utf-8")
+    assert menubar.MenuBarSettings.load(tmp_path) == menubar.MenuBarSettings()
+    assert (tmp_path / "settings.json").read_text() == "{ broken"  # never overwritten
+
+
+def test_antigravity_weekly_title_rolls_after_its_reset():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="7d")
+    past = {"scoped": [{"name": "G · weekly", "window": "weekly", "pct": 80.0,
+                        "resets_at": "2020-01-01T00:00:00+00:00"}]}
+    assert "80%" not in menubar.format_title("a@x.io", past, s)
+
+
+def test_empty_settings_json_still_imports_the_old_file(tmp_path: Path):
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True}))
+    (tmp_path / "settings.json").write_text("{}", encoding="utf-8")
+    assert menubar.MenuBarSettings.load(tmp_path).auto_switch_enabled is True
+
+
+def test_scoped_title_lists_extras_only_next_to_account_wide_windows():
+    s = menubar.MenuBarSettings(show_account_name=False, title_pct="both", title_scoped=True)
+    # Antigravity: groups only -> just the 5h and weekly maxima, no group list
+    assert menubar.format_title("a@x.io", _AGY_USAGE, s, now=0, icon=False) == "30% · 40%"
+    # Claude: account-wide windows plus a per-model extra -> the extra is named
+    claude = {"five_hour": {"pct": 10.0}, "seven_day": {"pct": 69.0},
+              "scoped": [{"name": "Fable", "pct": 0.0}]}
+    assert menubar.format_title("a@x.io", claude, s, now=0, icon=False) == "10% · 69% · Fable 0%"
+
+
+def test_a_cli_menubar_key_imports_the_old_file_first(tmp_path: Path):
+    from ccswap import settings
+
+    (tmp_path / "menubar_settings.json").write_text(json.dumps({"auto_switch_enabled": True, "title_pct": "5h"}))
+    settings.set_setting(tmp_path, "menubar.refreshInterval", "30")  # before the menu bar ever ran
+    s = menubar.MenuBarSettings.load(tmp_path)
+    assert s.auto_switch_enabled is True and s.title_pct == "5h" and s.refresh_interval == 30

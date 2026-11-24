@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from claude_swap import oauth, usage_store
-from claude_swap.usage_store import (
+from ccswap import oauth, usage_store
+from ccswap.usage_store import (
     BACKOFF_BASE_S,
     BACKOFF_CAP_S,
     CLAIM_TTL_S,
@@ -1584,7 +1584,7 @@ class TestHourScale429FloorEngagesThroughStore:
     """
 
     def _plan_after_first_success(self, store, clock, legacy_recency: bool):
-        from claude_swap import poll_policy
+        from ccswap import poll_policy
 
         store.record(
             {"1": FetchRecord(error="http-429", retry_after_s=3600.0)}, IDENT
@@ -1615,7 +1615,7 @@ class TestHourScale429FloorEngagesThroughStore:
         return recent, interval
 
     def test_floor_engages_at_first_post_block_success(self, store, clock):
-        from claude_swap import poll_policy
+        from ccswap import poll_policy
 
         recent, interval = self._plan_after_first_success(
             store, clock, legacy_recency=False
@@ -1627,7 +1627,7 @@ class TestHourScale429FloorEngagesThroughStore:
         # Documents the regression the fix closes: with the old inline recency
         # (measured from the 429 stamp), the first post-block success sees
         # recent_429=False and the POST_429 floor never engages.
-        from claude_swap import poll_policy
+        from ccswap import poll_policy
 
         recent, interval = self._plan_after_first_success(
             store, clock, legacy_recency=True
@@ -1646,7 +1646,7 @@ class TestHourScale429FloorEngagesThroughStore:
         # it only works because recent_429 is True at each episode's first
         # success (the fix). Uses short (60s) blocks so the episodes are quick;
         # the growth is independent of the block length.
-        from claude_swap import poll_policy
+        from ccswap import poll_policy
 
         intervals = []
         for _ in range(6):
@@ -1702,11 +1702,11 @@ class TestFingerprintBoundStrikes:
     (add, import, switch persist, gate CAS) heals the strike automatically."""
 
     def _store(self, tmp_path):
-        from claude_swap.usage_store import UsageStore
+        from ccswap.usage_store import UsageStore
         return UsageStore(tmp_path / "usage.json")
 
     def _record_invalid_grant(self, store, num="1", fp="fp-dead"):
-        from claude_swap.usage_store import FetchRecord
+        from ccswap.usage_store import FetchRecord
         identities = {num: ("a@example.com", "")}
         claims = store.reserve([num], identities, respect_plans=False)
         store.record(

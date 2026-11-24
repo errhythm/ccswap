@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.autoswitch import WasteWarningEvent
-from claude_swap.exceptions import ConfigError
-from claude_swap.settings import (
+from ccswap.autoswitch import WasteWarningEvent
+from ccswap.exceptions import ConfigError
+from ccswap.settings import (
     SETTING_SPECS,
     UsageSettings,
     load_usage_settings,

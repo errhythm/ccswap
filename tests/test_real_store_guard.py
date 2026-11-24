@@ -18,7 +18,7 @@ The fix under test: ``conftest.py`` installs a process-global
 unwound the way a fixture patch can) that refuses any WRITE-mode ``open``/
 ``os.rename``/``os.mkdir``/``os.remove``/``os.rmdir`` whose target resolves,
 AT THE MOMENT OF THE CALL, under the REAL (currently-computed, not cached)
-``claude_swap.paths`` roots — regardless of which thread performs it.
+``ccswap.paths`` roots — regardless of which thread performs it.
 """
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import cache, paths, session, update_check
-from claude_swap.models import Platform
+from ccswap import cache, paths, session, update_check
+from ccswap.models import Platform
 from tests import conftest
 
 
@@ -64,7 +64,7 @@ def _remove_our_marker(marker: Path) -> None:
 def test_control_b_and_c_real_store_write_is_refused(monkeypatch):
     """CONTROL B (main thread) and CONTROL C (a thread that outlives its
     own test's isolation, the case that actually matters) both attempt a
-    write under the REAL ``claude_swap.paths.get_backup_root()`` and must
+    write under the REAL ``ccswap.paths.get_backup_root()`` and must
     both be refused — never silently succeed, never silently no-op.
 
     ``monkeypatch.undo()`` reverses the autouse ``_isolate_real_home``
@@ -74,7 +74,7 @@ def test_control_b_and_c_real_store_write_is_refused(monkeypatch):
     unpatched ``$HOME``/``Path.home()`` for the rest of this test body —
     exactly the state a thread sees after its own test's teardown has run.
     """
-    from claude_swap.exceptions import ClaudeSwitchError  # noqa: F401  (sanity import only)
+    from ccswap.exceptions import ClaudeSwitchError  # noqa: F401  (sanity import only)
 
     marker_name = ".cswap-test-real-store-guard-probe-DELETE-ME"
 
@@ -431,7 +431,7 @@ def test_frozen_specs_include_the_ambient_xdg_override_backup_root(
     a machine where it's exported OUTSIDE $HOME, the real account store lives
     at the override path and this snapshot never included it — the defaults
     snapshot alone is not enough. The frozen set must ALSO contain the root
-    `claude_swap.paths` resolves to under the environment as it actually is."""
+    `ccswap.paths` resolves to under the environment as it actually is."""
     home = tmp_path / "home"
     home.mkdir()
     xdg = tmp_path / "xdg-outside-home"  # deliberately NOT under `home`
@@ -873,7 +873,7 @@ def test_c0_a_scratch_home_still_protects_the_os_account_home_store(monkeypatch,
     # fallback the third snapshot depends on. Restore the real
     # `Path.home` for this test -- $HOME stays scratch, which is the
     # condition under test.
-    from claude_swap import macos_keychain
+    from ccswap import macos_keychain
 
     monkeypatch.setattr(Path, "home", _REAL_PATH_HOME)
     assert (

@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import codex_binary as binary
-from claude_swap.exceptions import SessionError
+from ccswap import codex_binary as binary
+from ccswap.exceptions import SessionError
 
 
 def touch(path, content=''):

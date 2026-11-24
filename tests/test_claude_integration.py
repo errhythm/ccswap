@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import claude_integration as ci
-from claude_swap import cli
-from claude_swap.exceptions import ConfigError
-from claude_swap.settings import ACTION_KEYS, effective_settings, set_setting
+from ccswap import claude_integration as ci
+from ccswap import cli
+from ccswap.exceptions import ConfigError
+from ccswap.settings import ACTION_KEYS, effective_settings, set_setting
 
 OURS = {"type": "command", "command": "ccswap statusline"}
 CUSTOM = {"type": "command", "command": "~/.claude/statusline.sh", "padding": 2}
@@ -278,9 +278,9 @@ class TestTuiToggle:
     async def test_settings_rows_toggle_off_thread(self, tmp_path):
         from textual.widgets import ListView, Static
 
-        from claude_swap.tui.widgets import MenuItem
+        from ccswap.tui.widgets import MenuItem
         from tests.test_tui import (
-            FakeSwitcher, make_account, make_app, menu_select, settle,
+            FakeSwitcher, make_account, make_app, menu_select, setting_values, settle,
         )
 
         state = {"claude.statusline": False, "claude.mod": False}
@@ -301,12 +301,11 @@ class TestTuiToggle:
                 await settle(pilot)
 
                 def labels():
-                    menu = app.screen.query_one("#menu", ListView)
-                    return [i.query_one(Static).render().plain for i in menu.query(MenuItem)]
+                    return setting_values(app.screen)
 
-                assert "Claude statusline: off" in labels()
-                assert "Claude Code mod: off" in labels()
+                assert labels()["claude:claude.statusline"] == "off"
+                assert labels()["claude:claude.mod"] == "off"
                 await menu_select(pilot, "claude:claude.mod")
                 await settle(pilot)
                 assert calls == [(tmp_path, "claude.mod", True)]
-                assert "Claude Code mod: on" in labels()
+                assert labels()["claude:claude.mod"] == "on"

@@ -16,8 +16,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import json_output, subscription
-from claude_swap.models import AccountSnapshot
+from ccswap import json_output, subscription
+from ccswap.models import AccountSnapshot
 
 ACTIVE_MAX = {
     "tier": "default_claude_max_20x",
@@ -453,7 +453,7 @@ class TestPlanStore:
         """Another writer saves a newer plan while this save waits for the
         lock. The skew check must use a clock read under the lock, or that
         record reads as ahead of ``now`` and older data overwrites it."""
-        from claude_swap.settings import atomic_write_json
+        from ccswap.settings import atomic_write_json
 
         path = tmp_path / "p.json"
         now = [1000.0]
@@ -513,7 +513,7 @@ class _Clock:
 
 @pytest.fixture
 def switcher(temp_home):
-    from claude_swap.switcher import ClaudeAccountSwitcher
+    from ccswap.switcher import ClaudeAccountSwitcher
 
     sw = ClaudeAccountSwitcher()
     sw._setup_directories()
@@ -835,19 +835,19 @@ class TestJson:
 
 class TestListMarker:
     def test_label(self):
-        from claude_swap.switcher import _plan_marker
+        from ccswap.switcher import _plan_marker
 
         marker = _plan_marker({"plan": TEAM, "fetchedAt": 1000.0}, now=1000.0)
         assert "Team" in marker and "expired" not in marker
 
     def test_lapsed_is_free_without_the_word_expired(self):
-        from claude_swap.switcher import _plan_marker
+        from ccswap.switcher import _plan_marker
 
         marker = _plan_marker({"plan": LAPSED, "fetchedAt": 1000.0}, now=1000.0)
         assert "Free" in marker and "expired" not in marker
 
     def test_age_only_once_stale(self):
-        from claude_swap.switcher import _plan_marker
+        from ccswap.switcher import _plan_marker
 
         fresh = _plan_marker({"plan": TEAM, "fetchedAt": time.time()}, now=time.time())
         old_at = time.time() - 3 * subscription.PLAN_TTL_S
@@ -856,7 +856,7 @@ class TestListMarker:
         assert "ago" in stale
 
     def test_no_record_no_marker(self):
-        from claude_swap.switcher import _plan_marker
+        from ccswap.switcher import _plan_marker
 
         assert _plan_marker(None, now=0.0) == ""
 
@@ -864,7 +864,7 @@ class TestListMarker:
 class TestSnapshotField:
 
     def test_defaults_to_none(self):
-        from claude_swap.usage_store import UsageEntry
+        from ccswap.usage_store import UsageEntry
 
         snap = AccountSnapshot(
             number="1",
@@ -880,7 +880,7 @@ class TestSnapshotField:
 
 
 def _snap(**kw) -> AccountSnapshot:
-    from claude_swap.usage_store import UsageEntry
+    from ccswap.usage_store import UsageEntry
 
     base = {
         "number": "1",
@@ -905,7 +905,7 @@ class _Palette:
 
 class TestSnapshotSourceRefresh:
     def _source(self, refresh):
-        from claude_swap.snapshot_source import SnapshotSource
+        from ccswap.snapshot_source import SnapshotSource
 
         class Switcher:
             refresh_subscription_plans = staticmethod(refresh)

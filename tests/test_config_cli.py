@@ -9,14 +9,14 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import cli
+from ccswap import cli
 
 
 @pytest.fixture(autouse=True)
 def _no_claude_cli():
     """Listing reads the mod's live state via `claude plugin list`; keep the
     real Claude Code CLI out of these tests."""
-    with patch("claude_swap.claude_integration.mod_installed", return_value=False):
+    with patch("ccswap.claude_integration.mod_installed", return_value=False):
         yield
 
 
@@ -63,7 +63,6 @@ class TestConfigList:
             "autoswitch.threshold7d",
             "autoswitch.modelThresholds",
             "autoswitch.homeAccount",
-            "ui.language",
             "ui.theme",
             "ui.orgTag",
             "ui.view",
@@ -79,7 +78,7 @@ class TestConfigList:
             "usage.fableProbe",
         ):
             assert key in out
-        assert out.count("(default)") == 32
+        assert out.count("(default)") == 40
 
     def test_set_key_not_marked_default(self, temp_home, capsys):
         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
@@ -106,7 +105,7 @@ class TestConfigList:
         assert payload["schemaVersion"] == 1
         assert payload["path"].endswith("settings.json")
         by_key = {entry["key"]: entry for entry in payload["settings"]}
-        assert len(by_key) == 32
+        assert len(by_key) == 40
         assert by_key["autoswitch.warmupFiveHour"]["value"] is False
         assert by_key["ui.starPrompt"]["value"] is True
         assert by_key["ui.starPrompt"]["isSet"] is False
@@ -376,11 +375,11 @@ class TestConfigMisc:
                 captured["settings"] = settings
 
             def tick(self):
-                from claude_swap.autoswitch import TickOutcome
+                from ccswap.autoswitch import TickOutcome
 
                 return TickOutcome.NO_ACTION
 
-        with patch("claude_swap.autoswitch.AutoSwitchEngine", FakeEngine), \
+        with patch("ccswap.autoswitch.AutoSwitchEngine", FakeEngine), \
              patch("os.geteuid", return_value=1000, create=True), \
              patch.object(sys, "argv", ["claude-swap", "auto", "--once"]):
             with pytest.raises(SystemExit):
@@ -430,11 +429,11 @@ class TestWeeklyThresholdConfig:
                 captured["settings"] = settings
 
             def tick(self):
-                from claude_swap.autoswitch import TickOutcome
+                from ccswap.autoswitch import TickOutcome
 
                 return TickOutcome.NO_ACTION
 
-        with patch("claude_swap.autoswitch.AutoSwitchEngine", FakeEngine), \
+        with patch("ccswap.autoswitch.AutoSwitchEngine", FakeEngine), \
              patch("os.geteuid", return_value=1000, create=True), \
              patch.object(sys, "argv", ["claude-swap", "auto", "--once"]):
             with pytest.raises(SystemExit):
@@ -451,7 +450,7 @@ class TestHomeAccount:
         assert out.strip() == "(none)"
 
     def test_set_stores_email_and_org(self, temp_home, capsys):
-        from claude_swap.switcher import ClaudeAccountSwitcher
+        from ccswap.switcher import ClaudeAccountSwitcher
 
         with patch.object(
             ClaudeAccountSwitcher, "resolve_account",

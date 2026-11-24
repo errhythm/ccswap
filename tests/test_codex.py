@@ -7,9 +7,9 @@ import json
 
 import pytest
 
-from claude_swap import codex
-from claude_swap.codex_usage import CodexUsageError
-from claude_swap.exceptions import ConfigError, SwitchError
+from ccswap import codex
+from ccswap.codex_usage import CodexUsageError
+from ccswap.exceptions import ConfigError, SwitchError
 
 
 def _jwt(email: str, account_id: str) -> str:
@@ -577,8 +577,8 @@ def test_usage_text_output_credit_state_precedence(
 def strategy_accounts(switcher, monkeypatch):
     from dataclasses import replace
 
-    from claude_swap.models import AccountsSnapshot
-    from claude_swap.usage_store import UsageEntry
+    from ccswap.models import AccountsSnapshot
+    from ccswap.usage_store import UsageEntry
 
     instance, home = switcher
     for number in range(1, 5):
@@ -1010,7 +1010,7 @@ def test_redeem_without_card_details_never_posts(redemption, monkeypatch, json_o
 def test_redeem_prompt_names_expiry_and_posts_exact_selected_card(
     redemption, monkeypatch
 ):
-    from claude_swap.exceptions import LockError
+    from ccswap.exceptions import LockError
 
     instance, _, _ = redemption
     monkeypatch.setattr(codex.sys.stdin, "isatty", lambda: True)
@@ -1050,7 +1050,7 @@ def test_redeem_inactive_post_safety(redemption, monkeypatch, failure):
     import io
     import urllib.error
 
-    from claude_swap import codex_usage
+    from ccswap import codex_usage
 
     instance, home, _ = redemption
     _write_live(home, _auth("two@example.com", "two"))
@@ -1112,7 +1112,7 @@ def test_redeem_inactive_post_safety(redemption, monkeypatch, failure):
 def test_redeem_accepted_survives_confirmation_storage_errors(
     redemption, monkeypatch, capsys, failure
 ):
-    from claude_swap.exceptions import LockError
+    from ccswap.exceptions import LockError
 
     instance, _, usage = redemption
     reads = []
@@ -1138,7 +1138,7 @@ def test_redeem_accepted_survives_confirmation_storage_errors(
 @pytest.mark.parametrize("status", [None, "token_expired"])
 def test_usage_expiry_warning_preserves_json_and_survives_status(switcher, monkeypatch, capsys, status):
     from types import SimpleNamespace
-    from claude_swap.usage_store import UsageEntry
+    from ccswap.usage_store import UsageEntry
     instance, _ = switcher
     now = 1_700_000_000.0
     usage = {"reset_credits": {"available": 1, "expires_at": "2023-11-14T22:43:20Z"}}
@@ -1153,3 +1153,36 @@ def test_usage_expiry_warning_preserves_json_and_survives_status(switcher, monke
     payload = instance.usage_status(json_output=True)
     assert payload["accounts"][0]["usage"] == usage
     assert "⚠" not in capsys.readouterr().out
+
+
+def test_switch_is_recorded_in_the_shared_switch_log(switcher, monkeypatch):
+    import logging
+
+    monkeypatch.setattr(logging.getLogger("ccswap"), "handlers", [])
+    instance, home = switcher
+    _write_live(home, _auth("one@example.com", "account-one"))
+    instance.add_account(assume_yes=True)
+    _write_live(home, _auth("two@example.com", "account-two"))
+    instance.add_account(assume_yes=True)
+    instance.switch_to("1", json_output=True)
+    instance.switch_to("1", json_output=True)  # already active: not a switch
+    for handler in logging.getLogger("ccswap").handlers:
+        handler.close()
+    lines = (instance.backup_dir / "claude-swap.log").read_text().splitlines()
+    assert [line.split(" - ")[-1] for line in lines if "Switched" in line] == [
+        "Switched codex from account 2 to 1"]
+
+
+def test_switch_log_goes_to_its_own_root_not_a_stale_handler(tmp_path, monkeypatch):
+    import logging
+
+    from ccswap.logging_config import log_switch, setup_logging
+
+    monkeypatch.setattr(logging.getLogger("ccswap"), "handlers", [])
+    setup_logging(tmp_path / "other")  # another root's handler, never written
+    log_switch(tmp_path / "mine", "codex", "1", "2")
+    for handler in logging.getLogger("ccswap").handlers:
+        handler.close()
+    assert not (tmp_path / "other").exists()
+    assert (tmp_path / "mine" / "claude-swap.log").read_text().rstrip().endswith(
+        "Switched codex from account 1 to 2")

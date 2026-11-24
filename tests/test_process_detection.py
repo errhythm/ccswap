@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.process_detection import (
+from ccswap.process_detection import (
     PID_REUSE_SLACK_S,
     ClaudeSession,
     IdeInstance,
@@ -30,8 +30,8 @@ from claude_swap.process_detection import (
     process_started_at,
     scan_sessions,
 )
-from claude_swap import process_detection as detection
-from claude_swap.printer import abbreviate_path, entrypoint_label, format_age
+from ccswap import process_detection as detection
+from ccswap.printer import abbreviate_path, entrypoint_label, format_age
 
 
 # --- get_claude_dir ---
@@ -62,8 +62,8 @@ class TestIsCodexRunning:
         ids=["localized_no_tasks", "codex_running"],
     )
     def test_windows_bytes(self, stdout, expected):
-        with patch("claude_swap.process_detection.sys.platform", "win32"), \
-             patch("claude_swap.process_detection.subprocess.run", return_value=CompletedProcess(
+        with patch("ccswap.process_detection.sys.platform", "win32"), \
+             patch("ccswap.process_detection.subprocess.run", return_value=CompletedProcess(
                  args=[], returncode=0, stdout=stdout,
              )) as run:
             assert is_codex_running() is expected
@@ -83,27 +83,27 @@ class TestIsPidAlive:
     # is_pid_alive() dispatches to _is_pid_alive_windows() and never calls
     # os.kill. Pin the platform so these exercise the intended path on any host.
     def test_alive_pid(self):
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
              patch("os.kill") as mock_kill:
             mock_kill.return_value = None
             assert is_pid_alive(12345) is True
             mock_kill.assert_called_once_with(12345, 0)
 
     def test_dead_pid(self):
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
              patch("os.kill", side_effect=OSError("No such process")):
             assert is_pid_alive(12345) is False
 
     def test_permission_error_means_alive(self):
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
              patch("os.kill", side_effect=PermissionError("Operation not permitted")):
             assert is_pid_alive(12345) is True
 
     def test_windows_dispatches_to_ctypes_impl(self):
         """On win32, is_pid_alive() delegates to the ctypes-based helper."""
-        with patch("claude_swap.process_detection.sys.platform", "win32"), \
+        with patch("ccswap.process_detection.sys.platform", "win32"), \
              patch(
-                 "claude_swap.process_detection._is_pid_alive_windows",
+                 "ccswap.process_detection._is_pid_alive_windows",
                  return_value=True,
              ) as mock_win:
             assert is_pid_alive(12345) is True
@@ -192,35 +192,35 @@ class TestProcessStartTicks:
 
 class TestProcessStartedAt:
     def test_windows_is_unknowable(self):
-        with patch("claude_swap.process_detection.sys.platform", "win32"), \
-             patch("claude_swap.process_detection.subprocess.run") as run:
+        with patch("ccswap.process_detection.sys.platform", "win32"), \
+             patch("ccswap.process_detection.subprocess.run") as run:
             assert process_started_at(1234) is None
         run.assert_not_called()
 
     def test_ps_failure_is_unknowable(self):
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
-             patch("claude_swap.process_detection.subprocess.run",
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
+             patch("ccswap.process_detection.subprocess.run",
                    side_effect=OSError("no ps")):
             assert process_started_at(1234) is None
 
     def test_unknown_pid_is_unknowable(self):
         proc = subprocess_result(returncode=1, stdout="")
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
-             patch("claude_swap.process_detection.subprocess.run", return_value=proc):
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
+             patch("ccswap.process_detection.subprocess.run", return_value=proc):
             assert process_started_at(1234) is None
 
     def test_garbage_is_unknowable(self):
         proc = subprocess_result(returncode=0, stdout="??\n")
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
-             patch("claude_swap.process_detection.subprocess.run", return_value=proc):
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
+             patch("ccswap.process_detection.subprocess.run", return_value=proc):
             assert process_started_at(1234) is None
 
     def test_reads_lstart_the_way_claude_does(self):
         """The record's ``procStart`` is claude's own ``LC_ALL=C TZ=UTC ps -o
         lstart=`` output; the live reading must match it to the second."""
         proc = subprocess_result(returncode=0, stdout=f"{LSTART}    \n")
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
-             patch("claude_swap.process_detection.subprocess.run",
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
+             patch("ccswap.process_detection.subprocess.run",
                    return_value=proc) as run:
             assert process_started_at(1234) == LSTART_S
         args, kwargs = run.call_args
@@ -243,8 +243,8 @@ def subprocess_result(returncode: int, stdout: str):
 
 class TestProcessIsClaude:
     def test_ps_failure_is_unknowable(self):
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
-             patch("claude_swap.process_detection.subprocess.run",
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
+             patch("ccswap.process_detection.subprocess.run",
                    side_effect=OSError("no ps")):
             assert process_is_claude(1234) is None
 
@@ -259,8 +259,8 @@ class TestProcessIsClaude:
     )
     def test_judges_comm_and_args(self, line, expected):
         proc = subprocess_result(returncode=0, stdout=f"{line}\n")
-        with patch("claude_swap.process_detection.sys.platform", "linux"), \
-             patch("claude_swap.process_detection.subprocess.run",
+        with patch("ccswap.process_detection.sys.platform", "linux"), \
+             patch("ccswap.process_detection.subprocess.run",
                    return_value=proc) as run:
             assert process_is_claude(1234) is expected
         assert run.call_args[0][0] == ["ps", "-o", "comm=,args=", "-p", "1234"]
@@ -269,36 +269,36 @@ class TestProcessIsClaude:
 class TestPidMatchesRecord:
     @pytest.mark.parametrize("proc_start", [None, "", "garbage"])
     def test_unstamped_or_garbage_record_passes(self, proc_start):
-        with patch("claude_swap.process_detection.process_started_at") as started:
+        with patch("ccswap.process_detection.process_started_at") as started:
             assert pid_matches_record(1234, proc_start) is True
         started.assert_not_called()
 
     def test_unknowable_start_passes(self):
-        with patch("claude_swap.process_detection.process_started_at",
+        with patch("ccswap.process_detection.process_started_at",
                    return_value=None), \
-             patch("claude_swap.process_detection.process_is_claude") as is_claude:
+             patch("ccswap.process_detection.process_is_claude") as is_claude:
             assert pid_matches_record(1234, LSTART) is True
         is_claude.assert_not_called()
 
     def test_same_start_ticks_is_the_recorded_process(self):
         """A Linux record stamps the /proc start time in ticks since boot,
         which the process keeps for life: equality is the whole test."""
-        with patch("claude_swap.process_detection.process_start_ticks",
+        with patch("ccswap.process_detection.process_start_ticks",
                    return_value=TICKS), \
-             patch("claude_swap.process_detection.process_started_at") as started:
+             patch("ccswap.process_detection.process_started_at") as started:
             assert pid_matches_record(1234, TICKS) is True
         started.assert_not_called()
 
     def test_other_start_ticks_is_a_recycled_pid(self):
-        with patch("claude_swap.process_detection.process_start_ticks",
+        with patch("ccswap.process_detection.process_start_ticks",
                    return_value="998877"), \
-             patch("claude_swap.process_detection.process_is_claude") as is_claude:
+             patch("ccswap.process_detection.process_is_claude") as is_claude:
             assert pid_matches_record(1234, TICKS) is False
         is_claude.assert_not_called()
 
     def test_unreadable_ticks_pass(self):
         """A FILETIME on Windows, or /proc hidden: no comparison is possible."""
-        with patch("claude_swap.process_detection.process_start_ticks",
+        with patch("ccswap.process_detection.process_start_ticks",
                    return_value=None):
             assert pid_matches_record(1234, "134332352612628209") is True
 
@@ -306,16 +306,16 @@ class TestPidMatchesRecord:
         "started", [LSTART_S, LSTART_S - 3600, LSTART_S + PID_REUSE_SLACK_S // 2]
     )
     def test_process_not_younger_than_record_passes(self, started):
-        with patch("claude_swap.process_detection.process_started_at",
+        with patch("ccswap.process_detection.process_started_at",
                    return_value=started), \
-             patch("claude_swap.process_detection.process_is_claude") as is_claude:
+             patch("ccswap.process_detection.process_is_claude") as is_claude:
             assert pid_matches_record(1234, LSTART) is True
         is_claude.assert_not_called()
 
     def test_stranger_younger_than_record_is_a_recycled_pid(self):
-        with patch("claude_swap.process_detection.process_started_at",
+        with patch("ccswap.process_detection.process_started_at",
                    return_value=LSTART_S + 86400), \
-             patch("claude_swap.process_detection.process_is_claude",
+             patch("ccswap.process_detection.process_is_claude",
                    return_value=False):
             assert pid_matches_record(1234, LSTART) is False
 
@@ -323,16 +323,16 @@ class TestPidMatchesRecord:
         """Linux ps derives start times from a boot time that moves with the
         wall clock, so after a clock step a live session reads as younger
         than its own record. A claude at the pid is never a recycled pid."""
-        with patch("claude_swap.process_detection.process_started_at",
+        with patch("ccswap.process_detection.process_started_at",
                    return_value=LSTART_S + 86400), \
-             patch("claude_swap.process_detection.process_is_claude",
+             patch("ccswap.process_detection.process_is_claude",
                    return_value=True):
             assert pid_matches_record(1234, LSTART) is True
 
     def test_unknowable_identity_is_kept(self):
-        with patch("claude_swap.process_detection.process_started_at",
+        with patch("ccswap.process_detection.process_started_at",
                    return_value=LSTART_S + 86400), \
-             patch("claude_swap.process_detection.process_is_claude",
+             patch("ccswap.process_detection.process_is_claude",
                    return_value=None):
             assert pid_matches_record(1234, LSTART) is True
 
@@ -363,7 +363,7 @@ class TestListSessions:
         _write_session(sessions_dir, 1001, entrypoint="cli", cwd="/home/user/app")
         _write_session(sessions_dir, 1002, entrypoint="claude-vscode", cwd="/home/user/web")
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             result = list_sessions(tmp_path)
 
         assert len(result) == 2
@@ -379,7 +379,7 @@ class TestListSessions:
         def alive(pid):
             return pid == 1001
 
-        with patch("claude_swap.process_detection.is_pid_alive", side_effect=alive):
+        with patch("ccswap.process_detection.is_pid_alive", side_effect=alive):
             result = list_sessions(tmp_path)
 
         assert len(result) == 1
@@ -397,10 +397,10 @@ class TestListSessions:
         def started(pid):
             return LSTART_S if pid == 1002 else LSTART_S + 86400
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True), \
-             patch("claude_swap.process_detection.process_started_at",
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True), \
+             patch("ccswap.process_detection.process_started_at",
                    side_effect=started), \
-             patch("claude_swap.process_detection.process_is_claude",
+             patch("ccswap.process_detection.process_is_claude",
                    return_value=False):
             result = list_sessions(tmp_path)
 
@@ -415,8 +415,8 @@ class TestListSessions:
         def ticks(pid):
             return TICKS if pid == 1002 else "998877"
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True), \
-             patch("claude_swap.process_detection.process_start_ticks",
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True), \
+             patch("ccswap.process_detection.process_start_ticks",
                    side_effect=ticks):
             result = list_sessions(tmp_path)
 
@@ -427,8 +427,8 @@ class TestListSessions:
         sessions_dir.mkdir()
         _write_session(sessions_dir, 1001, procStart=LSTART)
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True), \
-             patch("claude_swap.process_detection.process_started_at",
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True), \
+             patch("ccswap.process_detection.process_started_at",
                    return_value=None):
             result = list_sessions(tmp_path)
 
@@ -472,7 +472,7 @@ class TestListSessions:
         sessions_dir.mkdir()
         _write_session(sessions_dir, 1001, status="busy")
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             result = list_sessions(tmp_path)
 
         assert result[0].status == "busy"
@@ -482,7 +482,7 @@ class TestListSessions:
         sessions_dir.mkdir()
         _write_session(sessions_dir, 1001)
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             result = list_sessions(tmp_path)
 
         assert result[0].status is None
@@ -499,7 +499,7 @@ class TestListSessions:
             entrypoint="claude-desktop",
         )
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             result = list_sessions(tmp_path)
 
         s = result[0]
@@ -615,7 +615,7 @@ class TestListIdeInstances:
         _write_ide_lock(ide_dir, 45000, ideName="Visual Studio Code")
         _write_ide_lock(ide_dir, 45001, ideName="Cursor")
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             result = list_ide_instances(tmp_path)
 
         assert len(result) == 2
@@ -628,7 +628,7 @@ class TestListIdeInstances:
         _write_ide_lock(ide_dir, 45000, pid=2001)
         _write_ide_lock(ide_dir, 45001, pid=2002)
 
-        with patch("claude_swap.process_detection.is_pid_alive", side_effect=lambda p: p == 2001):
+        with patch("ccswap.process_detection.is_pid_alive", side_effect=lambda p: p == 2001):
             result = list_ide_instances(tmp_path)
 
         assert len(result) == 1
@@ -669,7 +669,7 @@ class TestListIdeInstances:
         ide_dir.mkdir()
         _write_ide_lock(ide_dir, 12345)
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             result = list_ide_instances(tmp_path)
 
         assert result[0].port == 12345
@@ -679,7 +679,7 @@ class TestListIdeInstances:
         ide_dir.mkdir()
         _write_ide_lock(ide_dir, 45000, workspaceFolders=["/a", "/b"])
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             result = list_ide_instances(tmp_path)
 
         assert result[0].workspace_folders == ["/a", "/b"]
@@ -698,7 +698,7 @@ class TestGetRunningInstances:
         ide_dir.mkdir()
         _write_ide_lock(ide_dir, 45000)
 
-        with patch("claude_swap.process_detection.is_pid_alive", return_value=True):
+        with patch("ccswap.process_detection.is_pid_alive", return_value=True):
             sessions, ides = get_running_instances(tmp_path)
 
         assert len(sessions) == 1
