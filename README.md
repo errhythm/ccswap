@@ -127,6 +127,8 @@ ccswap purge          # remove all ccswap data, then:
 uv tool uninstall ccswap    # or: pipx uninstall ccswap
 ```
 
+To stay on the 0.x series (before the 1.0 redesign): `uv tool install --force "ccswap<1"` (or `pipx install --force "ccswap<1"`).
+
 From source: `git clone https://github.com/errhythm/ccswap.git && cd ccswap && uv sync && uv run ccswap help`.
 
 ## Requirements

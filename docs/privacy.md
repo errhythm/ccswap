@@ -4,7 +4,7 @@ ccswap sends nothing about you or your accounts anywhere. The only network calls
 
 ## Anonymous usage stats (opt-in)
 
-Starting with 0.54.0b2, ccswap asks once whether you want to share anonymous usage stats: in the dashboard, or on the first interactive command in a terminal (never under `--json`, in scripts or in CI). They are **off until you say yes**, and the answer is saved either way. Change it any time:
+Starting with 1.0.0, ccswap asks once whether you want to share anonymous usage stats: in the dashboard, or on the first interactive command in a terminal (never under `--json`, in scripts or in CI). They are **off until you say yes**, and the answer is saved either way. Change it any time:
 
 ```bash
 ccswap config set telemetry.enabled on    # or off
@@ -21,7 +21,7 @@ Every event carries `distinct_id`, `version`, `os` and `python`. A `command` eve
 | `distinct_id` | `3f9c…` | A random ID made on this machine and stored in `cache/telemetry.json`. It isn't derived from anything about you. |
 | `command` | `switch` | A name from a fixed list in [`telemetry.py`](../src/ccswap/telemetry.py). Anything else is sent as `other`. Arguments are never sent. |
 | `provider` | `codex` | Only when the command starts with `claude`, `codex` or `agy`. |
-| `version` | `0.54.0b2` | The ccswap version. |
+| `version` | `1.0.0` | The ccswap version. |
 | `os` | `Darwin` | `platform.system()`. |
 | `python` | `3.13.1` | The Python version. |
 | `switches_claude`, `switches_codex`, `switches_agy` | `4` | `daily` only. Switches in the switch log since the previous `daily` event, manual and automatic. |
