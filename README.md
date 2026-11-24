@@ -72,7 +72,14 @@ Optional [five-hour window warming](docs/auto-switching.md#optional-five-hour-wi
 
 **Codex.** `ccswap codex list`, `codex switch` and `codex auto` mirror the Claude commands. Codex must use its file credential store. [Codex accounts](https://github.com/errhythm/ccswap/blob/main/docs/codex.md)
 
-**Dashboard and menu bar.** Run `ccswap` for the dashboard, or `ccswap watch` for the live monitor above. On macOS, `ccswap menubar --install-service` keeps a menu bar app running at login. [Dashboard and menu bar](https://github.com/errhythm/ccswap/blob/main/docs/dashboard.md)
+**Dashboard.** Run `ccswap` for the dashboard above, or `ccswap watch` for a live usage monitor. [Dashboard and menu bar](https://github.com/errhythm/ccswap/blob/main/docs/dashboard.md)
+
+**Menu bar (macOS).** `ccswap menubar` puts every provider's usage one click away: switch or add accounts, pick a switch strategy, turn auto-switch on and change settings from the popover. `ccswap menubar --install-service` starts it at login. It needs the extra: `uv tool install --force "ccswap[menubar]"`. Prefer a plain text menu? Set `menubar.style` to `classic`.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/menubar-popover.png" width="360" alt="ccswap menu bar popover: Claude Code, Codex and Antigravity cards, each with a usage ring and a Switch button per account">
+  <img src="https://raw.githubusercontent.com/errhythm/ccswap/main/assets/menubar-popover-claude.png" width="360" alt="ccswap menu bar popover on the Claude Code tab: the active account's 5-hour and weekly usage, and a Switch account card with Best, Next available and Consume first strategies">
+</p>
 
 **Quota in T3 Code.** `ccswap hub install` runs a small read-only server at login that speaks CLIProxyAPI's management API. In T3 Code, add a CLIProxyAPI hub with the URL `http://127.0.0.1:8317` and the key from `ccswap hub key`, and every ccswap account shows its quota there. No token leaves ccswap. [T3 Code hub](docs/hub.md)
 
