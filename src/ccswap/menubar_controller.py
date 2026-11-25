@@ -926,7 +926,8 @@ def _account_row(acc, now: float, provider_label: str = "") -> dict:
             last_error=entry.last_error,
             backoff_until=entry.backoff_until if entry.in_backoff(now) else None,
         ),
-        "note": menu_note(SENTINEL_NOTES.get(entry.sentinel, entry.sentinel)) if entry.sentinel else None,
+        "note": (menu_note(SENTINEL_NOTES.get(entry.sentinel, entry.sentinel)) if entry.sentinel
+                 else "Recovery required: run ccswap agy add" if entry.recovery else None),
         "loginNote": oauth.format_login_expiry(acc.login_expires_at, quarantined, now),
         "plan": _plan(acc, provider_label),
     }

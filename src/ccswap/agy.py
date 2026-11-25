@@ -473,7 +473,9 @@ class AgyAccountSwitcher:
         if binary is None:
             raise AgyError(_CLI_MISSING)
         binary = str(Path(binary).absolute())
-        directory = tempfile.TemporaryDirectory(prefix="ccswap-agy-", delete=False)
+        # Beside the saved accounts, not TMPDIR: macOS purges /var/folders, and a
+        # recovery marker can outlive the process that wrote it.
+        directory = tempfile.TemporaryDirectory(prefix="ccswap-agy-", dir=self.backup_dir, delete=False)
         home = Path(directory.name)
         auth_path = home / _RELATIVE_AUTH
         pending = UsageRecovery("refresh-persistence", str(auth_path.absolute()))
@@ -566,6 +568,41 @@ class AgyAccountSwitcher:
         cached.update(recovery={"kind": recovery.kind, "path": recovery.path},
                       error="Antigravity usage unavailable")
         self._write(self.backup_dir / f"usage-{number}.json", cached)
+
+    def _reconcile_interrupted(self, number: str, cached: dict, data: dict) -> None:
+        """Finish a usage refresh whose process died before its ``finally`` ran.
+
+        Callers hold the agy lock, which every fetch holds until it clears its
+        journal, and the kernel drops that lock when its holder dies. An orphaned
+        agy child can outlive its parent, so the copy must also be older than any
+        fetch could run. A saved file written after the copy (a switch captured a
+        newer login) wins: the marker stays rather than restore an older token.
+        So does a missing copy, the only proof of whether the child rotated it.
+        """
+        recovery = cached["recovery"]
+        if recovery is None or recovery["kind"] != "refresh-persistence":
+            return
+        retained = Path(recovery["path"])
+        try:
+            copied = retained.stat().st_mtime_ns
+            # shortcut: an orphaned agy silent for 90s and then rotating still loses its token; track child pids if that shows up.
+            # A tie keeps the marker: coarse filesystem timestamps can't order the two writes.
+            if (time.time_ns() - copied < 2 * _USAGE_TIMEOUT * 10**9
+                    or self._credential_path(number).stat().st_mtime_ns >= copied):
+                return
+            refreshed = Credential.parse(_json_file(retained))
+            self._persist_refresh(number, self._saved(number, data), refreshed)
+        except (AgyError, OSError):
+            return
+        cleared = dict(cached, recovery=None, error=None, attemptedAt=None)
+        try:
+            self._write(self.backup_dir / f"usage-{number}.json", cleared)
+        except (AgyError, OSError):
+            return  # The credential is saved; the next pass retries this harmlessly.
+        cached.update(cleared)
+        parts = retained.relative_to(self.backup_dir).parts if retained.is_relative_to(self.backup_dir) else ()
+        if len(parts) == 4 and parts[0].startswith("ccswap-agy-") and Path(*parts[1:]) == _RELATIVE_AUTH:
+            shutil.rmtree(self.backup_dir / parts[0], ignore_errors=True)
 
     def _usage_entry(self, number: str, cached: dict, credential: Credential | None,
                      active: bool, deadline: float | None) -> UsageEntry:
@@ -660,6 +697,7 @@ class AgyAccountSwitcher:
             for number in ordered:
                 account, cached = data["accounts"][number], caches[number]
                 credential = None
+                self._reconcile_interrupted(number, cached, data)
                 if cached["recovery"] is None:
                     saved = self._saved(number, data)
                     credential = login.credential if number == active and login else saved

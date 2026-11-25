@@ -709,7 +709,8 @@ def test_write_denial_after_refresh_keeps_durable_recovery(provider, monkeypatch
             write(child_file, refreshed)
 
         def deny_backup(path, document):
-            if path.is_relative_to(provider.backup_dir):
+            # The child's own home sits under the backup dir; deny only ccswap's files.
+            if path.is_relative_to(provider.backup_dir) and not path.is_relative_to(kwargs["cwd"]):
                 raise agy.AgyError("Cannot save Antigravity account data")
             write(path, document)
 
@@ -723,12 +724,16 @@ def test_write_denial_after_refresh_keeps_durable_recovery(provider, monkeypatch
     assert recovery is not None and recovery.path in account.usage.last_error
     assert json.loads(Path(recovery.path).read_text()) == refreshed
     assert Path(recovery.path) == child_files[0]
+    # Once saving works again and no orphaned child could still run, the next pass finishes the job.
     monkeypatch.setattr(provider, "_write", write)
-    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("recovery refetched"))
-    restarted = agy.AgyAccountSwitcher()
-    assert restarted.accounts_snapshot(fetch={"1"}).accounts[0].usage.recovery == recovery
-    with pytest.raises(agy.AgyError, match="Recovery"):
-        restarted.switch_to("1", json_output=True)
+    later = time.time_ns() + 10**12
+    monkeypatch.setattr(agy.time, "time_ns", lambda: later)
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps(quota())))
+    healed = agy.AgyAccountSwitcher().accounts_snapshot(fetch={"1"}).accounts[0]
+    assert healed.usage.recovery is None and healed.switchable is True
+    assert json.loads(provider._credential_path("1").read_text()) == refreshed
+    assert not child_files[0].exists()
 
 
 def test_usage_refuses_to_launch_without_durable_intent(provider, monkeypatch):
@@ -875,7 +880,12 @@ def test_expired_journal_cleanup_failure_keeps_intent_without_attempt(provider, 
     assert pending.get("attemptedAt") is None and pending.get("error") is None
     assert account.usage.recovery is not None
     assert json.loads(Path(account.usage.recovery.path).read_text()) == auth()
-    assert agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0].switchable is False
+    # The child never ran, so the kept copy matches the saved login and the next pass clears it.
+    monkeypatch.setattr(provider, "_write", write)
+    later = time.time_ns() + 10**12
+    monkeypatch.setattr(agy.time, "time_ns", lambda: later)
+    assert agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0].switchable is True
+    assert json.loads(provider._credential_path("1").read_text()) == auth()
 
 
 def test_success_saves_then_clears_intent_before_temp_cleanup(provider, monkeypatch):
@@ -1071,3 +1081,105 @@ async def test_dashboard_shows_pending_recovery_with_cached_quota(provider, monk
         assert account.usage.recovery.path in panel
         assert "Gemini Models" in panel
         app.save_screenshot(f"agy-recovery-{'full' if active else 'compact'}.svg", path=str(tmp_path))
+
+
+def test_child_home_lives_beside_saved_accounts(provider, monkeypatch):
+    two_accounts(provider)
+    seen = []
+
+    def run(*args, **kwargs):
+        seen.append(Path(kwargs["cwd"]))
+        journal = provider._usage_cache("1")["recovery"]
+        assert Path(journal["path"]) == seen[0] / agy._RELATIVE_AUTH
+        return SimpleNamespace(returncode=0, stdout=json.dumps(quota()))
+
+    monkeypatch.setattr(agy.spawn, "run", run)
+    provider._invoke_usage("1", agy.Credential.parse(auth()), False)
+    assert seen[0].parent == provider.backup_dir
+    assert not seen[0].exists()
+
+
+def interrupted_fetch(provider, copy, *, age=1000, root=None):
+    """The state a usage fetch leaves when it is killed while agy runs."""
+    import tempfile
+
+    home = Path(tempfile.mkdtemp(prefix="ccswap-agy-", dir=root or provider.backup_dir))
+    retained = home / agy._RELATIVE_AUTH
+    if copy is not None:
+        provider._write(retained, copy)
+        now = time.time()
+        os.utime(provider._credential_path("1"), (now - age - 10, now - age - 10))
+        os.utime(retained, (now - age, now - age))
+    provider._write(provider.backup_dir / "usage-1.json", {
+        "recovery": {"kind": "refresh-persistence", "path": str(retained)},
+        "error": None, "attemptedAt": 1.0, "fetchedAt": 1.0})
+    return home
+
+
+def blocked(provider, monkeypatch):
+    monkeypatch.setattr(agy.spawn, "run", lambda *args, **kwargs: pytest.fail("blocked account refetched"))
+    account = agy.AgyAccountSwitcher().accounts_snapshot(fetch={"1"}).accounts[0]
+    assert account.usage.recovery.kind == "refresh-persistence"
+    assert "ccswap agy add" in account.usage.last_error
+    assert account.switchable is False
+    return account
+
+
+@pytest.mark.parametrize("rotated", [False, True])
+def test_interrupted_fetch_heals_and_fetches_again(provider, monkeypatch, rotated):
+    two_accounts(provider)
+    copy = auth()
+    if rotated:
+        copy["token"]["refresh_token"] = "synthetic-rotated-before-kill"
+    home = interrupted_fetch(provider, copy)
+    account = agy.AgyAccountSwitcher().accounts_snapshot(fetch={"1"}).accounts[0]
+    assert account.usage.recovery is None
+    assert account.usage.last_error is None
+    assert account.usage.last_good is not None and account.usage.fetched_at > 1.0
+    assert account.switchable is True
+    assert json.loads(provider._credential_path("1").read_text()) == copy
+    assert not home.exists()
+
+
+@pytest.mark.parametrize("copy", [None, "foreign", "fresh"])
+def test_interrupted_fetch_without_a_usable_copy_stays_blocked(provider, monkeypatch, copy):
+    two_accounts(provider)
+    saved = provider._credential_path("1").read_text()
+    # "fresh": an orphaned agy child may still be about to rotate the copy.
+    home = interrupted_fetch(provider, None if copy is None else auth("two@example.com") if copy == "foreign"
+                             else auth(future_field="child-still-running"), age=1 if copy == "fresh" else 1000)
+    blocked(provider, monkeypatch)
+    assert provider._credential_path("1").read_text() == saved
+    assert home.exists()
+
+
+def test_login_captured_after_the_kill_is_never_rolled_back(provider, monkeypatch):
+    native(auth())
+    provider.add_account()
+    native(auth("two@example.com"))
+    provider.add_account()
+    native(auth())
+    interrupted_fetch(provider, auth())  # killed while account 1 was active
+    rotated = auth()
+    rotated["token"]["refresh_token"] = "synthetic-rotated-in-keychain"
+    native(rotated)
+    provider.switch_to("2", json_output=True)  # captures the rotated login into account 1
+    assert json.loads(provider._credential_path("1").read_text()) == rotated
+    blocked(provider, monkeypatch)
+    assert json.loads(provider._credential_path("1").read_text()) == rotated
+
+
+def test_reconcile_deletes_only_its_own_child_home(provider, monkeypatch, tmp_path):
+    two_accounts(provider)
+    home = interrupted_fetch(provider, auth(), root=tmp_path)
+    account = agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0]
+    assert account.usage.recovery is None
+    assert (home / agy._RELATIVE_AUTH).exists()
+
+
+def test_menu_bar_row_names_the_recovery_step(provider, monkeypatch):
+    from ccswap import menubar_controller
+
+    account = induce_recovery(provider, monkeypatch)
+    row = menubar_controller._account_row(account, time.time(), "Antigravity")
+    assert row["note"] == "Recovery required: run ccswap agy add"
