@@ -586,19 +586,24 @@ class AgyAccountSwitcher:
         try:
             copied = retained.stat().st_mtime_ns
             # shortcut: an orphaned agy silent for 90s and then rotating still loses its token; track child pids if that shows up.
-            # A tie keeps the marker: coarse filesystem timestamps can't order the two writes.
-            if (time.time_ns() - copied < 2 * _USAGE_TIMEOUT * 10**9
-                    or self._credential_path(number).stat().st_mtime_ns >= copied):
+            if time.time_ns() - copied < 2 * _USAGE_TIMEOUT * 10**9:
                 return
             refreshed = Credential.parse(_json_file(retained))
-            self._persist_refresh(number, self._saved(number, data), refreshed)
+            saved = self._saved(number, data)
+            # An identical saved login has nothing left to restore, which also lets a
+            # pass whose marker clear failed finish on retry despite its newer mtime.
+            if saved.document != refreshed.document:
+                # A tie keeps the marker: coarse filesystem timestamps can't order the two writes.
+                if self._credential_path(number).stat().st_mtime_ns >= copied:
+                    return
+                self._persist_refresh(number, saved, refreshed)
         except (AgyError, OSError):
             return
         cleared = dict(cached, recovery=None, error=None, attemptedAt=None)
         try:
             self._write(self.backup_dir / f"usage-{number}.json", cleared)
         except (AgyError, OSError):
-            return  # The credential is saved; the next pass retries this harmlessly.
+            return  # The credential now matches the copy, so the next pass clears the marker.
         cached.update(cleared)
         parts = retained.relative_to(self.backup_dir).parts if retained.is_relative_to(self.backup_dir) else ()
         if len(parts) == 4 and parts[0].startswith("ccswap-agy-") and Path(*parts[1:]) == _RELATIVE_AUTH:

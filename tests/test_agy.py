@@ -1169,6 +1169,31 @@ def test_login_captured_after_the_kill_is_never_rolled_back(provider, monkeypatc
     assert json.loads(provider._credential_path("1").read_text()) == rotated
 
 
+def test_failed_marker_clear_finishes_on_the_next_pass(provider, monkeypatch):
+    two_accounts(provider)
+    copy = auth()
+    copy["token"]["refresh_token"] = "synthetic-rotated-before-kill"
+    home = interrupted_fetch(provider, copy)
+    write = provider._write
+
+    def deny_clear(path, document):
+        if path == provider.backup_dir / "usage-1.json" and document.get("recovery") is None:
+            raise agy.AgyError("Cannot save Antigravity account data")
+        write(path, document)
+
+    original = agy.AgyAccountSwitcher._write
+    monkeypatch.setattr(agy.AgyAccountSwitcher, "_write", lambda self, path, document: deny_clear(path, document))
+    first = agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0]
+    assert first.usage.recovery is not None
+    assert json.loads(provider._credential_path("1").read_text()) == copy
+    monkeypatch.setattr(agy.AgyAccountSwitcher, "_write", original)
+    later = time.time_ns() + 10**12
+    monkeypatch.setattr(agy.time, "time_ns", lambda: later)
+    healed = agy.AgyAccountSwitcher().accounts_snapshot(fetch=set()).accounts[0]
+    assert healed.usage.recovery is None and healed.switchable is True
+    assert not home.exists()
+
+
 def test_reconcile_deletes_only_its_own_child_home(provider, monkeypatch, tmp_path):
     two_accounts(provider)
     home = interrupted_fetch(provider, auth(), root=tmp_path)
